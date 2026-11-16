@@ -1,7 +1,28 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+
+function pwaDevNoHmrSafePlugin(): Plugin {
+  let hmrDisabled = false;
+  return {
+    name: 'shizutv-pwa-dev-no-hmr-guard',
+    apply: 'serve',
+    configResolved(config) {
+      hmrDisabled = config.server.hmr === false;
+    },
+    transformIndexHtml: {
+      order: 'post',
+      handler(html) {
+        if (!hmrDisabled) return html;
+        return html.replace(
+          /<script\s+id=["']vite-plugin-pwa:register-dev-sw["'][^>]*>[\s\S]*?<\/script>/i,
+          `<script id="vite-plugin-pwa:register-dev-sw" type="module">if('serviceWorker'in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/dev-sw.js?dev-sw',{scope:'/',type:'module'}).catch(()=>{});});}</script>`,
+        );
+      },
+    },
+  };
+}
 
 export default defineConfig({
   plugins: [
@@ -128,6 +149,7 @@ export default defineConfig({
         navigateFallback: 'index.html',
       },
     }),
+    pwaDevNoHmrSafePlugin(),
   ],
   server: {
     host: '0.0.0.0',

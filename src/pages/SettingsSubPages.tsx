@@ -1442,7 +1442,7 @@ export const PlayerSettingsPage: React.FC = () => {
   return (
     <SettingsShell
       title="Video Player Settings"
-      subtitle="Default quality, AniSkip automation & subtitle styling"
+      subtitle="Auto-play, video fit, default quality, AniSkip & subtitle styling"
     >
       <div
         style={{ borderRadius: roundness }}
@@ -1458,8 +1458,8 @@ export const PlayerSettingsPage: React.FC = () => {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
-            {(['1080p', '720p', 'auto'] as const).map((q) => (
+          <div className="flex flex-wrap items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+            {(['auto', '1080p', '720p', '480p', '360p'] as const).map((q) => (
               <button
                 key={q}
                 type="button"
@@ -1476,6 +1476,43 @@ export const PlayerSettingsPage: React.FC = () => {
           </div>
         </div>
 
+        <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-bold">Video Fit Mode</div>
+            <p className="text-xs text-[var(--sx-on-surface-muted)]">
+              Fit shows the full uncropped frame; Zoom crops to fill
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+            {(
+              [
+                { id: 'contain', label: 'Fit (Full)' },
+                { id: 'cover', label: 'Zoom' },
+                { id: 'fill', label: 'Stretch' },
+              ] as const
+            ).map((fit) => (
+              <button
+                key={fit.id}
+                type="button"
+                onClick={() => updatePlayerPrefs({ videoFit: fit.id })}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
+                  playerPrefs.videoFit === fit.id
+                    ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                    : 'text-[var(--sx-on-surface-muted)]'
+                }`}
+              >
+                {fit.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <ToggleRow
+          label="Auto-Play Video on Open"
+          description="Automatically start playback when opening an episode or player"
+          checked={playerPrefs.autoPlay}
+          onChange={(autoPlay) => updatePlayerPrefs({ autoPlay })}
+        />
         <ToggleRow
           label="Auto-Skip Opening (AniSkip)"
           description="Automatically jump past OP segments detected via AniSkip v2"
@@ -1493,6 +1530,12 @@ export const PlayerSettingsPage: React.FC = () => {
           description="Queue the following episode automatically when playback ends"
           checked={playerPrefs.autoNextEpisode}
           onChange={(autoNextEpisode) => updatePlayerPrefs({ autoNextEpisode })}
+        />
+        <ToggleRow
+          label="Auto Picture-in-Picture on Leave"
+          description="Automatically enter PiP when leaving the player page while video is playing"
+          checked={playerPrefs.autoPip}
+          onChange={(autoPip) => updatePlayerPrefs({ autoPip })}
         />
 
         <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1518,6 +1561,13 @@ export const PlayerSettingsPage: React.FC = () => {
           </div>
         </div>
 
+        <ToggleRow
+          label="Enable Subtitles"
+          description="Display closed captions during anime playback"
+          checked={playerPrefs.subtitleEnabled}
+          onChange={(subtitleEnabled) => updatePlayerPrefs({ subtitleEnabled })}
+        />
+
         <div className="p-4 space-y-2">
           <div className="flex justify-between text-xs font-bold">
             <span>Subtitle Font Size</span>
@@ -1528,7 +1578,7 @@ export const PlayerSettingsPage: React.FC = () => {
           <input
             type="range"
             min={12}
-            max={28}
+            max={30}
             step={1}
             value={playerPrefs.subtitleSize}
             onChange={(e) => updatePlayerPrefs({ subtitleSize: Number(e.target.value) })}

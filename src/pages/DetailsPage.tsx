@@ -271,9 +271,10 @@ export const DetailsPage: React.FC = () => {
   );
 
   const rawItemsCount = isManga ? chapters.length : episodes.length;
+  const rangeChunkSize = rawItemsCount > 300 ? 50 : rawItemsCount > 100 ? 25 : 12;
   const episodeRanges = useMemo(
-    () => buildEpisodeRanges(rawItemsCount, 12),
-    [rawItemsCount],
+    () => buildEpisodeRanges(rawItemsCount, rangeChunkSize),
+    [rawItemsCount, rangeChunkSize],
   );
   const activeRange: EpisodeRange | null =
     episodeRanges.find((r) => r.id === selectedRangeId) ?? null;
@@ -1148,12 +1149,12 @@ export const DetailsPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 min-w-0 w-full sm:w-auto">
                   <select
                     aria-label="Select stream source"
                     value={selectedSourceId}
                     onChange={(e) => setSelectedSourceId(e.target.value)}
-                    className="px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold focus:outline-none focus:border-[var(--sx-primary)]"
+                    className="min-w-0 flex-1 sm:flex-initial max-w-full px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold focus:outline-none focus:border-[var(--sx-primary)] truncate"
                   >
                     {availableSources.map((src) => (
                       <option key={src.id} value={src.id}>
@@ -1168,7 +1169,7 @@ export const DetailsPage: React.FC = () => {
                       setWrongTitleDraft(effectiveSourceTitle);
                       setWrongTitleOpen(true);
                     }}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold hover:border-[var(--sx-primary)] transition-colors"
+                    className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold hover:border-[var(--sx-primary)] transition-colors"
                   >
                     <Wrench className="w-3 h-3" />
                     <span>Wrong Title?</span>

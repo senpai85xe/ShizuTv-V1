@@ -8,13 +8,32 @@ interface SmartImageProps {
   alt: string;
   className?: string;
   fallbackTitle?: string;
+  fit?: 'cover' | 'contain';
+  objectPosition?: 'center' | 'right' | 'left' | 'top';
+  transparentBg?: boolean;
+  backdropFill?: boolean;
+  shrinkToImage?: boolean;
+  imgMask?: string;
 }
+
+const OBJECT_POSITION_CLASS: Record<NonNullable<SmartImageProps['objectPosition']>, string> = {
+  center: 'object-center',
+  right: 'object-right',
+  left: 'object-left',
+  top: 'object-top',
+};
 
 export const SmartImage: React.FC<SmartImageProps> = ({
   src,
   alt,
   className = '',
   fallbackTitle,
+  fit = 'cover',
+  objectPosition = 'center',
+  transparentBg = false,
+  backdropFill = false,
+  shrinkToImage = false,
+  imgMask,
 }) => {
   const imgRef = useRef<HTMLImageElement>(null);
   const [loaded, setLoaded] = useState(() => Boolean(src && loadedImageUrls.has(src)));
@@ -49,10 +68,31 @@ export const SmartImage: React.FC<SmartImageProps> = ({
     );
   }
 
+  const fitClass = fit === 'contain' ? 'object-contain' : 'object-cover';
+  const posClass = OBJECT_POSITION_CLASS[objectPosition];
+  const containerBgClass = transparentBg ? 'bg-transparent' : 'bg-[var(--sx-surface-high)]';
+  const sizeClass = shrinkToImage ? 'h-full w-auto max-w-full' : 'w-full h-full';
+  const layoutClass = shrinkToImage ? 'flex items-center justify-end' : '';
+  const maskStyle = imgMask
+    ? ({ maskImage: imgMask, WebkitMaskImage: imgMask } as React.CSSProperties)
+    : undefined;
+
   return (
-    <div className={`relative overflow-hidden bg-[var(--sx-surface-high)] ${className}`}>
-      {!loaded && (
+    <div className={`relative overflow-hidden ${containerBgClass} ${layoutClass} ${className}`}>
+      {!loaded && !transparentBg && (
         <div className="absolute inset-0 animate-pulse bg-[var(--sx-surface-high)]" />
+      )}
+      {backdropFill && fit === 'contain' && (
+        <img
+          src={src}
+          alt=""
+          aria-hidden="true"
+          referrerPolicy="no-referrer"
+          loading="lazy"
+          className={`pointer-events-none absolute inset-0 w-full h-full object-cover scale-115 blur-md saturate-125 transition-opacity duration-400 ${
+            loaded ? 'opacity-55' : 'opacity-0'
+          }`}
+        />
       )}
       <img
         ref={imgRef}
@@ -60,12 +100,13 @@ export const SmartImage: React.FC<SmartImageProps> = ({
         alt={alt}
         referrerPolicy="no-referrer"
         loading="lazy"
+        style={maskStyle}
         onLoad={() => {
           if (src) loadedImageUrls.add(src);
           setLoaded(true);
         }}
         onError={() => setErrored(true)}
-        className={`w-full h-full object-cover transition-[opacity,transform] duration-400 ease-[cubic-bezier(0.32,0.72,0,1)] will-change-transform ${
+        className={`relative z-[1] ${sizeClass} ${fitClass} ${posClass} transition-[opacity,transform] duration-400 ease-[cubic-bezier(0.32,0.72,0,1)] will-change-transform ${
           loaded ? 'opacity-100 scale-100' : 'opacity-0 scale-[1.035]'
         }`}
       />

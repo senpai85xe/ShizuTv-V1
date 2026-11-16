@@ -1,11 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { resolveFallbackEpisodesCount } from '../services/sourceEngine';
 import {
+  buildHlsQualityOptions,
   clampEpisodeIndex,
   computeAutoSkipTarget,
+  findActiveSubtitleCue,
+  formatQualityLabel,
   formatScrubberPercent,
   getEffectiveDurationSeconds,
   getEpisodeNavigationState,
+  getVideoFitClass,
+  parseSubtitleText,
+  resolvePreferredHlsLevel,
+  shouldAutoStartPlayback,
 } from './inlinePlayer';
 
 test('clampEpisodeIndex clamps negative, NaN, and overflowing indices safely', () => {
@@ -67,3 +75,64 @@ test('computeAutoSkipTarget skips op/ed when enabled and active', () => {
   assert.equal(computeAutoSkipTarget(500, intervals, true), null);
   assert.equal(computeAutoSkipTarget(1350, intervals, true), 1410);
 });
+
+test('shouldAutoStartPlayback keeps playback paused when autoPlayPref is false unless explicitly triggered', () => {
+  assert.equal(shouldAutoStartPlayback(false, false), false);
+  assert.equal(shouldAutoStartPlayback(true, false), true);
+  assert.equal(shouldAutoStartPlayback(false, true), true);
+});
+
+test('getVideoFitClass maps fit modes to proper CSS object-fit classes', () => {
+  assert.equal(getVideoFitClass('contain'), 'object-contain');
+  assert.equal(getVideoFitClass('cover'), 'object-cover');
+  assert.equal(getVideoFitClass('fill'), 'object-fill');
+});
+
+test('buildHlsQualityOptions and resolvePreferredHlsLevel format and select resolutions accurately', () => {
+  const levels = [
+    { height: 360, bitrate: 800_000 },
+    { height: 720, bitrate: 2_500_000 },
+    { height: 1080, bitrate: 5_000_000 },
+  ];
+  assert.equal(formatQualityLabel(1080, 5_000_000), '1080p');
+  const opts = buildHlsQualityOptions(levels);
+  assert.deepEqual(
+    opts.map((o) => ({ index: o.index, label: o.label })),
+    [
+      { index: -1, label: 'Auto' },
+      { index: 2, label: '1080p' },
+      { index: 1, label: '720p' },
+      { index: 0, label: '360p' },
+    ],
+  );
+  assert.equal(resolvePreferredHlsLevel(levels, 'auto'), -1);
+  assert.equal(resolvePreferredHlsLevel(levels, '720p'), 1);
+  assert.equal(resolvePreferredHlsLevel(levels, '1080p'), 2);
+});
+
+test('findActiveSubtitleCue respects timing offset and parseSubtitleText parses SRT/VTT', () => {
+  const cues = parseSubtitleText(`WEBVTT
+
+1
+00:00:02.000 --> 00:00:06.000
+Hello world
+
+2
+00:00:08,000 --> 00:00:12,000
+Second line`);
+  assert.equal(cues.length, 2);
+  assert.equal(cues[0].text, 'Hello world');
+  assert.equal(cues[1].start, 8);
+  assert.equal(findActiveSubtitleCue(cues, 3, 0)?.text, 'Hello world');
+  // +2s offset delays the subtitle so at t=3 it has not appeared yet, while at t=5 it shows
+  assert.equal(findActiveSubtitleCue(cues, 3, 2), null);
+  assert.equal(findActiveSubtitleCue(cues, 5, 2)?.text, 'Hello world');
+});
+
+test('resolveFallbackEpisodesCount preserves full counts beyond 100 episodes', () => {
+  assert.equal(resolveFallbackEpisodesCount({ episodes: 220, nextEpisode: null }), 220);
+  assert.equal(resolveFallbackEpisodesCount({ episodes: null, nextEpisode: 1123 }), 1122);
+  assert.equal(resolveFallbackEpisodesCount({ episodes: 500, nextEpisode: 12 }), 500);
+  assert.equal(resolveFallbackEpisodesCount({ episodes: null, nextEpisode: null }), 12);
+});
+

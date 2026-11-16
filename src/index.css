@@ -16,6 +16,8 @@
   --sx-on-surface-muted: #5b6476;
   --sx-outline: rgba(15, 23, 42, 0.09);
   --sx-radius: 24px;
+  --sx-player-accent: #e0e0e0;
+  --sx-player-on-accent: #0b0c10;
 }
 
 .dark {
@@ -384,3 +386,103 @@ html.sx-theme-wave-active body,
 html.sx-theme-wave-active * {
   transition-duration: 0ms !important;
 }
+
+/* Butter-smooth Video Player Animations */
+@keyframes sxPlayerPopoverEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) scale(0.92);
+  }
+  70% {
+    opacity: 1;
+    transform: translate3d(0, 1.5px, 0) scale(1.012);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes sxPlayerBadgePop {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -50%, 0) scale(0.76);
+  }
+  65% {
+    opacity: 1;
+    transform: translate3d(0, -50%, 0) scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, -50%, 0) scale(1);
+  }
+}
+
+@keyframes sxPlayerCenterHudPop {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, -50%, 0) scale(0.86);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(-50%, -50%, 0) scale(1);
+  }
+}
+
+.sx-player-popover {
+  animation: sxPlayerPopoverEnter 290ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.sx-player-badge-pop {
+  animation: sxPlayerBadgePop 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.sx-player-center-hud {
+  animation: sxPlayerCenterHudPop 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.sx-player-drawer {
+  transition:
+    transform 340ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 260ms var(--sx-ease-ios);
+  will-change: transform, opacity;
+}
+
+.sx-player-controls-fade {
+  transition:
+    opacity 280ms var(--sx-ease-ios),
+    transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+.sx-player-play-btn {
+  transition:
+    transform 240ms cubic-bezier(0.34, 1.38, 0.64, 1),
+    background-color 200ms ease,
+    box-shadow 260ms ease;
+}
+
+.sx-player-play-btn:hover {
+  transform: scale(1.07);
+}
+
+.sx-player-play-btn:active {
+  transform: scale(0.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sx-player-popover,
+  .sx-player-badge-pop,
+  .sx-player-center-hud {
+    animation: none;
+  }
+  .sx-player-drawer,
+  .sx-player-controls-fade,
+  .sx-player-play-btn {
+    transition: none;
+  }
+}
+

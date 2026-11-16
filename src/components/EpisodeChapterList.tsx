@@ -69,19 +69,17 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
             } ${!previewMode ? 'sx-card-animate' : ''}`}
           >
             {item.thumbnail && (
-              <div className="pointer-events-none absolute inset-y-0 right-0 w-[64%] sm:w-[60%] overflow-hidden">
+              <div className="pointer-events-none absolute inset-0 overflow-hidden">
                 <SmartImage
                   src={item.thumbnail}
                   alt=""
                   fallbackTitle={item.title}
-                  className="w-full h-full opacity-35 group-hover:opacity-50 group-hover:scale-105 transition-all duration-300"
-                />
-                <div
-                  className={`absolute inset-0 bg-gradient-to-r ${
-                    translucent
-                      ? 'from-[var(--sx-surface-container)]/55 via-[var(--sx-surface-container)]/25 to-transparent'
-                      : 'from-[var(--sx-surface-container)] via-[var(--sx-surface-container)]/80 to-transparent'
-                  }`}
+                  fit="contain"
+                  objectPosition="right"
+                  transparentBg
+                  shrinkToImage
+                  imgMask="linear-gradient(to right, transparent 0%, rgba(0,0,0,0.35) 28%, rgba(0,0,0,0.88) 64%, black 100%)"
+                  className="w-full h-full opacity-45 group-hover:opacity-60 group-hover:scale-[1.03] transition-all duration-300"
                 />
               </div>
             )}
@@ -111,7 +109,7 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
                     {unitLabel} {item.number}
                   </span>
                   {item.isCurrent && (
-                    <span className="px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-500 dark:text-amber-300 text-[9px] font-extrabold uppercase tracking-wider">
+                    <span className="px-1.5 py-0.5 rounded-full bg-[var(--sx-primary)]/15 text-[var(--sx-primary)] text-[9px] font-extrabold uppercase tracking-wider">
                       Playing
                     </span>
                   )}
@@ -176,17 +174,19 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
                 src={item.thumbnail}
                 alt={item.title}
                 fallbackTitle={`${unitLabel} ${item.number}`}
-                className="w-full h-full group-hover:scale-105 transition-transform duration-300"
+                fit="contain"
+                backdropFill
+                className="w-full h-full group-hover:scale-[1.03] transition-transform duration-300"
               />
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/90 via-black/35 to-black/15" />
+              <div className="pointer-events-none absolute inset-0 z-[2] bg-gradient-to-t from-black/90 via-black/35 to-black/15" />
 
               {item.isNew && (
-                <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-[9px] font-black uppercase tracking-wider shadow">
+                <span className="absolute top-2 left-2 z-[3] px-1.5 py-0.5 rounded bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-[9px] font-black uppercase tracking-wider shadow">
                   NEW
                 </span>
               )}
 
-              <div className="absolute bottom-2.5 inset-x-3 text-left">
+              <div className="absolute bottom-2.5 inset-x-3 z-[3] text-left">
                 <div className="flex items-center gap-1.5">
                   <span className="text-lg font-black text-white tabular-nums leading-none drop-shadow">
                     {item.number}
@@ -365,9 +365,11 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
                 src={item.thumbnail}
                 alt={item.title}
                 fallbackTitle={`${unitLabel} ${item.number}`}
-                className="w-full h-full group-hover:scale-105 transition-transform duration-300"
+                fit="contain"
+                backdropFill
+                className="w-full h-full group-hover:scale-[1.03] transition-transform duration-300"
               />
-              <span className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/35 transition-colors">
+              <span className="absolute inset-0 z-[2] flex items-center justify-center bg-black/20 group-hover:bg-black/35 transition-colors">
                 <span className="w-7 h-7 rounded-full bg-black/65 backdrop-blur-sm text-white flex items-center justify-center">
                   <ActionIcon className={`w-3.5 h-3.5 ${isManga ? '' : 'fill-current ml-0.5'}`} />
                 </span>

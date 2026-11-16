@@ -71,6 +71,7 @@ export function applyThemeToDocument(
   root.classList.toggle('amoled', isDark && themePrefs.useAmoled);
 
   const palette = resolveSchemePalette(themePrefs.exclusiveScheme, isDark);
+  const playerPalette = resolveSchemePalette(themePrefs.exclusiveScheme, true);
 
   root.style.setProperty('--sx-primary', palette.primary);
   root.style.setProperty('--sx-primary-container', palette.primaryContainer);
@@ -78,13 +79,19 @@ export function applyThemeToDocument(
   root.style.setProperty('--sx-tertiary', palette.tertiary);
   root.style.setProperty('--sx-radius', `${themePrefs.uiRoundness}px`);
 
-  const hex = palette.primary.replace('#', '');
-  const r = parseInt(hex.substring(0, 2), 16) || 0;
-  const g = parseInt(hex.substring(2, 4), 16) || 0;
-  const b = parseInt(hex.substring(4, 6), 16) || 0;
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  root.style.setProperty('--sx-on-primary', luminance > 0.62 ? '#0b0c10' : '#ffffff');
+  const computeOnColor = (hexInput: string) => {
+    const clean = hexInput.replace('#', '');
+    const r = parseInt(clean.substring(0, 2), 16) || 0;
+    const g = parseInt(clean.substring(2, 4), 16) || 0;
+    const b = parseInt(clean.substring(4, 6), 16) || 0;
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.62 ? '#0b0c10' : '#ffffff';
+  };
+
+  root.style.setProperty('--sx-on-primary', computeOnColor(palette.primary));
   root.style.setProperty('--sx-on-primary-container', isDark ? '#f8fafc' : '#111827');
+  root.style.setProperty('--sx-player-accent', playerPalette.primary);
+  root.style.setProperty('--sx-player-on-accent', computeOnColor(playerPalette.primary));
 
   const themeColorMeta = root.ownerDocument?.querySelector('meta[name="theme-color"]');
   if (themeColorMeta) {

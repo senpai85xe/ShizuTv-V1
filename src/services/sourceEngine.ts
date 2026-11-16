@@ -62,16 +62,40 @@ const SAMPLE_STREAMS = [
   },
 ];
 
+export function resolveFallbackEpisodesCount(media: Pick<UnifiedMedia, 'episodes' | 'nextEpisode'>): number {
+  const fromEpisodes = media.episodes && media.episodes > 0 ? media.episodes : 0;
+  const fromAiring = media.nextEpisode && media.nextEpisode > 1 ? media.nextEpisode - 1 : 0;
+  const maxCount = Math.max(fromEpisodes, fromAiring);
+  return maxCount > 0 ? maxCount : 12;
+}
+
 export async function resolveEpisodesForMedia(media: UnifiedMedia): Promise<UnifiedEpisode[]> {
+  const expectedCount = resolveFallbackEpisodesCount(media);
+
   // 1. Try real episode titles from Jikan if MAL ID is known
   if (media.idMal) {
     const jikanEps = await fetchJikanEpisodes(media.idMal);
-    if (jikanEps.length > 0) return jikanEps;
+    if (jikanEps.length > 0) {
+      const highestFetched = jikanEps[jikanEps.length - 1]?.number ?? jikanEps.length;
+      if (expectedCount > highestFetched) {
+        const extra = Array.from({ length: expectedCount - highestFetched }, (_, idx) => {
+          const num = highestFetched + idx + 1;
+          return {
+            id: `${media.id}-ep-${num}`,
+            number: num,
+            title: `Episode ${num}`,
+            thumbnail: media.banner || media.cover || null,
+            durationSeconds: (media.duration || 24) * 60,
+          };
+        });
+        return [...jikanEps, ...extra];
+      }
+      return jikanEps;
+    }
   }
 
-  // 2. Fallback to known total episode count from AniList metadata
-  const count = media.episodes && media.episodes > 0 ? Math.min(media.episodes, 100) : 12;
-  return Array.from({ length: count }, (_, idx) => {
+  // 2. Fallback to full episode count from AniList metadata (no 100-episode cap)
+  return Array.from({ length: expectedCount }, (_, idx) => {
     const num = idx + 1;
     return {
       id: `${media.id}-ep-${num}`,
@@ -84,7 +108,7 @@ export async function resolveEpisodesForMedia(media: UnifiedMedia): Promise<Unif
 }
 
 export function resolveChaptersForMedia(media: UnifiedMedia): UnifiedChapter[] {
-  const count = media.chapters && media.chapters > 0 ? Math.min(media.chapters, 120) : 24;
+  const count = media.chapters && media.chapters > 0 ? media.chapters : 24;
   return Array.from({ length: count }, (_, idx) => {
     const num = idx + 1;
     return {

@@ -68,14 +68,25 @@ export interface DiscoveryPrefs {
   activeSources: string[];
 }
 
+export type VideoFitMode = 'contain' | 'cover' | 'fill';
+export type VideoQualityPref = 'auto' | '1080p' | '720p' | '480p' | '360p';
+export type SubtitlePosition = 'bottom' | 'top';
+
 export interface PlayerPrefs {
-  defaultQuality: '1080p' | '720p' | 'auto';
+  defaultQuality: VideoQualityPref;
+  autoPlay: boolean;
   autoSkipOp: boolean;
   autoSkipEd: boolean;
   autoNextEpisode: boolean;
+  autoPip: boolean;
   defaultSpeed: number;
+  videoFit: VideoFitMode;
+  subtitleEnabled: boolean;
   subtitleSize: number;
   subtitleBackground: boolean;
+  subtitleColor: string;
+  subtitleOffsetSeconds: number;
+  subtitlePosition: SubtitlePosition;
 }
 
 export interface ReaderPrefs {
@@ -212,12 +223,19 @@ const DEFAULT_STATE: PersistedState = {
   homeSections: DEFAULT_HOME_SECTIONS,
   playerPrefs: {
     defaultQuality: '1080p',
+    autoPlay: true,
     autoSkipOp: false,
     autoSkipEd: false,
     autoNextEpisode: true,
+    autoPip: true,
     defaultSpeed: 1.0,
+    videoFit: 'contain',
+    subtitleEnabled: true,
     subtitleSize: 18,
     subtitleBackground: true,
+    subtitleColor: '#ffffff',
+    subtitleOffsetSeconds: 0,
+    subtitlePosition: 'bottom',
   },
   readerPrefs: {
     mode: 'webtoon',

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  applyThemeToDocument,
   createDefaultThemePrefs,
   DEFAULT_EXCLUSIVE_SCHEME,
   DEFAULT_GRADIENT_INTENSITY,
@@ -53,3 +54,30 @@ test('resolveSchemePalette resolves Metallic Black light and dark palettes and f
   const fallback = resolveSchemePalette('nonexistent_scheme', false);
   assert.deepEqual(fallback, light);
 });
+
+test('applyThemeToDocument sets --sx-player-accent from the active theme scheme without hardcoded yellow', () => {
+  const props: Record<string, string> = {};
+  const classes = new Set<string>();
+  const mockRoot = {
+    classList: {
+      toggle: (name: string, force?: boolean) => {
+        if (force) classes.add(name);
+        else classes.delete(name);
+        return Boolean(force);
+      },
+    },
+    style: {
+      setProperty: (key: string, val: string) => {
+        props[key] = val;
+      },
+    },
+  } as unknown as HTMLElement;
+
+  const prefs = { ...createDefaultThemePrefs(), exclusiveScheme: 'netflix', themeMode: 'light' as const };
+  const isDark = applyThemeToDocument(mockRoot, prefs, false);
+  assert.equal(isDark, false);
+  const netflixDarkPrimary = resolveSchemePalette('netflix', true).primary;
+  assert.equal(props['--sx-player-accent'], netflixDarkPrimary);
+  assert.equal(props['--sx-player-on-accent'], '#ffffff');
+});
+
