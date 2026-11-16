@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -9,6 +9,7 @@ import {
   Puzzle,
   CheckCircle2,
   Loader2,
+  ArrowUpDown,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import {
@@ -24,9 +25,17 @@ import {
 } from '../services/discoveryService';
 import { MediaCard } from '../components/MediaCard';
 import { MediaCardSkeleton } from '../components/MediaCardSkeleton';
+import { SkeletonBlock } from '../components/Skeleton';
 import { getMediaGridClassName } from '../utils/mediaCard';
 import { useSlidingPill } from '../hooks/useSlidingPill';
 import { getBoundedStaggerDelay } from '../utils/appMotion';
+import {
+  buildStableMediaResultKeys,
+  classifyResultTransitions,
+  computeGridFlipDeltas,
+  formatSortLabel,
+  SimpleRect,
+} from '../utils/searchMotion';
 
 const TILE_GRADIENTS = [
   'from-red-600/85 to-orange-500/75',
@@ -38,6 +47,11 @@ const TILE_GRADIENTS = [
   'from-amber-600/85 to-yellow-500/75',
   'from-cyan-600/85 to-blue-500/75',
 ];
+
+interface ResultsTransitionState {
+  items: UnifiedMedia[];
+  prevKeys: Set<string>;
+}
 
 export const DiscoverPage: React.FC = () => {
   const navigate = useNavigate();
@@ -67,12 +81,56 @@ export const DiscoverPage: React.FC = () => {
   const [tagsList, setTagsList] = useState<string[]>([]);
   const [filterOpen, setFilterOpen] = useState(false);
 
-  const [results, setResults] = useState<UnifiedMedia[]>([]);
+  const [resultsState, setResultsState] = useState<ResultsTransitionState>({
+    items: [],
+    prevKeys: new Set(),
+  });
   const [page, setPage] = useState(1);
   const [hasNextPage, setHasNextPage] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const results = resultsState.items;
+  const resultKeys = useMemo(() => buildStableMediaResultKeys(results), [results]);
+
+  // FLIP animation tracking refs
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const prevRectsRef = useRef<Map<string, SimpleRect>>(new Map());
+  const flipCleanupTimersRef = useRef<number[]>([]);
+  const searchSeqRef = useRef(0);
+
+  const registerItemRef = useCallback(
+    (key: string) => (el: HTMLDivElement | null) => {
+      if (el) {
+        itemRefs.current.set(key, el);
+      } else {
+        itemRefs.current.delete(key);
+      }
+    },
+    [],
+  );
+
+  const captureCurrentItemRects = useCallback((): Map<string, SimpleRect> => {
+    const rects = new Map<string, SimpleRect>();
+    for (const [key, el] of itemRefs.current.entries()) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 || r.height > 0) {
+        rects.set(key, { left: r.left, top: r.top });
+      }
+    }
+    return rects;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      for (const timerId of flipCleanupTimersRef.current) {
+        window.clearTimeout(timerId);
+      }
+      flipCleanupTimersRef.current = [];
+    };
+  }, []);
 
   // Debounce search input
   useEffect(() => {
@@ -103,6 +161,7 @@ export const DiscoverPage: React.FC = () => {
   const runSearch = useCallback(
     async (pageNum: number, append: boolean) => {
       if (!isSearching) return;
+      const seq = ++searchSeqRef.current;
       if (append) setLoadingMore(true);
       else setLoading(true);
       setError(null);
@@ -119,14 +178,27 @@ export const DiscoverPage: React.FC = () => {
           format,
           adultMode: state.contentPrefs.adultContentMode,
         });
-        setResults((prev) => (append ? [...prev, ...res.items] : res.items));
+        if (seq !== searchSeqRef.current) return;
+
+        // Snapshot pre-commit DOM rects before React commits reordered/filtered items
+        prevRectsRef.current = captureCurrentItemRects();
+        setResultsState((prev) => {
+          const prevKeys = new Set(buildStableMediaResultKeys(prev.items));
+          return {
+            items: append ? [...prev.items, ...res.items] : res.items,
+            prevKeys,
+          };
+        });
         setHasNextPage(res.hasNextPage);
         setPage(pageNum);
       } catch (err) {
+        if (seq !== searchSeqRef.current) return;
         setError(err instanceof Error ? err.message : 'Search failed');
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        if (seq === searchSeqRef.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [
@@ -140,6 +212,7 @@ export const DiscoverPage: React.FC = () => {
       status,
       format,
       state.contentPrefs.adultContentMode,
+      captureCurrentItemRects,
     ],
   );
 
@@ -147,9 +220,90 @@ export const DiscoverPage: React.FC = () => {
     if (isSearching) {
       void runSearch(1, false);
     } else {
-      setResults([]);
+      searchSeqRef.current += 1;
+      prevRectsRef.current = new Map();
+      setResultsState({ items: [], prevKeys: new Set() });
+      setLoading(false);
+      setLoadingMore(false);
+      setError(null);
     }
   }, [isSearching, runSearch]);
+
+  // Execute FLIP spring transitions on persisting/reordered cards after DOM layout updates
+  useLayoutEffect(() => {
+    for (const timerId of flipCleanupTimersRef.current) {
+      window.clearTimeout(timerId);
+    }
+    flipCleanupTimersRef.current = [];
+
+    const prevRects = prevRectsRef.current;
+    prevRectsRef.current = new Map();
+
+    if (prevRects.size === 0 || resultKeys.length === 0) return;
+
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (prefersReduced) return;
+
+    // 1. Batch-read all destination rects before any style writes
+    const nextRects = new Map<string, SimpleRect>();
+    for (const key of resultKeys) {
+      const el = itemRefs.current.get(key);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      nextRects.set(key, { left: r.left, top: r.top });
+    }
+
+    const deltas = computeGridFlipDeltas(prevRects, nextRects);
+    const kinds = classifyResultTransitions(resultsState.prevKeys, resultKeys, deltas);
+
+    // 2. Batch-write inverse transforms at initial frame
+    const movedEls: HTMLDivElement[] = [];
+    for (const [key, kind] of kinds.entries()) {
+      if (kind !== 'move') continue;
+      const el = itemRefs.current.get(key);
+      const delta = deltas.get(key);
+      if (!el || !delta) continue;
+      el.style.transition = 'none';
+      el.style.transform = `translate3d(${delta.dx}px, ${delta.dy}px, 0)`;
+      el.style.willChange = 'transform';
+      movedEls.push(el);
+    }
+
+    if (movedEls.length === 0) return;
+
+    // 3. Force a single layout flush to commit inverse transforms
+    void (gridRef.current ?? movedEls[0]).offsetHeight;
+
+    // 4. Play spring glide back to zero
+    for (const el of movedEls) {
+      el.style.transition = 'transform 460ms var(--sx-ease-spring)';
+      el.style.transform = 'translate3d(0, 0, 0)';
+    }
+
+    const cleanupTimer = window.setTimeout(() => {
+      for (const el of movedEls) {
+        el.style.transition = '';
+        el.style.transform = '';
+        el.style.willChange = '';
+      }
+    }, 480);
+    flipCleanupTimersRef.current.push(cleanupTimer);
+  }, [resultKeys, resultsState.prevKeys]);
+
+  // Compute staggered animation indices ONLY for newly entering cards so moving cards stay opaque
+  const enteringIndices = useMemo(() => {
+    const map = new Map<string, number>();
+    let enterOrder = 0;
+    for (const key of resultKeys) {
+      if (!resultsState.prevKeys.has(key)) {
+        map.set(key, enterOrder++);
+      }
+    }
+    return map;
+  }, [resultKeys, resultsState.prevKeys]);
 
   const clearAll = () => {
     setQueryInput('');
@@ -252,7 +406,7 @@ export const DiscoverPage: React.FC = () => {
               key={g}
               type="button"
               onClick={() => setSelectedGenres((prev) => prev.filter((x) => x !== g))}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--sx-primary-container)]/40 border border-[var(--sx-primary)]/40 font-semibold"
+              className="sx-filter-chip-enter inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--sx-primary-container)]/40 border border-[var(--sx-primary)]/40 font-semibold transition-colors hover:border-[var(--sx-primary)]"
             >
               <span>{g}</span>
               <X className="w-3 h-3" />
@@ -263,26 +417,46 @@ export const DiscoverPage: React.FC = () => {
               key={t}
               type="button"
               onClick={() => setSelectedTags((prev) => prev.filter((x) => x !== t))}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] font-semibold"
+              className="sx-filter-chip-enter inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] font-semibold transition-colors hover:border-[var(--sx-primary)]/50"
             >
               <span>#{t}</span>
               <X className="w-3 h-3" />
             </button>
           ))}
+          {sort !== 'POPULARITY_DESC' && (
+            <button
+              type="button"
+              onClick={() => setSort('POPULARITY_DESC')}
+              className="sx-filter-chip-enter inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] font-semibold transition-colors hover:border-[var(--sx-primary)]/50"
+            >
+              <span>Sort: {formatSortLabel(sort)}</span>
+              <X className="w-3 h-3" />
+            </button>
+          )}
           {status !== 'ALL' && (
-            <span className="text-[var(--sx-on-surface-muted)] font-semibold">
-              Status: {status}
-            </span>
+            <button
+              type="button"
+              onClick={() => setStatus('ALL')}
+              className="sx-filter-chip-enter inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] font-semibold transition-colors hover:border-[var(--sx-primary)]/50"
+            >
+              <span>Status: {status}</span>
+              <X className="w-3 h-3" />
+            </button>
           )}
           {format !== 'ALL' && (
-            <span className="text-[var(--sx-on-surface-muted)] font-semibold">
-              Format: {format}
-            </span>
+            <button
+              type="button"
+              onClick={() => setFormat('ALL')}
+              className="sx-filter-chip-enter inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] font-semibold transition-colors hover:border-[var(--sx-primary)]/50"
+            >
+              <span>Format: {format}</span>
+              <X className="w-3 h-3" />
+            </button>
           )}
           <button
             type="button"
             onClick={clearAll}
-            className="inline-flex items-center gap-1 text-[var(--sx-primary)] font-bold ml-1 hover:underline"
+            className="sx-filter-chip-enter inline-flex items-center gap-1 text-[var(--sx-primary)] font-bold ml-1 hover:underline"
           >
             <RotateCcw className="w-3 h-3" />
             <span>Reset</span>
@@ -290,10 +464,66 @@ export const DiscoverPage: React.FC = () => {
         </div>
       )}
 
+      {/* Results Toolbar for Quick Sort & Filter while searching */}
+      {isSearching && (results.length > 0 || loading) && (
+        <div
+          data-testid="discover-results-toolbar"
+          className="sx-results-stage-enter flex flex-wrap items-center justify-between gap-3 py-1"
+        >
+          <div className="flex items-center gap-2.5 text-xs font-bold text-[var(--sx-on-surface-muted)]">
+            {results.length > 0 ? (
+              <span className="tabular-nums">
+                {results.length} {results.length === 1 ? 'title' : 'titles'}
+              </span>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="sr-only">Searching catalog</span>
+                <SkeletonBlock index={0} tone="accent" className="h-5 w-24 rounded-full" />
+              </div>
+            )}
+            {loading && results.length > 0 && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-primary)]">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>Updating</span>
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-semibold hover:border-[var(--sx-primary)]/45 transition-colors">
+              <ArrowUpDown className="w-3.5 h-3.5 text-[var(--sx-primary)] shrink-0" />
+              <select
+                aria-label="Sort results"
+                data-testid="discover-sort-select"
+                value={sort}
+                onChange={(e) => setSort(e.target.value as SearchSort)}
+                className="bg-transparent text-xs font-bold text-[var(--sx-on-surface)] focus:outline-none cursor-pointer"
+              >
+                <option value="POPULARITY_DESC">Popularity</option>
+                <option value="TRENDING_DESC">Trending</option>
+                <option value="SCORE_DESC">Highest Score</option>
+                <option value="FAVOURITES_DESC">Favourites</option>
+                <option value="START_DATE_DESC">Newest</option>
+              </select>
+            </label>
+
+            <button
+              type="button"
+              data-testid="discover-filter-btn"
+              onClick={() => setFilterOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)]/45 transition-colors"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
+              <span>Filters</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Results OR Browse Genres/Sources */}
       {!isSearching ? (
         isTrackerMode ? (
-          <div className="space-y-4">
+          <div className="sx-results-stage-enter space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-extrabold">
                 {browseTab === 'genres' ? 'Browse Genres' : 'Browse Tags'}
@@ -344,7 +574,10 @@ export const DiscoverPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            <div
+              key={browseTab}
+              className="sx-results-stage-enter grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"
+            >
               {(browseTab === 'genres' ? genresList : tagsList).map((name, idx) => {
                 const gradient = TILE_GRADIENTS[idx % TILE_GRADIENTS.length];
                 return (
@@ -370,7 +603,7 @@ export const DiscoverPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="sx-results-stage-enter space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-extrabold">Available Sources</h2>
               <button
@@ -413,14 +646,18 @@ export const DiscoverPage: React.FC = () => {
             </div>
           </div>
         )
-      ) : loading ? (
-        <div className={getMediaGridClassName(state.uiPrefs.cardStyle)}>
+      ) : loading && results.length === 0 ? (
+        <div
+          aria-busy="true"
+          aria-label="Loading search results"
+          className={`sx-results-stage-enter ${getMediaGridClassName(state.uiPrefs.cardStyle)}`}
+        >
           {Array.from({ length: 12 }).map((_, i) => (
-            <MediaCardSkeleton key={i} style={state.uiPrefs.cardStyle} fullWidth />
+            <MediaCardSkeleton key={i} index={i} style={state.uiPrefs.cardStyle} fullWidth />
           ))}
         </div>
-      ) : error ? (
-        <div className="p-8 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-red-500/30 text-center space-y-3">
+      ) : error && results.length === 0 ? (
+        <div className="sx-results-stage-enter p-8 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-red-500/30 text-center space-y-3">
           <p className="text-sm font-bold text-red-400">{error}</p>
           <button
             type="button"
@@ -431,7 +668,7 @@ export const DiscoverPage: React.FC = () => {
           </button>
         </div>
       ) : results.length === 0 ? (
-        <div className="py-16 text-center space-y-2">
+        <div className="sx-results-stage-enter py-16 text-center space-y-2">
           <p className="text-base font-bold">No results found</p>
           <p className="text-xs text-[var(--sx-on-surface-muted)]">
             Try adjusting your query or clearing active filters.
@@ -439,21 +676,63 @@ export const DiscoverPage: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-6">
-          <div className={getMediaGridClassName(state.uiPrefs.cardStyle)}>
-            {results.map((media, idx) => (
-              <MediaCard
-                key={`${media.id}-${media.type}-${idx}`}
-                media={media}
-                fullWidth
-                animationIndex={idx}
-                onClick={() =>
-                  navigate(`/details/${media.type.toLowerCase()}/${media.id}`, {
-                    state: { media },
-                  })
-                }
-              />
-            ))}
+          {error && (
+            <div className="sx-results-stage-enter flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-500/30 text-xs">
+              <span className="font-semibold text-red-400">{error}</span>
+              <button
+                type="button"
+                onClick={() => runSearch(1, false)}
+                className="font-bold text-red-300 hover:underline shrink-0"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          <div
+            ref={gridRef}
+            data-testid="discover-results-grid"
+            className={`sx-results-grid-state ${getMediaGridClassName(state.uiPrefs.cardStyle)} ${
+              loading ? 'opacity-60 scale-[0.992] pointer-events-none' : 'opacity-100 scale-100'
+            }`}
+          >
+            {results.map((media, idx) => {
+              const key = resultKeys[idx] ?? `${media.type}-${media.id}`;
+              return (
+                <div
+                  key={key}
+                  ref={registerItemRef(key)}
+                  data-flip-key={key}
+                >
+                  <MediaCard
+                    media={media}
+                    fullWidth
+                    animationIndex={enteringIndices.get(key)}
+                    onClick={() =>
+                      navigate(`/details/${media.type.toLowerCase()}/${media.id}`, {
+                        state: { media },
+                      })
+                    }
+                  />
+                </div>
+              );
+            })}
           </div>
+          {loadingMore && (
+            <div
+              aria-busy="true"
+              aria-label="Loading more results"
+              className={getMediaGridClassName(state.uiPrefs.cardStyle)}
+            >
+              {Array.from({ length: 4 }).map((_, i) => (
+                <MediaCardSkeleton
+                  key={`more-${i}`}
+                  index={i}
+                  style={state.uiPrefs.cardStyle}
+                  fullWidth
+                />
+              ))}
+            </div>
+          )}
           {hasNextPage && (
             <div className="flex justify-center pt-4">
               <button

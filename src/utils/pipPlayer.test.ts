@@ -4,6 +4,7 @@ import {
   canUseNativePictureInPicture,
   clampPipPosition,
   computePipCornerPosition,
+  resolveInlinePipHandoff,
   shouldAutoEnterPipOnLeave,
   shouldRestorePipPlayback,
   snapPipCorner,
@@ -73,6 +74,34 @@ test('shouldRestorePipPlayback matches mediaId and episodeNumber strictly', () =
   assert.equal(shouldRestorePipPlayback(null, '21', 2), false);
 });
 
+test('resolveInlinePipHandoff closes PiP cleanly and restores state for matching episode', () => {
+  const session = {
+    media: { id: '16498', type: 'ANIME' as const, title: { english: 'Attack on Titan' } },
+    episodes: [
+      { id: 'ep-1', number: 1, title: 'Ep 1' },
+      { id: 'ep-2', number: 2, title: 'Ep 2' },
+    ],
+    episodeIndex: 0,
+    currentTime: 42.5,
+    playing: true,
+  };
+  assert.deepEqual(resolveInlinePipHandoff(session, '16498', 1), {
+    shouldClosePip: true,
+    restoreTime: 42.5,
+    resumePlaying: true,
+  });
+  assert.deepEqual(resolveInlinePipHandoff(session, '16498', 2), {
+    shouldClosePip: true,
+    restoreTime: null,
+    resumePlaying: false,
+  });
+  assert.deepEqual(resolveInlinePipHandoff(null, '16498', 1), {
+    shouldClosePip: false,
+    restoreTime: null,
+    resumePlaying: false,
+  });
+});
+
 test('shouldAutoEnterPipOnLeave triggers only when enabled, playing, not ended, and not already handled', () => {
   assert.equal(
     shouldAutoEnterPipOnLeave({ enabled: true, isPlaying: true, ended: false, alreadyHandled: false }),
@@ -95,4 +124,5 @@ test('shouldAutoEnterPipOnLeave triggers only when enabled, playing, not ended, 
     false,
   );
 });
+
 

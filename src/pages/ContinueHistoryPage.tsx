@@ -85,7 +85,7 @@ export const ContinueHistoryPage: React.FC = () => {
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5"
         >
           {Array.from({ length: 6 }).map((_, i) => (
-            <ContinueHistoryCardSkeleton key={i} />
+            <ContinueHistoryCardSkeleton key={i} index={i} />
           ))}
         </div>
       ) : items.length === 0 ? (

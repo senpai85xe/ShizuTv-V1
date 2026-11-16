@@ -152,7 +152,11 @@ export const HorizontalSection: React.FC<HorizontalSectionProps> = ({
           className="flex gap-3.5 overflow-x-auto no-scrollbar px-4 sm:px-6 py-2 -my-1"
         >
           {Array.from({ length: 8 }).map((_, i) => (
-            <MediaCardSkeleton key={i} style={cardStyle ?? state.uiPrefs.cardStyle} />
+            <MediaCardSkeleton
+              key={i}
+              index={i}
+              style={cardStyle ?? state.uiPrefs.cardStyle}
+            />
           ))}
         </div>
       ) : isEmpty ? (

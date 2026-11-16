@@ -195,6 +195,7 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
 
       {/* Scrollable Tab Body */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
+        <div key={activeTab} className="sx-player-tab-body space-y-3">
         {/* ==================== TAB 1: PLAYBACK ==================== */}
         {activeTab === 'playback' && (
           <div className="space-y-3">
@@ -771,6 +772,7 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

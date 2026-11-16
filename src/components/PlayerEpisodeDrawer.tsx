@@ -173,7 +173,7 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
               No episodes match &ldquo;{query}&rdquo;
             </p>
           ) : (
-            visibleEpisodes.map((ep) => {
+            visibleEpisodes.map((ep, idx) => {
               const realIdx = episodes.findIndex((item) => item.id === ep.id);
               const isActive = realIdx === activeIndex;
               return (
@@ -185,7 +185,8 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
                     onSelectEpisode(realIdx >= 0 ? realIdx : 0);
                     onClose();
                   }}
-                  className={`w-full flex items-center justify-between gap-2 rounded-xl text-left transition-all border ${
+                  style={{ animationDelay: `${Math.min(idx, 12) * 16}ms` }}
+                  className={`sx-card-animate w-full flex items-center justify-between gap-2 rounded-xl text-left transition-all border ${
                     compact ? 'px-2.5 py-1.5' : 'px-3 py-2.5'
                   } ${
                     isActive

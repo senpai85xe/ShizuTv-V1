@@ -80,7 +80,7 @@ export const SmartImage: React.FC<SmartImageProps> = ({
   return (
     <div className={`relative overflow-hidden ${containerBgClass} ${layoutClass} ${className}`}>
       {!loaded && !transparentBg && (
-        <div className="absolute inset-0 animate-pulse bg-[var(--sx-surface-high)]" />
+        <div aria-hidden="true" className="absolute inset-0 sx-skeleton-surface" />
       )}
       {backdropFill && fit === 'contain' && (
         <img

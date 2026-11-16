@@ -44,10 +44,16 @@ import {
 } from '../utils/inlinePlayer';
 import {
   canUseNativePictureInPicture,
+  resolveInlinePipHandoff,
   shouldAutoEnterPipOnLeave,
 } from '../utils/pipPlayer';
 import { PlayerEpisodeDrawer } from './PlayerEpisodeDrawer';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
+import {
+  EpisodeChangeDirection,
+  getEpisodeBadgeTransitionClass,
+  getEpisodeChangeDirection,
+} from '../utils/detailsMotion';
 
 interface InlineAnimePlayerProps {
   media: UnifiedMedia;
@@ -109,6 +115,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const prevPlaySignalRef = useRef(0);
   const mountedAtRef = useRef(typeof performance !== 'undefined' ? performance.now() : Date.now());
   const handledPipExitRef = useRef(false);
+  const pendingStartTimeRef = useRef<number | null>(null);
+  const pendingResumePlayRef = useRef<boolean>(false);
+  const pipConsumedOnMountRef = useRef(false);
 
   const [ambientEnabled, setAmbientEnabled] = useState(true);
   const [playing, setPlaying] = useState(false);
@@ -129,9 +138,21 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const [showServerMenu, setShowServerMenu] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [showEpisodeDrawer, setShowEpisodeDrawer] = useState(false);
-  const [seekBadge, setSeekBadge] = useState<{ label: string; side: 'left' | 'right' } | null>(
+  const [seekBadge, setSeekBadge] = useState<{ label: string; side: 'left' | 'right'; seq: number } | null>(
     null,
   );
+  const seekSeqRef = useRef(0);
+  const [epTransition, setEpTransition] = useState<{ index: number; dir: EpisodeChangeDirection }>({
+    index: safeIndex,
+    dir: 'none',
+  });
+  if (epTransition.index !== safeIndex) {
+    setEpTransition({
+      index: safeIndex,
+      dir: getEpisodeChangeDirection(epTransition.index, safeIndex),
+    });
+  }
+  const epBadgeAnimClass = getEpisodeBadgeTransitionClass(epTransition.dir);
   const [skipIntervals, setSkipIntervals] = useState<SkipInterval[]>([]);
 
   const autoPlay = state.playerPrefs.autoPlay;
@@ -166,13 +187,33 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     };
   }, []);
 
+  // Hand off from active floating PiP cleanly when returning to Watch tab
+  useEffect(() => {
+    if (pipSession && !pipConsumedOnMountRef.current) {
+      pipConsumedOnMountRef.current = true;
+      const handoff = resolveInlinePipHandoff(pipSession, media.id, currentEpisode.number);
+      if (handoff.restoreTime !== null) {
+        pendingStartTimeRef.current = handoff.restoreTime;
+      }
+      pendingResumePlayRef.current = handoff.resumePlaying;
+      if (handoff.shouldClosePip) {
+        closePip();
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Load HLS or MP4 video stream
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
+    let cancelled = false;
+    const resumeAt = pendingStartTimeRef.current;
+    const resumePlay = pendingResumePlayRef.current;
+
     setHasVideoFrame(false);
-    setCurrentTime(0);
+    setCurrentTime(resumeAt ?? 0);
     setDuration(0);
     setPlaying(false);
     setHlsQualityOptions([{ index: -1, label: 'Auto' }]);
@@ -180,7 +221,27 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
 
     const isNewExplicitTrigger = playSignal > prevPlaySignalRef.current;
     prevPlaySignalRef.current = playSignal;
-    const shouldStart = !isPipActive() && shouldAutoStartPlayback(autoPlay, isNewExplicitTrigger);
+    const shouldStart =
+      !isPipActive() && shouldAutoStartPlayback(autoPlay, isNewExplicitTrigger || resumePlay);
+
+    const applyInitialStreamState = () => {
+      if (cancelled) return;
+      if (pendingStartTimeRef.current === resumeAt) {
+        pendingStartTimeRef.current = null;
+        pendingResumePlayRef.current = false;
+      }
+      if (resumeAt && resumeAt > 0.5) {
+        try {
+          video.currentTime = resumeAt;
+        } catch {
+          // Ignore seek errors before ready
+        }
+      }
+      video.playbackRate = speed;
+      if (shouldStart) {
+        video.play().catch(() => {});
+      }
+    };
 
     let hls: Hls | null = null;
     if (stream.isHls && Hls.isSupported()) {
@@ -189,7 +250,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       hls.loadSource(stream.url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (!hls) return;
+        if (!hls || cancelled) return;
         const options = buildHlsQualityOptions(hls.levels);
         setHlsQualityOptions(options);
         const preferredLevel = resolvePreferredHlsLevel(
@@ -198,22 +259,20 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
         );
         hls.currentLevel = preferredLevel;
         setSelectedHlsLevel(preferredLevel);
-
-        video.playbackRate = speed;
-        if (shouldStart) {
-          video.play().catch(() => {});
-        }
+        applyInitialStreamState();
       });
     } else {
       hlsRef.current = null;
       video.src = stream.url;
-      video.playbackRate = speed;
-      if (shouldStart) {
-        video.play().catch(() => {});
+      video.addEventListener('loadedmetadata', applyInitialStreamState, { once: true });
+      if (video.readyState >= 1) {
+        applyInitialStreamState();
       }
     }
 
     return () => {
+      cancelled = true;
+      video.removeEventListener('loadedmetadata', applyInitialStreamState);
       if (hls) hls.destroy();
       if (hlsRef.current === hls) hlsRef.current = null;
     };
@@ -333,7 +392,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const triggerSeekFeedback = (delta: number) => {
     const label = delta > 0 ? `+${delta}s` : `${delta}s`;
     const side: 'left' | 'right' = delta < 0 ? 'left' : 'right';
-    setSeekBadge({ label, side });
+    seekSeqRef.current += 1;
+    setSeekBadge({ label, side, seq: seekSeqRef.current });
     if (seekFeedbackTimerRef.current) window.clearTimeout(seekFeedbackTimerRef.current);
     seekFeedbackTimerRef.current = window.setTimeout(() => setSeekBadge(null), 650);
   };
@@ -551,7 +611,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     <section
       data-testid="inline-anime-player"
       aria-label={`Inline player for ${animeTitle}`}
-      className="relative mb-5"
+      className="sx-player-stage-enter relative mb-5"
     >
       {/* Ambient Aura Glow Effect around the Player when Anime Plays */}
       <div
@@ -616,7 +676,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           style={{ borderRadius: isFullscreen ? '0px' : `${state.themePrefs.uiRoundness}px` }}
           className="absolute inset-0 overflow-hidden flex items-center justify-center bg-black"
         >
-          {/* Artwork Preview ONLY before first video frame loads — never bleeds behind letterbox bars */}
+          {/* Artwork Preview + Shimmer ONLY before first video frame loads — never bleeds behind letterbox bars */}
           {backdropArtwork && (
             <img
               src={backdropArtwork}
@@ -625,6 +685,25 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                 hasVideoFrame || isFullscreen ? 'opacity-0' : 'opacity-65'
               }`}
             />
+          )}
+          {!hasVideoFrame && !isFullscreen && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 overflow-hidden"
+            >
+              <div
+                className="absolute inset-0 opacity-55"
+                style={{
+                  background:
+                    'radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--sx-player-accent) 26%, transparent), transparent 65%)',
+                }}
+              />
+              <div className="sx-buffering-shimmer w-1/2 h-full bg-gradient-to-r from-transparent via-white/15 to-transparent skew-x-[-20deg]" />
+              <div className="absolute top-12 sm:top-14 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/15 text-[10px] font-bold text-white/90 shadow-lg">
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--sx-player-accent)] animate-ping" />
+                <span>Preparing EP {currentEpisode.number}...</span>
+              </div>
+            </div>
           )}
 
           <video
@@ -677,15 +756,27 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             }`}
           />
 
-          {/* Double-tap Seek HUD */}
+          {/* Double-tap Seek Radial Ripple & HUD */}
           {seekBadge && (
-            <div
-              className={`sx-player-badge-pop pointer-events-none absolute top-1/2 z-30 px-3.5 py-1.5 rounded-full bg-black/70 backdrop-blur-xl border border-white/20 text-xs font-black tracking-wide shadow-xl ${
-                seekBadge.side === 'left' ? 'left-5 sm:left-10' : 'right-5 sm:right-10'
-              }`}
-            >
-              {seekBadge.label}
-            </div>
+            <>
+              <div
+                key={`ripple-${seekBadge.seq}`}
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-y-0 w-1/2 z-20 ${
+                  seekBadge.side === 'left'
+                    ? 'left-0 sx-seek-ripple-left bg-gradient-to-r from-white/20 via-white/10 to-transparent rounded-r-full'
+                    : 'right-0 sx-seek-ripple-right bg-gradient-to-l from-white/20 via-white/10 to-transparent rounded-l-full'
+                }`}
+              />
+              <div
+                key={`badge-${seekBadge.seq}`}
+                className={`sx-player-badge-pop pointer-events-none absolute top-1/2 z-30 px-3.5 py-1.5 rounded-full bg-black/70 backdrop-blur-xl border border-white/20 text-xs font-black tracking-wide shadow-xl ${
+                  seekBadge.side === 'left' ? 'left-5 sm:left-10' : 'right-5 sm:right-10'
+                }`}
+              >
+                {seekBadge.label}
+              </div>
+            </>
           )}
 
           {/* Active Subtitle Cue (positioned cleanly so it never collides with center controls) */}
@@ -702,6 +793,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               }`}
             >
               <p
+                key={activeCue.text}
                 style={{
                   fontSize: `${
                     isFullscreen
@@ -710,7 +802,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                   }px`,
                   color: state.playerPrefs.subtitleColor || '#ffffff',
                 }}
-                className={`px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-xl text-center font-bold max-w-[94%] sm:max-w-lg leading-tight sm:leading-snug line-clamp-2 transition-all duration-200 ${
+                className={`sx-player-subtitle-enter px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-xl text-center font-bold max-w-[94%] sm:max-w-lg leading-tight sm:leading-snug line-clamp-2 transition-all duration-200 ${
                   state.playerPrefs.subtitleBackground
                     ? 'bg-black/75 backdrop-blur-md border border-white/10'
                     : 'drop-shadow-[0_2px_6px_rgba(0,0,0,0.95)]'
@@ -747,7 +839,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                 <Cast className="w-4 h-4 text-white" />
               </button>
 
-              <span className="px-2.5 py-1 rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-[10px] sm:text-[11px] font-bold tracking-wide text-white/95 truncate max-w-[48%] sm:max-w-[56%]">
+              <span
+                key={`ep-pill-${currentEpisode.id}`}
+                className={`${epBadgeAnimClass} px-2.5 py-1 rounded-full bg-black/40 backdrop-blur-md border border-white/10 text-[10px] sm:text-[11px] font-bold tracking-wide text-white/95 truncate max-w-[48%] sm:max-w-[56%]`}
+              >
                 EP {currentEpisode.number} · {currentEpisode.title}
               </span>
 
@@ -831,9 +926,15 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                 className="sx-player-play-btn w-11 h-11 sm:w-14 sm:h-14 rounded-full bg-white/18 hover:bg-white/28 backdrop-blur-md border border-white/25 flex items-center justify-center shadow-2xl"
               >
                 {playing ? (
-                  <Pause className="w-5 h-5 sm:w-7 sm:h-7 fill-white text-white" />
+                  <Pause
+                    key="pause-icon"
+                    className="sx-player-icon-pop w-5 h-5 sm:w-7 sm:h-7 fill-white text-white"
+                  />
                 ) : (
-                  <Play className="w-5 h-5 sm:w-7 sm:h-7 fill-white text-white ml-0.5" />
+                  <Play
+                    key="play-icon"
+                    className="sx-player-icon-pop w-5 h-5 sm:w-7 sm:h-7 fill-white text-white ml-0.5"
+                  />
                 )}
               </button>
 
@@ -868,7 +969,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                         setCurrentTime(activeSkip.endTime);
                       }
                     }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white text-black text-[11px] font-extrabold shadow-lg hover:bg-[var(--sx-player-accent)] hover:text-[var(--sx-player-on-accent)] transition-colors"
+                    className="sx-player-skip-pill inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white text-black text-[11px] font-extrabold shadow-lg hover:bg-[var(--sx-player-accent)] hover:text-[var(--sx-player-on-accent)] transition-colors"
                   >
                     <FastForward className="w-3.5 h-3.5" />
                     <span>Skip {activeSkip.skipType.toUpperCase()}</span>

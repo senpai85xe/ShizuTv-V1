@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   Bookmark,
   BookmarkCheck,
+  BookmarkPlus,
   BookOpen,
   Building2,
   Check,
@@ -57,6 +58,12 @@ import { SmartImage } from '../components/SmartImage';
 import { MediaCard } from '../components/MediaCard';
 import { EpisodeChapterList } from '../components/EpisodeChapterList';
 import { InlineAnimePlayer } from '../components/InlineAnimePlayer';
+import {
+  DetailsHeroSkeleton,
+  DetailsSynopsisSkeleton,
+  EpisodeListSkeleton,
+  SkeletonBlock,
+} from '../components/Skeleton';
 import { EPISODE_CHAPTER_STYLES, EpisodeChapterStyle } from '../data/themePresets';
 import {
   formatChapterMetaLine,
@@ -74,6 +81,13 @@ import {
   stripHtmlTags,
 } from '../utils/detailsLayout';
 import { useSlidingPill } from '../hooks/useSlidingPill';
+import { ScrollReveal } from '../components/ScrollReveal';
+import {
+  DetailsTabDirection,
+  getDetailsTabDirection,
+  getDetailsTabTransitionClass,
+  shouldShowDetailsStickyHeader,
+} from '../utils/detailsMotion';
 
 type DetailsTab = 'info' | 'watch' | 'comments';
 
@@ -122,11 +136,19 @@ export const DetailsPage: React.FC = () => {
     initialMedia ?? {
       id: id || '',
       type: resolvedType,
-      title: { english: 'Loading...' },
+      title: { english: '' },
     },
   );
   const [loadingDetails, setLoadingDetails] = useState(true);
   const [activeTab, setActiveTab] = useState<DetailsTab>('info');
+  const prevTabRef = React.useRef<DetailsTab>('info');
+  const [tabDirection, setTabDirection] = useState<DetailsTabDirection>('none');
+  const switchTab = (nextTab: DetailsTab) => {
+    setTabDirection(getDetailsTabDirection(prevTabRef.current, nextTab));
+    prevTabRef.current = nextTab;
+    setActiveTab(nextTab);
+  };
+  const tabTransitionClass = getDetailsTabTransitionClass(tabDirection);
   const [inlineEpisodeIndex, setInlineEpisodeIndex] = useState(0);
   const [hasPickedInlineEpisode, setHasPickedInlineEpisode] = useState(false);
   const [inlinePlaySignal, setInlinePlaySignal] = useState(0);
@@ -160,12 +182,48 @@ export const DetailsPage: React.FC = () => {
   const [trailerOpen, setTrailerOpen] = useState(false);
   const [copiedToast, setCopiedToast] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const heroRef = React.useRef<HTMLDivElement>(null);
+  const [showStickyHeader, setShowStickyHeader] = useState(false);
 
   useEffect(() => {
     if (!media.airingAt) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, [media.airingAt]);
+
+  // Show blurred sticky header only after scrolling past hero on non-watch tabs
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let rafId = 0;
+
+    const evaluateSticky = () => {
+      rafId = 0;
+      const heroBottom = heroRef.current?.getBoundingClientRect().bottom ?? null;
+      const next = shouldShowDetailsStickyHeader({
+        activeTab,
+        scrollY: window.scrollY || window.pageYOffset || 0,
+        heroBottom,
+        thresholdPx: 16,
+      });
+      setShowStickyHeader((prev) => (prev === next ? prev : next));
+    };
+
+    const scheduleCheck = () => {
+      if (rafId) return;
+      rafId = window.requestAnimationFrame(evaluateSticky);
+    };
+
+    evaluateSticky();
+    window.addEventListener('scroll', scheduleCheck, { passive: true });
+    window.addEventListener('resize', scheduleCheck, { passive: true });
+    return () => {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      window.removeEventListener('scroll', scheduleCheck);
+      window.removeEventListener('resize', scheduleCheck);
+    };
+  }, [activeTab, id]);
+
+  const stickyHeaderVisible = activeTab !== 'watch' && showStickyHeader;
 
   // Comments & local spoiler/reply state
   const [commentInput, setCommentInput] = useState('');
@@ -331,13 +389,13 @@ export const DetailsPage: React.FC = () => {
       setHasPickedInlineEpisode(true);
       setInlineEpisodeIndex(idx);
       setInlinePlaySignal((s) => s + 1);
-      setActiveTab('watch');
+      switchTab('watch');
       if (typeof window !== 'undefined') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
       return;
     }
-    setActiveTab('watch');
+    switchTab('watch');
   };
 
   const handleShare = async () => {
@@ -395,10 +453,11 @@ export const DetailsPage: React.FC = () => {
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-[var(--sx-surface)]">
         {(media.cover || media.banner) && (
           <img
+            key={media.cover || media.banner}
             src={media.cover || media.banner || ''}
             alt=""
             aria-hidden="true"
-            className="w-full h-full object-cover scale-125 blur-3xl opacity-60 dark:opacity-45 saturate-150"
+            className="sx-details-backdrop-enter w-full h-full object-cover scale-125 blur-3xl opacity-60 dark:opacity-45 saturate-150"
           />
         )}
         <div className="absolute inset-0 bg-gradient-to-b from-[var(--sx-surface)]/18 via-[var(--sx-surface)]/36 to-[var(--sx-surface)]/68 dark:from-[var(--sx-surface)]/28 dark:via-[var(--sx-surface)]/48 dark:to-[var(--sx-surface)]/80" />
@@ -406,14 +465,15 @@ export const DetailsPage: React.FC = () => {
 
       {/* Main Content Container */}
       <div
-        className={`max-w-5xl mx-auto px-4 sm:px-6 pt-4 ${
+        key={`details-stage-${id}`}
+        className={`sx-page-push-enter max-w-5xl mx-auto px-4 sm:px-6 pt-4 ${
           activeTab === 'watch' && (episodes.length > 0 || chapters.length > 0)
             ? 'pb-48'
             : 'pb-32'
         }`}
       >
         {/* Top Floating Controls */}
-        <header className="sticky top-3 z-30 flex items-center justify-between gap-3 mb-5">
+        <header className="relative z-20 flex items-center justify-between gap-3 mb-5">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -462,106 +522,115 @@ export const DetailsPage: React.FC = () => {
         </header>
 
         {/* Hero Lockup (or Inline Player when Watch tab is open for Anime) */}
-        {activeTab === 'watch' && !isManga ? (
-          <InlineAnimePlayer
-            media={media}
-            episodes={episodes}
-            episodeIndex={activeInlineEpisodeIndex}
-            sourceId={selectedSourceId}
-            playSignal={inlinePlaySignal}
-            onChangeEpisodeIndex={(nextIdx) => {
-              setHasPickedInlineEpisode(true);
-              setInlineEpisodeIndex(nextIdx);
-            }}
-            onOpenFullPlayer={(idx) => {
-              navigate('/player', {
-                state: { media, episodes, episodeIndex: idx, sourceId: selectedSourceId },
-              });
-            }}
-          />
-        ) : (
-        <section className="space-y-4 mb-6">
-          <div className="flex items-end sm:items-center gap-4 sm:gap-6">
-            <div
-              style={{ borderRadius: `${state.themePrefs.uiRoundness}px` }}
-              className="w-28 sm:w-36 aspect-[2/3] overflow-hidden border border-[var(--sx-outline)] shadow-2xl shrink-0 bg-[var(--sx-surface-container)]"
-            >
-              <SmartImage
-                src={media.cover}
-                alt={title}
-                fallbackTitle={title}
-                className="w-full h-full"
-              />
-            </div>
+        <div ref={heroRef}>
+          {activeTab === 'watch' && !isManga ? (
+            <InlineAnimePlayer
+              media={media}
+              episodes={episodes}
+              episodeIndex={activeInlineEpisodeIndex}
+              sourceId={selectedSourceId}
+              playSignal={inlinePlaySignal}
+              onChangeEpisodeIndex={(nextIdx) => {
+                setHasPickedInlineEpisode(true);
+                setInlineEpisodeIndex(nextIdx);
+              }}
+              onOpenFullPlayer={(idx) => {
+                navigate('/player', {
+                  state: { media, episodes, episodeIndex: idx, sourceId: selectedSourceId },
+                });
+              }}
+            />
+          ) : loadingDetails && !initialMedia && !media.cover ? (
+            <DetailsHeroSkeleton roundness={state.themePrefs.uiRoundness} />
+          ) : (
+            <section className="sx-details-hero-enter space-y-4 mb-6">
+              <div className="flex items-end sm:items-center gap-4 sm:gap-6">
+                <div
+                  style={{ borderRadius: `${state.themePrefs.uiRoundness}px` }}
+                  className="sx-details-poster-hover w-28 sm:w-36 aspect-[2/3] overflow-hidden border border-[var(--sx-outline)] shadow-2xl shrink-0 bg-[var(--sx-surface-container)]"
+                >
+                  <SmartImage
+                    src={media.cover}
+                    alt={title}
+                    fallbackTitle={title}
+                    className="w-full h-full"
+                  />
+                </div>
 
-            <div className="min-w-0 flex-1 space-y-2.5">
-              <div className="space-y-1">
-                <h1 className="text-xl sm:text-3xl font-black tracking-tight text-[var(--sx-on-surface)] line-clamp-2 leading-tight">
-                  {title}
-                </h1>
-                {(media.title.native || media.title.romaji) &&
-                  (media.title.native || media.title.romaji) !== title && (
-                    <p className="text-xs sm:text-sm font-semibold text-[var(--sx-on-surface-muted)] truncate">
-                      {media.title.romaji || media.title.native}
-                    </p>
-                  )}
-              </div>
+                <div className="min-w-0 flex-1 space-y-2.5">
+                  <div className="space-y-1">
+                    <h1 className="text-xl sm:text-3xl font-black tracking-tight text-[var(--sx-on-surface)] line-clamp-2 leading-tight">
+                      {title}
+                    </h1>
+                    {(media.title.native || media.title.romaji) &&
+                      (media.title.native || media.title.romaji) !== title && (
+                        <p className="text-xs sm:text-sm font-semibold text-[var(--sx-on-surface-muted)] truncate">
+                          {media.title.romaji || media.title.native}
+                        </p>
+                      )}
+                  </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                {media.studios && media.studios.length > 0 && (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--sx-surface-container)]/34 dark:bg-[var(--sx-surface-container)]/38 backdrop-blur-lg backdrop-saturate-150 border border-white/40 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/5 text-[11px] font-bold uppercase tracking-wide">
-                    <Building2 className="w-3 h-3 text-[var(--sx-on-surface-muted)]" />
-                    <span>{media.studios[0]}</span>
-                  </span>
-                )}
-                {media.status && (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--sx-surface-container)]/34 dark:bg-[var(--sx-surface-container)]/38 backdrop-blur-lg backdrop-saturate-150 border border-white/40 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/5 text-[11px] font-bold uppercase tracking-wide">
-                    {media.status === 'RELEASING' ? (
-                      <Radio className="w-3 h-3 text-emerald-500" />
-                    ) : (
-                      <CheckCircle2 className="w-3 h-3 text-[var(--sx-on-surface-muted)]" />
+                  <div className="flex flex-wrap items-center gap-2">
+                    {media.studios && media.studios.length > 0 && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--sx-surface-container)]/34 dark:bg-[var(--sx-surface-container)]/38 backdrop-blur-lg backdrop-saturate-150 border border-white/40 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/5 text-[11px] font-bold uppercase tracking-wide">
+                        <Building2 className="w-3 h-3 text-[var(--sx-on-surface-muted)]" />
+                        <span>{media.studios[0]}</span>
+                      </span>
                     )}
-                    <span>{media.status.replace(/_/g, ' ')}</span>
-                  </span>
-                )}
-                {typeof media.score === 'number' && media.score > 0 && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--sx-surface-container)]/34 dark:bg-[var(--sx-surface-container)]/38 backdrop-blur-lg backdrop-saturate-150 border border-white/40 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/5 text-[11px] font-extrabold tabular-nums">
-                    <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
-                    <span>{media.score.toFixed(1)}</span>
-                  </span>
-                )}
+                    {media.status && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--sx-surface-container)]/34 dark:bg-[var(--sx-surface-container)]/38 backdrop-blur-lg backdrop-saturate-150 border border-white/40 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/5 text-[11px] font-bold uppercase tracking-wide">
+                        {media.status === 'RELEASING' ? (
+                          <Radio className="w-3 h-3 text-emerald-500" />
+                        ) : (
+                          <CheckCircle2 className="w-3 h-3 text-[var(--sx-on-surface-muted)]" />
+                        )}
+                        <span>{media.status.replace(/_/g, ' ')}</span>
+                      </span>
+                    )}
+                    {typeof media.score === 'number' && media.score > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--sx-surface-container)]/34 dark:bg-[var(--sx-surface-container)]/38 backdrop-blur-lg backdrop-saturate-150 border border-white/40 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/5 text-[11px] font-extrabold tabular-nums">
+                        <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                        <span>{media.score.toFixed(1)}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* Full-width Custom List CTA */}
-          <button
-            type="button"
-            data-testid="details-custom-list-btn"
-            onClick={() => setTrackerOpen(true)}
-            className={`w-full py-3.5 px-5 flex items-center justify-center gap-2.5 font-extrabold text-xs tracking-wider uppercase ${frostedCardClass} hover:border-[var(--sx-primary)]/60 transition-all`}
-          >
-            {libEntry ? (
-              <BookmarkCheck className="w-4 h-4 text-[var(--sx-primary)]" />
-            ) : (
-              <Bookmark className="w-4 h-4 text-[var(--sx-primary)]" />
-            )}
-            <span>
-              {libEntry
-                ? `${getStatusLabel(libEntry.status, media.type)} · ${libEntry.progress}${
-                    totalCount > 0 ? ` / ${totalCount}` : ''
-                  }`
-                : 'Custom List'}
-            </span>
-          </button>
-        </section>
-        )}
+              {/* Full-width Custom List CTA */}
+              <button
+                type="button"
+                data-testid="details-custom-list-btn"
+                onClick={() => setTrackerOpen(true)}
+                className={`w-full py-3.5 px-5 flex items-center justify-center gap-2.5 font-extrabold text-xs tracking-wider uppercase ${frostedCardClass} hover:border-[var(--sx-primary)]/60 transition-all`}
+              >
+                {libEntry ? (
+                  <BookmarkCheck className="w-4 h-4 text-[var(--sx-primary)]" />
+                ) : (
+                  <Bookmark className="w-4 h-4 text-[var(--sx-primary)]" />
+                )}
+                <span>
+                  {libEntry
+                    ? `${getStatusLabel(libEntry.status, media.type)} · ${libEntry.progress}${
+                        totalCount > 0 ? ` / ${totalCount}` : ''
+                      }`
+                    : 'Custom List'}
+                </span>
+              </button>
+            </section>
+          )}
+        </div>
 
         {/* ======================== TAB 1: INFO ======================== */}
         {activeTab === 'info' && (
-          <div data-testid="details-panel-info" className="space-y-5">
+          <div
+            key="tab-info"
+            data-testid="details-panel-info"
+            className={`${tabTransitionClass} space-y-5`}
+          >
             {/* Watching / Reading Progress Card */}
-            <section className={`${frostedCardClass} p-4 sm:p-5 space-y-3`}>
+            <ScrollReveal index={0}>
+              <section className={`${frostedCardClass} p-4 sm:p-5 space-y-3`}>
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <span className="w-7 h-7 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 flex items-center justify-center">
@@ -608,48 +677,48 @@ export const DetailsPage: React.FC = () => {
               <div className="h-2 w-full rounded-full bg-[var(--sx-on-surface)]/10 overflow-hidden">
                 <div
                   style={{ width: `${progressPercent}%` }}
-                  className="h-full rounded-full bg-[var(--sx-primary)] transition-all duration-300"
+                  className="h-full rounded-full bg-[var(--sx-primary)] transition-all duration-500 ease-out"
                 />
               </div>
-            </section>
+              </section>
+            </ScrollReveal>
 
             {/* Next Episode Airing Countdown & Date/Time for Ongoing Anime */}
             {nextAiringInfo && (
-              <section
-                data-testid="next-airing-card"
-                className={`${frostedCardClass} p-4 sm:p-5 flex items-center justify-between gap-3`}
-              >
-                <div className="flex items-center gap-3.5 min-w-0">
-                  <span className="w-10 h-10 rounded-2xl bg-[var(--sx-on-surface)]/8 dark:bg-white/10 flex items-center justify-center shrink-0">
-                    <Timer className="w-5 h-5 text-[var(--sx-primary)]" />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-[var(--sx-on-surface-muted)]">
-                      Episode {nextAiringInfo.episode} Airing In
-                    </p>
-                    <p className="text-base sm:text-lg font-black tracking-tight tabular-nums text-[var(--sx-on-surface)]">
-                      {nextAiringInfo.countdown}
-                    </p>
+              <ScrollReveal index={1}>
+                <section
+                  data-testid="next-airing-card"
+                  className={`${frostedCardClass} p-4 sm:p-5 flex items-center justify-between gap-3`}
+                >
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <span className="w-10 h-10 rounded-2xl bg-[var(--sx-on-surface)]/8 dark:bg-white/10 flex items-center justify-center shrink-0">
+                      <Timer className="w-5 h-5 text-[var(--sx-primary)]" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-[var(--sx-on-surface-muted)]">
+                        Episode {nextAiringInfo.episode} Airing In
+                      </p>
+                      <p className="text-base sm:text-lg font-black tracking-tight tabular-nums text-[var(--sx-on-surface)]">
+                        {nextAiringInfo.countdown}
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <span className="px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 text-[11px] font-bold text-[var(--sx-on-surface)] whitespace-nowrap tabular-nums">
-                  {nextAiringInfo.dateTimeLabel}
-                </span>
-              </section>
+                  <span className="px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 text-[11px] font-bold text-[var(--sx-on-surface)] whitespace-nowrap tabular-nums">
+                    {nextAiringInfo.dateTimeLabel}
+                  </span>
+                </section>
+              </ScrollReveal>
             )}
 
             {/* Synopsis */}
-            <section className="space-y-2.5">
+            <ScrollReveal index={2}>
+              <section className="space-y-2.5">
               <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                 Synopsis
               </h2>
               <div className={`${frostedCardClass} p-4 sm:p-5 space-y-2`}>
                 {loadingDetails && !media.description ? (
-                  <div className="space-y-2">
-                    <div className="h-3.5 w-full bg-[var(--sx-surface-high)] rounded animate-pulse" />
-                    <div className="h-3.5 w-5/6 bg-[var(--sx-surface-high)] rounded animate-pulse" />
-                    <div className="h-3.5 w-2/3 bg-[var(--sx-surface-high)] rounded animate-pulse" />
-                  </div>
+                  <DetailsSynopsisSkeleton />
                 ) : (
                   <>
                     <p
@@ -671,10 +740,12 @@ export const DetailsPage: React.FC = () => {
                   </>
                 )}
               </div>
-            </section>
+              </section>
+            </ScrollReveal>
 
             {/* Details Metadata Grid */}
-            <section className="space-y-2.5">
+            <ScrollReveal index={3}>
+              <section className="space-y-2.5">
               <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                 Details
               </h2>
@@ -690,89 +761,110 @@ export const DetailsPage: React.FC = () => {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-                  <div>
-                    <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                      {isManga ? 'Chapters' : 'Episodes'}
-                    </p>
-                    <p className="text-sm font-extrabold tabular-nums mt-0.5">
-                      {totalCount > 0 ? totalCount : '—'}
-                    </p>
+                {loadingDetails &&
+                !media.format &&
+                !media.episodes &&
+                !media.chapters &&
+                !media.score ? (
+                  <div
+                    data-testid="details-metadata-skeleton"
+                    aria-hidden="true"
+                    className="grid grid-cols-2 sm:grid-cols-4 gap-3.5"
+                  >
+                    {Array.from({ length: 8 }).map((_, i) => (
+                      <div key={i} className="space-y-1.5">
+                        <SkeletonBlock index={i} tone="soft" className="h-3 w-14 rounded" />
+                        <SkeletonBlock index={i + 1} className="h-4 w-16 rounded" />
+                      </div>
+                    ))}
                   </div>
-                  <div>
-                    <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                      {isManga ? 'Volumes' : 'Duration'}
-                    </p>
-                    <p className="text-sm font-extrabold tabular-nums mt-0.5">
-                      {isManga
-                        ? media.volumes || '—'
-                        : media.duration
-                          ? `${media.duration}m`
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+                    <div>
+                      <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
+                        {isManga ? 'Chapters' : 'Episodes'}
+                      </p>
+                      <p className="text-sm font-extrabold tabular-nums mt-0.5">
+                        {totalCount > 0 ? totalCount : '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
+                        {isManga ? 'Volumes' : 'Duration'}
+                      </p>
+                      <p className="text-sm font-extrabold tabular-nums mt-0.5">
+                        {isManga
+                          ? media.volumes || '—'
+                          : media.duration
+                            ? `${media.duration}m`
+                            : '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
+                        {isManga ? 'Release' : 'Season'}
+                      </p>
+                      <p className="text-sm font-extrabold mt-0.5">
+                        {media.season && media.year
+                          ? `${media.season} ${media.year}`
+                          : media.year || '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
+                        Status
+                      </p>
+                      <p className="text-sm font-extrabold mt-0.5">
+                        {media.status ? media.status.replace(/_/g, ' ') : '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
+                        Format
+                      </p>
+                      <p className="text-sm font-extrabold mt-0.5">
+                        {media.format || media.type}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
+                        Source
+                      </p>
+                      <p className="text-sm font-extrabold mt-0.5">
+                        {media.source ? media.source.replace(/_/g, ' ') : '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
+                        Score
+                      </p>
+                      <p className="text-sm font-extrabold tabular-nums mt-0.5">
+                        {typeof media.score === 'number' && media.score > 0
+                          ? `★ ${media.score.toFixed(1)}`
                           : '—'}
-                    </p>
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
+                        Popularity
+                      </p>
+                      <p className="text-sm font-extrabold tabular-nums mt-0.5">
+                        {formatCompactNumber(media.popularity)}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                      {isManga ? 'Release' : 'Season'}
-                    </p>
-                    <p className="text-sm font-extrabold mt-0.5">
-                      {media.season && media.year
-                        ? `${media.season} ${media.year}`
-                        : media.year || '—'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                      Status
-                    </p>
-                    <p className="text-sm font-extrabold mt-0.5">
-                      {media.status ? media.status.replace(/_/g, ' ') : '—'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                      Format
-                    </p>
-                    <p className="text-sm font-extrabold mt-0.5">
-                      {media.format || media.type}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                      Source
-                    </p>
-                    <p className="text-sm font-extrabold mt-0.5">
-                      {media.source ? media.source.replace(/_/g, ' ') : '—'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                      Score
-                    </p>
-                    <p className="text-sm font-extrabold tabular-nums mt-0.5">
-                      {typeof media.score === 'number' && media.score > 0
-                        ? `★ ${media.score.toFixed(1)}`
-                        : '—'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                      Popularity
-                    </p>
-                    <p className="text-sm font-extrabold tabular-nums mt-0.5">
-                      {formatCompactNumber(media.popularity)}
-                    </p>
-                  </div>
-                </div>
+                )}
               </div>
-            </section>
+              </section>
+            </ScrollReveal>
 
             {/* Alternative Titles */}
             {(media.title.english ||
               media.title.romaji ||
               media.title.native ||
               (media.synonyms && media.synonyms.length > 0)) && (
-              <section className="space-y-2.5">
+              <ScrollReveal index={4}>
+                <section className="space-y-2.5">
                 <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                   Alternative Titles
                 </h2>
@@ -804,12 +896,14 @@ export const DetailsPage: React.FC = () => {
                     </div>
                   )}
                 </div>
-              </section>
+                </section>
+              </ScrollReveal>
             )}
 
             {/* Genres */}
             {media.genres && media.genres.length > 0 && (
-              <section className="space-y-2.5">
+              <ScrollReveal index={5}>
+                <section className="space-y-2.5">
                 <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                   Genres
                 </h2>
@@ -827,12 +921,14 @@ export const DetailsPage: React.FC = () => {
                     </button>
                   ))}
                 </div>
-              </section>
+                </section>
+              </ScrollReveal>
             )}
 
             {/* Tags */}
             {media.tags && media.tags.length > 0 && (
-              <section className="space-y-2.5">
+              <ScrollReveal index={6}>
+                <section className="space-y-2.5">
                 <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                   Tags
                 </h2>
@@ -855,12 +951,14 @@ export const DetailsPage: React.FC = () => {
                     </button>
                   ))}
                 </div>
-              </section>
+                </section>
+              </ScrollReveal>
             )}
 
             {/* Seasons (PREQUEL / SEQUEL) */}
             {seasons.length > 0 && (
-              <section className="space-y-2.5">
+              <ScrollReveal index={7}>
+                <section className="space-y-2.5">
                 <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                   Seasons
                 </h2>
@@ -909,11 +1007,13 @@ export const DetailsPage: React.FC = () => {
                     );
                   })}
                 </div>
-              </section>
+                </section>
+              </ScrollReveal>
             )}
 
             {/* Extras Card */}
-            <section className="space-y-2.5">
+            <ScrollReveal index={8}>
+              <section className="space-y-2.5">
               <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                 Extras
               </h2>
@@ -941,7 +1041,7 @@ export const DetailsPage: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={() => setActiveTab('watch')}
+                  onClick={() => switchTab('watch')}
                   className="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-[var(--sx-on-surface)]/6 dark:hover:bg-white/5 transition-colors"
                 >
                   <div className="flex items-center gap-3">
@@ -962,7 +1062,7 @@ export const DetailsPage: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={() => setActiveTab('comments')}
+                  onClick={() => switchTab('comments')}
                   className="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left hover:bg-[var(--sx-on-surface)]/6 dark:hover:bg-white/5 transition-colors"
                 >
                   <div className="flex items-center gap-3">
@@ -996,11 +1096,13 @@ export const DetailsPage: React.FC = () => {
                   </div>
                 )}
               </div>
-            </section>
+              </section>
+            </ScrollReveal>
 
             {/* Characters & Voice Actors */}
             {media.characters && media.characters.length > 0 && (
-              <section className="space-y-2.5">
+              <ScrollReveal index={9}>
+                <section className="space-y-2.5">
                 <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                   Characters &amp; Voice Actors
                 </h2>
@@ -1044,12 +1146,14 @@ export const DetailsPage: React.FC = () => {
                     </div>
                   ))}
                 </div>
-              </section>
+                </section>
+              </ScrollReveal>
             )}
 
             {/* Relations */}
             {otherRelations.length > 0 && (
-              <section className="space-y-2.5">
+              <ScrollReveal index={10}>
+                <section className="space-y-2.5">
                 <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                   Relations
                 </h2>
@@ -1067,12 +1171,14 @@ export const DetailsPage: React.FC = () => {
                     />
                   ))}
                 </div>
-              </section>
+                </section>
+              </ScrollReveal>
             )}
 
             {/* Staff */}
             {media.staff && media.staff.length > 0 && (
-              <section className="space-y-2.5">
+              <ScrollReveal index={11}>
+                <section className="space-y-2.5">
                 <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                   Staff
                 </h2>
@@ -1097,12 +1203,14 @@ export const DetailsPage: React.FC = () => {
                     </div>
                   ))}
                 </div>
-              </section>
+                </section>
+              </ScrollReveal>
             )}
 
             {/* Recommended Anime / Manga */}
             {media.recommendations && media.recommendations.length > 0 && (
-              <section className="space-y-2.5">
+              <ScrollReveal index={12}>
+                <section className="space-y-2.5">
                 <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
                   Recommended {isManga ? 'Manga' : 'Anime'}
                 </h2>
@@ -1119,14 +1227,19 @@ export const DetailsPage: React.FC = () => {
                     />
                   ))}
                 </div>
-              </section>
+                </section>
+              </ScrollReveal>
             )}
           </div>
         )}
 
         {/* ======================== TAB 2: WATCH / READ ======================== */}
         {activeTab === 'watch' && (
-          <div data-testid="details-panel-watch" className="space-y-4">
+          <div
+            key="tab-watch"
+            data-testid="details-panel-watch"
+            className={`${tabTransitionClass} space-y-4`}
+          >
             {/* Source / Extension Selector Card */}
             <section className={`${frostedCardClass} p-4 space-y-3`}>
               <div className="flex flex-wrap items-center justify-between gap-2.5">
@@ -1309,7 +1422,9 @@ export const DetailsPage: React.FC = () => {
                     </div>
                   )}
 
-                  {listItems.length === 0 ? (
+                  {loadingDetails && rawItemsCount === 0 ? (
+                    <EpisodeListSkeleton style={activeEpStyle} />
+                  ) : listItems.length === 0 ? (
                     <div className={`${frostedCardClass} p-8 text-center space-y-2`}>
                       <p className="text-sm font-bold">
                         No {isManga ? 'chapters' : 'episodes'} match your filter
@@ -1356,7 +1471,11 @@ export const DetailsPage: React.FC = () => {
 
         {/* ======================== TAB 3: COMMENTS ======================== */}
         {activeTab === 'comments' && (
-          <div data-testid="details-panel-comments" className="space-y-4">
+          <div
+            key="tab-comments"
+            data-testid="details-panel-comments"
+            className={`${tabTransitionClass} space-y-4`}
+          >
             {/* Media Header Summary Card */}
             <section className={`${frostedCardClass} p-3.5 sm:p-4 flex items-center gap-3.5`}>
               <SmartImage
@@ -1426,12 +1545,16 @@ export const DetailsPage: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-3">
-                {comments.map((c) => {
+                {comments.map((c, cIdx) => {
                   const isSpoilerHidden = c.spoiler && !revealedSpoilers[c.id];
                   const replies = repliesByComment[c.id] || [];
                   const initial = (c.author || 'U').slice(0, 1).toUpperCase();
                   return (
-                    <div key={c.id} className={`${frostedCardClass} p-4 space-y-2.5`}>
+                    <div
+                      key={c.id}
+                      style={{ animationDelay: `${Math.min(cIdx, 8) * 28}ms` }}
+                      className={`sx-card-animate ${frostedCardClass} p-4 space-y-2.5`}
+                    >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5 min-w-0">
                           <span className="w-8 h-8 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] flex items-center justify-center text-xs font-black shrink-0">
@@ -1553,6 +1676,98 @@ export const DetailsPage: React.FC = () => {
         )}
       </div>
 
+      {/* Sticky Backdrop-Blur Header (hidden on Watch tab; iOS spring popup after scrolling past hero) */}
+      <div className="pointer-events-none fixed top-3 inset-x-0 z-40 px-3 sm:px-6">
+        <header
+          data-testid="details-sticky-header"
+          data-visible={stickyHeaderVisible ? 'true' : 'false'}
+          aria-hidden={!stickyHeaderVisible}
+          className="sx-sticky-header max-w-5xl mx-auto p-1.5 sm:px-2.5 sm:py-1.5 rounded-[34px] bg-[var(--sx-surface-container)]/34 dark:bg-[var(--sx-surface-container)]/38 backdrop-blur-xl backdrop-saturate-150 border border-white/50 dark:border-white/15 shadow-[0_14px_38px_rgba(15,23,42,0.14)] ring-1 ring-inset ring-white/25 dark:ring-white/10 flex items-center justify-between gap-2 sm:gap-3"
+        >
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <button
+              type="button"
+              tabIndex={stickyHeaderVisible ? 0 : -1}
+              onClick={() => navigate(-1)}
+              aria-label="Back to previous page"
+              className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-[var(--sx-on-surface)]/8 dark:bg-white/10 border border-white/40 dark:border-white/15 text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/50 transition-all"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+
+            {media.cover && (
+              <div className="w-7 h-9 sm:w-8 sm:h-10 rounded-2xl overflow-hidden border border-white/35 dark:border-white/15 shrink-0 bg-[var(--sx-surface-container)] shadow-sm">
+                <SmartImage
+                  src={media.cover}
+                  alt={title}
+                  fallbackTitle={title}
+                  className="w-full h-full"
+                />
+              </div>
+            )}
+
+            <div className="min-w-0 flex-1">
+              <p className="text-xs sm:text-sm font-black tracking-tight text-[var(--sx-on-surface)] truncate leading-tight">
+                {title}
+              </p>
+              <p className="text-[10px] sm:text-[11px] font-semibold text-[var(--sx-on-surface-muted)] truncate">
+                {[
+                  media.format || media.type,
+                  totalCount > 0 ? `${totalCount} ${isManga ? 'ch' : 'eps'}` : null,
+                  typeof media.score === 'number' && media.score > 0
+                    ? `★ ${media.score.toFixed(1)}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              data-testid="details-sticky-watchlist-btn"
+              tabIndex={stickyHeaderVisible ? 0 : -1}
+              onClick={() => {
+                if (libEntry) {
+                  setTrackerOpen(true);
+                } else {
+                  void upsertLibraryEntry(media, 'PLANNING', 0);
+                }
+              }}
+              title={libEntry ? 'In Watchlist (click to edit)' : 'Add to Watchlist'}
+              aria-label={libEntry ? 'In Watchlist, edit entry' : 'Add to Watchlist'}
+              className={`h-9 px-3 sm:px-3.5 rounded-full flex items-center justify-center gap-1.5 text-xs font-extrabold transition-all shrink-0 border ${
+                libEntry
+                  ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)] shadow-md'
+                  : 'bg-[var(--sx-on-surface)]/8 dark:bg-white/10 border-white/40 dark:border-white/15 text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/50'
+              }`}
+            >
+              {libEntry ? (
+                <BookmarkCheck className="w-4 h-4 shrink-0" />
+              ) : (
+                <BookmarkPlus className="w-4 h-4 shrink-0" />
+              )}
+              <span className="hidden sm:inline whitespace-nowrap">
+                {libEntry ? 'In Watchlist' : 'Watchlist'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              tabIndex={stickyHeaderVisible ? 0 : -1}
+              onClick={() => navigate('/home')}
+              title="Return home"
+              aria-label="Return home"
+              className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-[var(--sx-on-surface)]/8 dark:bg-white/10 border border-white/40 dark:border-white/15 text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/50 transition-all"
+            >
+              <Home className="w-4 h-4" />
+            </button>
+          </div>
+        </header>
+      </div>
+
       {/* Bottom Edge Scrim so scrolling cards fade cleanly behind floating pills */}
       <div
         aria-hidden="true"
@@ -1654,7 +1869,7 @@ export const DetailsPage: React.FC = () => {
                 type="button"
                 data-testid={`details-tab-${key}`}
                 onClick={() => {
-                  setActiveTab(key);
+                  switchTab(key);
                   if (key === 'watch' && !isManga && typeof window !== 'undefined') {
                     window.scrollTo({ top: 0, behavior: 'smooth' });
                   }
@@ -1943,7 +2158,7 @@ export const DetailsPage: React.FC = () => {
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="w-full max-w-3xl rounded-3xl overflow-hidden bg-black border border-white/15 shadow-2xl"
+                className="sx-sheet-enter w-full max-w-3xl rounded-3xl overflow-hidden bg-black border border-white/15 shadow-2xl"
               >
                 <div className="flex items-center justify-between px-4 py-3 bg-zinc-900/90 text-white">
                   <span className="text-xs font-extrabold truncate">{title} — Trailer</span>

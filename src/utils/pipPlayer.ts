@@ -128,3 +128,31 @@ export function shouldAutoEnterPipOnLeave(input: AutoPipCheckInput): boolean {
   return Boolean(input.isPlaying);
 }
 
+export interface InlinePipHandoff {
+  shouldClosePip: boolean;
+  restoreTime: number | null;
+  resumePlaying: boolean;
+}
+
+export function resolveInlinePipHandoff(
+  session:
+    | Pick<PipSessionState, 'media' | 'episodes' | 'episodeIndex' | 'currentTime' | 'playing'>
+    | null
+    | undefined,
+  targetMediaId: string,
+  targetEpisodeNumber: number,
+): InlinePipHandoff {
+  if (!session) {
+    return { shouldClosePip: false, restoreTime: null, resumePlaying: false };
+  }
+  if (shouldRestorePipPlayback(session, targetMediaId, targetEpisodeNumber)) {
+    return {
+      shouldClosePip: true,
+      restoreTime: session.currentTime > 0.5 ? session.currentTime : null,
+      resumePlaying: Boolean(session.playing),
+    };
+  }
+  return { shouldClosePip: true, restoreTime: null, resumePlaying: false };
+}
+
+

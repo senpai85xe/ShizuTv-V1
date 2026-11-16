@@ -57,6 +57,11 @@ import {
 } from '../utils/pipPlayer';
 import { PlayerEpisodeDrawer } from '../components/PlayerEpisodeDrawer';
 import { PlayerSettingsPopover } from '../components/PlayerSettingsPopover';
+import {
+  EpisodeChangeDirection,
+  getEpisodeBadgeTransitionClass,
+  getEpisodeChangeDirection,
+} from '../utils/detailsMotion';
 
 interface PlayerLocationState {
   media?: UnifiedMedia;
@@ -133,9 +138,21 @@ export const PlayerPage: React.FC = () => {
   ]);
   const [selectedHlsLevel, setSelectedHlsLevel] = useState<number>(-1);
 
-  const [seekBadge, setSeekBadge] = useState<{ label: string; side: 'left' | 'right' } | null>(
+  const [seekBadge, setSeekBadge] = useState<{ label: string; side: 'left' | 'right'; seq: number } | null>(
     null,
   );
+  const seekSeqRef = useRef(0);
+  const [epTransition, setEpTransition] = useState<{ index: number; dir: EpisodeChangeDirection }>({
+    index: epIndex,
+    dir: 'none',
+  });
+  if (epTransition.index !== epIndex) {
+    setEpTransition({
+      index: epIndex,
+      dir: getEpisodeChangeDirection(epTransition.index, epIndex),
+    });
+  }
+  const epBadgeAnimClass = getEpisodeBadgeTransitionClass(epTransition.dir);
   const [gestureSeekState, setGestureSeekState] = useState<{
     targetTime: number;
     deltaSeconds: number;
@@ -292,7 +309,8 @@ export const PlayerPage: React.FC = () => {
   const triggerSeekFeedback = (delta: number) => {
     const label = delta > 0 ? `+${delta}s` : `${delta}s`;
     const side: 'left' | 'right' = delta < 0 ? 'left' : 'right';
-    setSeekBadge({ label, side });
+    seekSeqRef.current += 1;
+    setSeekBadge({ label, side, seq: seekSeqRef.current });
     if (seekFeedbackTimerRef.current) window.clearTimeout(seekFeedbackTimerRef.current);
     seekFeedbackTimerRef.current = window.setTimeout(() => setSeekBadge(null), 650);
   };
@@ -706,6 +724,7 @@ export const PlayerPage: React.FC = () => {
     : null;
 
   const title = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
+  const backdropArtwork = currentEpisode.thumbnail || media.banner || media.cover || '';
   const effectiveDuration = duration || 1440;
   const progressRatio =
     effectiveDuration > 0 ? Math.min(100, (currentTime / effectiveDuration) * 100) : 0;
@@ -737,8 +756,37 @@ export const PlayerPage: React.FC = () => {
       onWheel={handleStageWheel}
       onMouseMove={() => scheduleHideControls()}
       onTouchStart={() => scheduleHideControls()}
-      className="relative w-full h-[100dvh] bg-black text-white overflow-hidden select-none flex items-center justify-center touch-none"
+      className="sx-player-stage-enter relative w-full h-[100dvh] bg-black text-white overflow-hidden select-none flex items-center justify-center touch-none"
     >
+      {backdropArtwork && (
+        <img
+          src={backdropArtwork}
+          alt=""
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-0 w-full h-full object-cover blur-md scale-105 transition-opacity duration-500 ${
+            hasVideoFrame ? 'opacity-0' : 'opacity-40'
+          }`}
+        />
+      )}
+      {!hasVideoFrame && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 overflow-hidden z-[1]"
+        >
+          <div
+            className="absolute inset-0 opacity-60"
+            style={{
+              background:
+                'radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--sx-player-accent) 24%, transparent), transparent 65%)',
+            }}
+          />
+          <div className="sx-buffering-shimmer w-1/2 h-full bg-gradient-to-r from-transparent via-white/15 to-transparent skew-x-[-20deg]" />
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/15 text-[11px] font-bold text-white/90 shadow-lg">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--sx-player-accent)] animate-ping" />
+            <span>Preparing EP {currentEpisode.number}...</span>
+          </div>
+        </div>
+      )}
       <video
         ref={videoRef}
         playsInline
@@ -787,15 +835,27 @@ export const PlayerPage: React.FC = () => {
         )} transition-opacity duration-300 ${hasVideoFrame ? 'opacity-100' : 'opacity-0'}`}
       />
 
-      {/* Double-tap Seek HUD */}
+      {/* Double-tap Seek Radial Ripple & HUD */}
       {seekBadge && (
-        <div
-          className={`sx-player-badge-pop pointer-events-none absolute top-1/2 z-30 px-4 py-2 rounded-full bg-black/70 backdrop-blur-xl border border-white/20 text-sm font-black tracking-wide shadow-2xl ${
-            seekBadge.side === 'left' ? 'left-8 sm:left-16' : 'right-8 sm:right-16'
-          }`}
-        >
-          {seekBadge.label}
-        </div>
+        <>
+          <div
+            key={`full-ripple-${seekBadge.seq}`}
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-y-0 w-1/2 z-20 ${
+              seekBadge.side === 'left'
+                ? 'left-0 sx-seek-ripple-left bg-gradient-to-r from-white/20 via-white/10 to-transparent rounded-r-full'
+                : 'right-0 sx-seek-ripple-right bg-gradient-to-l from-white/20 via-white/10 to-transparent rounded-l-full'
+            }`}
+          />
+          <div
+            key={`full-badge-${seekBadge.seq}`}
+            className={`sx-player-badge-pop pointer-events-none absolute top-1/2 z-30 px-4 py-2 rounded-full bg-black/70 backdrop-blur-xl border border-white/20 text-sm font-black tracking-wide shadow-2xl ${
+              seekBadge.side === 'left' ? 'left-8 sm:left-16' : 'right-8 sm:right-16'
+            }`}
+          >
+            {seekBadge.label}
+          </div>
+        </>
       )}
 
       {/* Horizontal Swipe-to-Seek Live Gesture HUD */}
@@ -874,11 +934,12 @@ export const PlayerPage: React.FC = () => {
           }`}
         >
           <p
+            key={activeCue.text}
             style={{
               fontSize: `${state.playerPrefs.subtitleSize}px`,
               color: state.playerPrefs.subtitleColor || '#ffffff',
             }}
-            className={`px-4 py-1.5 rounded-2xl text-center font-bold max-w-3xl leading-snug transition-all duration-200 ${
+            className={`sx-player-subtitle-enter px-4 py-1.5 rounded-2xl text-center font-bold max-w-3xl leading-snug transition-all duration-200 ${
               state.playerPrefs.subtitleBackground
                 ? 'bg-black/72 backdrop-blur-md border border-white/10'
                 : 'drop-shadow-[0_2px_6px_rgba(0,0,0,0.95)]'
@@ -911,7 +972,10 @@ export const PlayerPage: React.FC = () => {
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <div className="min-w-0 pr-1.5">
+            <div
+              key={`full-ep-title-${currentEpisode.id}`}
+              className={`${epBadgeAnimClass} min-w-0 pr-1.5`}
+            >
               <p className="text-xs sm:text-sm font-extrabold truncate">{title}</p>
               <p className="text-[11px] text-white/75 truncate">
                 EP {currentEpisode.number}: {currentEpisode.title}
@@ -1024,9 +1088,9 @@ export const PlayerPage: React.FC = () => {
             aria-label={playing ? 'Pause' : 'Play'}
           >
             {playing ? (
-              <Pause className="w-7 h-7 fill-current" />
+              <Pause key="full-pause" className="sx-player-icon-pop w-7 h-7 fill-current" />
             ) : (
-              <Play className="w-7 h-7 fill-current ml-0.5" />
+              <Play key="full-play" className="sx-player-icon-pop w-7 h-7 fill-current ml-0.5" />
             )}
           </button>
           <button
@@ -1064,7 +1128,7 @@ export const PlayerPage: React.FC = () => {
                 onClick={() => {
                   if (videoRef.current) videoRef.current.currentTime = activeSkip.endTime;
                 }}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-xs font-extrabold shadow-xl hover:scale-105 transition-transform"
+                className="sx-player-skip-pill inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-xs font-extrabold shadow-xl hover:scale-105 transition-transform"
               >
                 <FastForward className="w-3.5 h-3.5" />
                 <span>Skip {activeSkip.skipType.toUpperCase()}</span>

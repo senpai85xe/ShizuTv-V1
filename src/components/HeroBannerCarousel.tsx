@@ -3,6 +3,7 @@ import { BookOpen, ChevronLeft, ChevronRight, Flame, Info, Play, Star } from 'lu
 import { HeroBannerStyle } from '../data/themePresets';
 import { useApp } from '../store/AppContext';
 import { getPreferredTitle, UnifiedMedia } from '../types/media';
+import { HeroBannerSkeleton } from './Skeleton';
 import { SmartImage } from './SmartImage';
 import {
   formatHeroMetadata,
@@ -63,26 +64,7 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
   }, [slides.length, isPaused, paused]);
 
   if (loading && slides.length === 0) {
-    return (
-      <section aria-label="Featured Hero Banner" className="mx-4 sm:mx-6">
-        <div
-          style={{ borderRadius: 'calc(var(--sx-radius) + 6px)' }}
-          className="h-[245px] sm:h-[315px] lg:h-[375px] w-full bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] animate-pulse"
-        />
-        <div className="mt-3 flex items-center justify-center gap-1.5">
-          {[0, 1, 2, 3].map((dot) => (
-            <span
-              key={dot}
-              className={`h-1.5 rounded-full ${
-                dot === 0
-                  ? 'w-6 bg-[var(--sx-primary)]/40'
-                  : 'w-2 bg-[var(--sx-surface-high)]'
-              }`}
-            />
-          ))}
-        </div>
-      </section>
-    );
+    return <HeroBannerSkeleton style={bannerStyle} />;
   }
 
   if (!activeItem) {

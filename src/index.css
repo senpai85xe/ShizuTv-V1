@@ -18,6 +18,9 @@
   --sx-radius: 24px;
   --sx-player-accent: #e0e0e0;
   --sx-player-on-accent: #0b0c10;
+  --sx-skeleton-base: #d6ddef;
+  --sx-skeleton-base-soft: #e5e9f5;
+  --sx-skeleton-sheen: rgba(255, 255, 255, 0.78);
 }
 
 .dark {
@@ -33,12 +36,18 @@
   --sx-on-surface: #f3f4f8;
   --sx-on-surface-muted: #9aa3b5;
   --sx-outline: rgba(255, 255, 255, 0.09);
+  --sx-skeleton-base: #23293d;
+  --sx-skeleton-base-soft: #181c2b;
+  --sx-skeleton-sheen: rgba(255, 255, 255, 0.095);
 }
 
 .amoled.dark {
   --sx-surface: #000000;
   --sx-surface-container: #08090d;
   --sx-surface-high: #12141c;
+  --sx-skeleton-base: #181c28;
+  --sx-skeleton-base-soft: #10131c;
+  --sx-skeleton-sheen: rgba(255, 255, 255, 0.08);
 }
 
 body {
@@ -476,13 +485,444 @@ html.sx-theme-wave-active * {
 @media (prefers-reduced-motion: reduce) {
   .sx-player-popover,
   .sx-player-badge-pop,
-  .sx-player-center-hud {
+  .sx-player-center-hud,
+  .sx-details-backdrop-enter,
+  .sx-details-hero-enter,
+  .sx-details-tab-enter,
+  .sx-details-tab-forward,
+  .sx-details-tab-backward,
+  .sx-player-stage-enter,
+  .sx-ep-badge-next,
+  .sx-ep-badge-prev,
+  .sx-player-icon-pop,
+  .sx-player-skip-pill,
+  .sx-player-subtitle-enter,
+  .sx-seek-ripple-left,
+  .sx-seek-ripple-right,
+  .sx-player-tab-body,
+  .sx-buffering-shimmer,
+  .sx-filter-chip-enter,
+  .sx-results-stage-enter,
+  .sx-home-header-return,
+  .sx-skeleton-enter,
+  .sx-skeleton-surface::after,
+  .sx-skeleton-surface-soft::after,
+  .sx-skeleton-surface-accent::after {
     animation: none;
+  }
+  .sx-skeleton-surface::after,
+  .sx-skeleton-surface-soft::after,
+  .sx-skeleton-surface-accent::after {
+    opacity: 0;
   }
   .sx-player-drawer,
   .sx-player-controls-fade,
-  .sx-player-play-btn {
+  .sx-player-play-btn,
+  .sx-details-poster-hover,
+  .sx-sticky-header,
+  .sx-sticky-header[data-visible="false"],
+  .sx-sticky-header[data-visible="true"],
+  .sx-results-grid-state {
     transition: none;
   }
 }
 
+/* Anime Details Page & Inline/Full Player Fluid Animations */
+@keyframes sxDetailsBackdropEnter {
+  0% {
+    opacity: 0;
+    transform: scale(1.32);
+  }
+  100% {
+    opacity: 0.6;
+    transform: scale(1.25);
+  }
+}
+
+@keyframes sxDetailsHeroEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0) scale(0.965);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxDetailsTabEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.988);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxDetailsTabForward {
+  0% {
+    opacity: 0;
+    transform: translate3d(26px, 0, 0) scale(0.988);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxDetailsTabBackward {
+  0% {
+    opacity: 0;
+    transform: translate3d(-26px, 0, 0) scale(0.988);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxPlayerStageEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0) scale(0.965);
+  }
+  70% {
+    opacity: 1;
+    transform: translate3d(0, -2px, 0) scale(1.004);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxEpBadgeNext {
+  0% {
+    opacity: 0;
+    transform: translate3d(16px, 0, 0) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxEpBadgePrev {
+  0% {
+    opacity: 0;
+    transform: translate3d(-16px, 0, 0) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxPlayerIconPop {
+  0% {
+    opacity: 0.45;
+    transform: scale(0.68) rotate(-10deg);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(1.08) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxPlayerSkipPillEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(18px, 0, 0) scale(0.86);
+  }
+  70% {
+    opacity: 1;
+    transform: translate3d(-2px, 0, 0) scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxPlayerSubtitleEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxSeekRippleLeft {
+  0% {
+    opacity: 0;
+    transform: scale(0.75);
+  }
+  30% {
+    opacity: 0.55;
+    transform: scale(1.02);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+@keyframes sxSeekRippleRight {
+  0% {
+    opacity: 0;
+    transform: scale(0.75);
+  }
+  30% {
+    opacity: 0.55;
+    transform: scale(1.02);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+@keyframes sxPlayerTabBodyEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxBufferingShimmer {
+  0% {
+    transform: translate3d(-120%, 0, 0);
+  }
+  100% {
+    transform: translate3d(120%, 0, 0);
+  }
+}
+
+.sx-details-backdrop-enter {
+  animation: sxDetailsBackdropEnter 560ms var(--sx-ease-ios) backwards;
+}
+
+.sx-details-hero-enter {
+  animation: sxDetailsHeroEnter 440ms var(--sx-ease-spring) backwards;
+}
+
+.sx-details-poster-hover {
+  transition:
+    transform 340ms var(--sx-ease-spring),
+    box-shadow 340ms var(--sx-ease-ios);
+}
+
+.sx-details-poster-hover:hover {
+  transform: translate3d(0, -4px, 0) scale(1.025);
+}
+
+.sx-details-tab-enter {
+  animation: sxDetailsTabEnter 340ms var(--sx-ease-ios) backwards;
+}
+
+.sx-details-tab-forward {
+  animation: sxDetailsTabForward 340ms var(--sx-ease-spring) backwards;
+}
+
+.sx-details-tab-backward {
+  animation: sxDetailsTabBackward 340ms var(--sx-ease-spring) backwards;
+}
+
+.sx-player-stage-enter {
+  animation: sxPlayerStageEnter 440ms var(--sx-ease-spring) backwards;
+}
+
+.sx-ep-badge-next {
+  animation: sxEpBadgeNext 300ms var(--sx-ease-spring) backwards;
+}
+
+.sx-ep-badge-prev {
+  animation: sxEpBadgePrev 300ms var(--sx-ease-spring) backwards;
+}
+
+.sx-player-icon-pop {
+  animation: sxPlayerIconPop 260ms var(--sx-ease-bounce) backwards;
+}
+
+.sx-player-skip-pill {
+  animation: sxPlayerSkipPillEnter 320ms var(--sx-ease-spring) backwards;
+}
+
+.sx-player-subtitle-enter {
+  animation: sxPlayerSubtitleEnter 180ms var(--sx-ease-ios) backwards;
+}
+
+.sx-seek-ripple-left {
+  animation: sxSeekRippleLeft 560ms var(--sx-ease-ios) both;
+}
+
+.sx-seek-ripple-right {
+  animation: sxSeekRippleRight 560ms var(--sx-ease-ios) both;
+}
+
+.sx-player-tab-body {
+  animation: sxPlayerTabBodyEnter 240ms var(--sx-ease-ios) backwards;
+}
+
+.sx-buffering-shimmer {
+  animation: sxBufferingShimmer 1.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* Search Results Filter & Sort Layout Transitions */
+@keyframes sxFilterChipEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scale(0.88);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.sx-filter-chip-enter {
+  animation: sxFilterChipEnter 300ms var(--sx-ease-spring) backwards;
+}
+
+.sx-results-stage-enter {
+  animation: sxModeCrossFadeIn 340ms var(--sx-ease-ios) backwards;
+}
+
+.sx-results-grid-state {
+  transition:
+    opacity 240ms var(--sx-ease-ios),
+    transform 340ms var(--sx-ease-spring);
+}
+
+/* Details Sticky Floating Pill iOS Spring Popup */
+.sx-sticky-header {
+  transform-origin: top center;
+  will-change: transform, opacity;
+}
+
+.sx-sticky-header[data-visible="false"] {
+  opacity: 0;
+  transform: translate3d(0, -18px, 0) scale(0.86);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 200ms var(--sx-ease-ios),
+    transform 260ms var(--sx-ease-ios),
+    visibility 0ms linear 260ms;
+}
+
+.sx-sticky-header[data-visible="true"] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    opacity 240ms var(--sx-ease-ios),
+    transform 440ms var(--sx-ease-bounce),
+    visibility 0ms linear 0ms;
+}
+
+/* Home inline header smooth iOS spring return when scrolling back up */
+@keyframes sxHomeHeaderReturn {
+  0% {
+    opacity: 0.4;
+    transform: translate3d(0, -14px, 0) scale(0.96);
+  }
+  66% {
+    opacity: 1;
+    transform: translate3d(0, 2px, 0) scale(1.008);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.sx-home-header-return {
+  transform-origin: top center;
+  animation: sxHomeHeaderReturn 440ms var(--sx-ease-bounce) both;
+}
+
+/* Custom GPU-Accelerated Directional Shimmer Skeleton System */
+@keyframes sxSkeletonSweep {
+  0% {
+    transform: translate3d(-115%, 0, 0);
+  }
+  100% {
+    transform: translate3d(115%, 0, 0);
+  }
+}
+
+@keyframes sxSkeletonEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@layer components {
+  .sx-skeleton-enter {
+    animation: sxSkeletonEnter 320ms var(--sx-ease-ios) backwards;
+    animation-delay: var(--sx-skeleton-delay, 0ms);
+  }
+
+  .sx-skeleton-surface,
+  .sx-skeleton-surface-soft,
+  .sx-skeleton-surface-accent {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .sx-skeleton-surface,
+  .sx-skeleton-bar {
+    background-color: var(--sx-skeleton-base);
+  }
+
+  .sx-skeleton-surface-soft,
+  .sx-skeleton-bar-soft {
+    background-color: var(--sx-skeleton-base-soft);
+  }
+
+  .sx-skeleton-surface-accent,
+  .sx-skeleton-bar-accent {
+    background-color: color-mix(in srgb, var(--sx-primary) 20%, var(--sx-skeleton-base));
+  }
+
+  .sx-skeleton-surface::after,
+  .sx-skeleton-surface-soft::after,
+  .sx-skeleton-surface-accent::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(
+      108deg,
+      transparent 0%,
+      transparent 26%,
+      var(--sx-skeleton-sheen) 48%,
+      transparent 70%,
+      transparent 100%
+    );
+    transform: translate3d(-115%, 0, 0);
+    animation: sxSkeletonSweep 1.65s var(--sx-ease-ios) infinite;
+    animation-delay: var(--sx-skeleton-delay, 0ms);
+  }
+}

@@ -4,6 +4,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Search, Calendar as CalIcon, Rota
 import { useApp } from '../store/AppContext';
 import { CalendarEntry, getPreferredTitle } from '../types/media';
 import { fetchCalendarSchedule } from '../services/discoveryService';
+import { CalendarSectionSkeleton } from '../components/Skeleton';
 import { SmartImage } from '../components/SmartImage';
 
 function getWeekMonday(date: Date): Date {
@@ -137,11 +138,16 @@ export const CalendarPage: React.FC = () => {
       </div>
 
       {loading ? (
-        <div className="space-y-4">
-          {days.map((d) => (
-            <div
+        <div
+          aria-busy="true"
+          aria-label="Loading airing schedule"
+          className="space-y-5"
+        >
+          {days.map((d, i) => (
+            <CalendarSectionSkeleton
               key={d.toISOString()}
-              className="h-28 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] animate-pulse"
+              index={i}
+              cards={i === 0 ? 6 : 3}
             />
           ))}
         </div>

@@ -228,7 +228,7 @@ export const LibraryPage: React.FC = () => {
           className={getMediaGridClassName(state.uiPrefs.cardStyle)}
         >
           {Array.from({ length: 8 }).map((_, i) => (
-            <MediaCardSkeleton key={i} style={state.uiPrefs.cardStyle} fullWidth />
+            <MediaCardSkeleton key={i} index={i} style={state.uiPrefs.cardStyle} fullWidth />
           ))}
         </div>
       ) : cloudError ? (
