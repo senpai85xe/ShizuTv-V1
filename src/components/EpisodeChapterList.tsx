@@ -26,6 +26,7 @@ interface EpisodeChapterListProps {
   style?: EpisodeChapterStyle;
   isManga?: boolean;
   previewMode?: boolean;
+  translucent?: boolean;
   onSelectItem: (item: EpisodeChapterListItem, index: number) => void;
   onDownloadItem?: (item: EpisodeChapterListItem, index: number) => void;
 }
@@ -36,6 +37,7 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
   style: styleOverride,
   isManga = false,
   previewMode = false,
+  translucent = false,
   onSelectItem,
   onDownloadItem,
 }) => {
@@ -45,6 +47,9 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
   );
   const containerClass = getEpisodeChapterContainerClass(activeStyle, previewMode);
   const ActionIcon = isManga ? BookOpen : Play;
+  const frostedCardSurface = translucent
+    ? 'bg-[var(--sx-surface-container)]/30 dark:bg-[var(--sx-surface-container)]/34 backdrop-blur-lg backdrop-saturate-150 border-white/40 dark:border-white/12 shadow-[0_6px_24px_rgba(15,23,42,0.06)] ring-1 ring-inset ring-white/20 dark:ring-white/5'
+    : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)]';
 
   if (activeStyle === 'classic') {
     return (
@@ -57,9 +62,11 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
                 ? { animationDelay: `${getBoundedStaggerDelay(idx, 18, 10)}ms` }
                 : undefined
             }
-            className={`group relative flex items-center justify-between gap-2 overflow-hidden rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/60 transition-all ${
-              !previewMode ? 'sx-card-animate' : ''
-            }`}
+            className={`group relative flex items-center justify-between gap-2 overflow-hidden rounded-[var(--sx-radius)] ${frostedCardSurface} border transition-all ${
+              item.isCurrent
+                ? 'border-[var(--sx-primary)]/75 ring-1 ring-inset ring-[var(--sx-primary)]/25'
+                : 'hover:border-[var(--sx-primary)]/60'
+            } ${!previewMode ? 'sx-card-animate' : ''}`}
           >
             {item.thumbnail && (
               <div className="pointer-events-none absolute inset-y-0 right-0 w-[64%] sm:w-[60%] overflow-hidden">
@@ -69,7 +76,13 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
                   fallbackTitle={item.title}
                   className="w-full h-full opacity-35 group-hover:opacity-50 group-hover:scale-105 transition-all duration-300"
                 />
-                <div className="absolute inset-0 bg-gradient-to-r from-[var(--sx-surface-container)] via-[var(--sx-surface-container)]/80 to-transparent" />
+                <div
+                  className={`absolute inset-0 bg-gradient-to-r ${
+                    translucent
+                      ? 'from-[var(--sx-surface-container)]/55 via-[var(--sx-surface-container)]/25 to-transparent'
+                      : 'from-[var(--sx-surface-container)] via-[var(--sx-surface-container)]/80 to-transparent'
+                  }`}
+                />
               </div>
             )}
 
@@ -97,6 +110,11 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-[var(--sx-on-surface-muted)]">
                     {unitLabel} {item.number}
                   </span>
+                  {item.isCurrent && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-500 dark:text-amber-300 text-[9px] font-extrabold uppercase tracking-wider">
+                      Playing
+                    </span>
+                  )}
                   {item.isFiller && (
                     <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[9px] font-bold uppercase">
                       Filler
@@ -119,7 +137,11 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
                 onClick={() => onDownloadItem(item, idx)}
                 title={`Download ${unitLabel.toLowerCase()} ${item.number}`}
                 aria-label={`Download ${unitLabel.toLowerCase()} ${item.number}`}
-                className="relative z-10 mr-3 p-2 rounded-lg bg-[var(--sx-surface-high)]/85 backdrop-blur-sm hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors shrink-0"
+                className={`relative z-10 mr-3 p-2 rounded-lg transition-colors shrink-0 ${
+                  translucent
+                    ? 'bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-md border border-white/30 dark:border-white/12 hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)]'
+                    : 'bg-[var(--sx-surface-high)]/85 backdrop-blur-sm hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)]'
+                }`}
               >
                 <Download className="w-4 h-4" />
               </button>
@@ -220,7 +242,7 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
             } ${
               item.isCurrent
                 ? 'bg-[var(--sx-on-surface)] text-[var(--sx-surface)] border-[var(--sx-on-surface)] shadow-md'
-                : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/65 hover:bg-[var(--sx-surface-high)]'
+                : `${frostedCardSurface} text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/65 hover:bg-[var(--sx-surface-high)]`
             }`}
           >
             {item.isFiller && (
@@ -302,7 +324,11 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
                   onClick={() => onDownloadItem(item, idx)}
                   title={`Download ${unitLabel.toLowerCase()} ${item.number}`}
                   aria-label={`Download ${unitLabel.toLowerCase()} ${item.number}`}
-                  className="p-2 rounded-lg bg-[var(--sx-surface-high)] hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors"
+                  className={`p-2 rounded-lg transition-colors ${
+                    translucent
+                      ? 'bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-md border border-white/30 dark:border-white/12 hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)]'
+                      : 'bg-[var(--sx-surface-high)] hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)]'
+                  }`}
                 >
                   <Download className="w-3.5 h-3.5" />
                 </button>
@@ -325,7 +351,7 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
               ? { animationDelay: `${getBoundedStaggerDelay(idx, 18, 10)}ms` }
               : undefined
           }
-          className={`group flex items-center justify-between gap-3 p-2.5 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/60 transition-all ${
+          className={`group flex items-center justify-between gap-3 p-2.5 rounded-[var(--sx-radius)] ${frostedCardSurface} border hover:border-[var(--sx-primary)]/60 transition-all ${
             !previewMode ? 'sx-card-animate' : ''
           }`}
         >
@@ -375,7 +401,11 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
               onClick={() => onDownloadItem(item, idx)}
               title={`Download ${unitLabel.toLowerCase()} ${item.number}`}
               aria-label={`Download ${unitLabel.toLowerCase()} ${item.number}`}
-              className="p-2 rounded-lg bg-[var(--sx-surface-high)] hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors shrink-0 mr-1"
+              className={`p-2 rounded-lg transition-colors shrink-0 mr-1 ${
+                translucent
+                  ? 'bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-md border border-white/30 dark:border-white/12 hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)]'
+                  : 'bg-[var(--sx-surface-high)] hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)]'
+              }`}
             >
               <Download className="w-4 h-4" />
             </button>

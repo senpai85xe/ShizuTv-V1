@@ -552,6 +552,7 @@ export const UiSettingsPage: React.FC = () => {
     { id: 'docked', label: 'Docked' },
     { id: 'shizutv', label: 'ShizuTv' },
     { id: 'clean', label: 'Clean' },
+    { id: 'cleanWave', label: 'Clean Wave' },
   ];
 
   return (

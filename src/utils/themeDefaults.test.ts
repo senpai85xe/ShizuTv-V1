@@ -1,0 +1,55 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  createDefaultThemePrefs,
+  DEFAULT_EXCLUSIVE_SCHEME,
+  DEFAULT_GRADIENT_INTENSITY,
+  DEFAULT_GRADIENT_STYLE,
+  DEFAULT_THEME_MODE,
+  DEFAULT_UI_ROUNDNESS,
+  resolveSchemePalette,
+  shouldOpenProfileSheet,
+} from './themeDefaults';
+
+test('shouldOpenProfileSheet returns true for clean and cleanWave headers', () => {
+  assert.equal(shouldOpenProfileSheet('clean'), true);
+  assert.equal(shouldOpenProfileSheet('cleanWave'), true);
+  assert.equal(shouldOpenProfileSheet('prominent'), false);
+  assert.equal(shouldOpenProfileSheet('shizutv'), false);
+});
+
+test('default theme prefs use Metallic Black, light mode, 24px roundness, linear gradient at 75%', () => {
+  const defaults = createDefaultThemePrefs();
+  assert.equal(defaults.exclusiveScheme, 'metallic_black');
+  assert.equal(defaults.themeMode, 'light');
+  assert.equal(defaults.uiRoundness, 24);
+  assert.equal(defaults.gradientStyle, 'linear');
+  assert.equal(defaults.gradientIntensity, 0.75);
+  assert.equal(defaults.useGradients, true);
+  assert.equal(defaults.useAmoled, false);
+  assert.equal(defaults.useNoiseOverlay, false);
+  assert.equal(defaults.activePresetId, null);
+});
+
+test('exported default constants match expected values', () => {
+  assert.equal(DEFAULT_THEME_MODE, 'light');
+  assert.equal(DEFAULT_EXCLUSIVE_SCHEME, 'metallic_black');
+  assert.equal(DEFAULT_UI_ROUNDNESS, 24);
+  assert.equal(DEFAULT_GRADIENT_STYLE, 'linear');
+  assert.equal(DEFAULT_GRADIENT_INTENSITY, 0.75);
+});
+
+test('resolveSchemePalette resolves Metallic Black light and dark palettes and falls back cleanly', () => {
+  const light = resolveSchemePalette('metallic_black', false);
+  assert.equal(light.primary, '#1E1E1E');
+  assert.equal(light.primaryContainer, '#E0E0E0');
+  assert.equal(light.secondary, '#424242');
+  assert.equal(light.tertiary, '#00E5FF');
+
+  const dark = resolveSchemePalette('metallic_black', true);
+  assert.equal(dark.primary, '#E0E0E0');
+  assert.equal(dark.tertiary, '#00E5FF');
+
+  const fallback = resolveSchemePalette('nonexistent_scheme', false);
+  assert.deepEqual(fallback, light);
+});

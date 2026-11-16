@@ -13,6 +13,7 @@ export interface MediaTag {
   id: string;
   name: string;
   category: string;
+  rank?: number | null;
 }
 
 export interface MediaExternalLink {
@@ -31,6 +32,13 @@ export interface MediaCharacter {
   description?: string | null;
   voiceActorName?: string | null;
   voiceActorImage?: string | null;
+}
+
+export interface MediaStaff {
+  id: string;
+  name: string;
+  role?: string | null;
+  image?: string | null;
 }
 
 export interface MediaExternalIds {
@@ -71,6 +79,7 @@ export interface UnifiedMedia {
   synonyms?: string[];
   externalLinks?: MediaExternalLink[];
   characters?: MediaCharacter[];
+  staff?: MediaStaff[];
   season?: string | null;
   year?: number | null;
   trailer?: string | null;

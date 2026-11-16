@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, Compass, Puzzle, Settings, User } from 'lucide-react';
+import { Calendar, Compass, Moon, Puzzle, Settings, Sun, User } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { SmartImage } from './SmartImage';
 import { ShizuTvLogo } from './ShonenXLogo';
+import { resolveEffectiveIsDark } from '../utils/themeDefaults';
+import { triggerThemeWaveTransition } from '../utils/themeWaveTransition';
 
 interface HomeHeaderProps {
   onOpenProfile: () => void;
@@ -15,12 +17,25 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
   onOpenDiscoveryMode,
 }) => {
   const navigate = useNavigate();
-  const { state, effectiveMetadataTracker } = useApp();
+  const { state, effectiveMetadataTracker, updateThemePrefs } = useApp();
+  const themeToggleRef = useRef<HTMLButtonElement | null>(null);
   const style = state.uiPrefs.homeHeaderStyle;
   const profile = state.profiles[state.primaryTracker] || state.profiles.local;
   const username = profile?.username || 'Guest';
   const avatarUrl = profile?.avatarUrl;
   const isTrackerMode = state.discoveryPrefs.mode === 'tracker';
+  const prefersDark =
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDark = resolveEffectiveIsDark(state.themePrefs.themeMode, prefersDark);
+
+  const handleToggleThemeWave = () => {
+    void triggerThemeWaveTransition({
+      sourceEl: themeToggleRef.current,
+      themePrefs: state.themePrefs,
+      onCommitMode: (nextMode) => updateThemePrefs({ themeMode: nextMode }),
+    });
+  };
 
   const hour = new Date().getHours();
   const greeting =
@@ -88,6 +103,73 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
       <User className="w-4 h-4" />
     </div>
   );
+
+  // New Header Style #8: Clean Wave (Clean brand bar + Dark/Light wave toggle next to Profile button)
+  if (style === 'cleanWave') {
+    return (
+      <header className="px-4 sm:px-6 pt-5 pb-2 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            type="button"
+            onClick={() => navigate('/home')}
+            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 border border-[var(--sx-primary)]/20 flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-transform"
+            aria-label="ShizuTv Home"
+          >
+            <ShizuTvLogo size={22} />
+          </button>
+          <div className="min-w-0 leading-tight">
+            <h1 className="text-base sm:text-lg font-extrabold tracking-tight text-[var(--sx-on-surface)] truncate">
+              ShizuTv
+            </h1>
+            <p className="text-xs font-medium text-[var(--sx-on-surface-muted)] truncate">
+              {greeting}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            ref={themeToggleRef}
+            type="button"
+            data-testid="home-theme-wave-toggle"
+            onClick={handleToggleThemeWave}
+            aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            className="relative w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 border border-[var(--sx-primary)]/25 flex items-center justify-center overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-92 shrink-0"
+          >
+            <Sun
+              className={`w-5 h-5 text-[var(--sx-on-surface)] absolute transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+                isDark
+                  ? 'opacity-100 rotate-0 scale-100'
+                  : 'opacity-0 -rotate-90 scale-50'
+              }`}
+            />
+            <Moon
+              className={`w-5 h-5 text-[var(--sx-on-surface)] absolute transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+                isDark
+                  ? 'opacity-0 rotate-90 scale-50'
+                  : 'opacity-100 rotate-0 scale-100'
+              }`}
+            />
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenProfile}
+            aria-label="Open profile and quick menu"
+            title="Profile & Quick Menu"
+            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 border border-[var(--sx-primary)]/25 flex items-center justify-center overflow-hidden transition-all active:scale-95 shrink-0"
+          >
+            {avatarUrl ? (
+              <SmartImage src={avatarUrl} alt={username} className="w-full h-full object-cover" />
+            ) : (
+              <User className="w-5 h-5 text-[var(--sx-on-surface)]" />
+            )}
+          </button>
+        </div>
+      </header>
+    );
+  }
 
   // New Header Style #7: Clean (Avatar-free minimal brand bar + single Profile Sheet button)
   if (style === 'clean') {

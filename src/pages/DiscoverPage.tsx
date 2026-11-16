@@ -442,7 +442,7 @@ export const DiscoverPage: React.FC = () => {
           <div className={getMediaGridClassName(state.uiPrefs.cardStyle)}>
             {results.map((media, idx) => (
               <MediaCard
-                key={`${media.id}-${media.type}`}
+                key={`${media.id}-${media.type}-${idx}`}
                 media={media}
                 fullWidth
                 animationIndex={idx}

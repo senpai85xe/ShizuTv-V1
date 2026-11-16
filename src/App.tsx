@@ -44,9 +44,10 @@ export const App: React.FC = () => {
         <SecurityGate>
           <BrowserRouter>
             <Routes>
-              {/* Fullscreen Player & Reader (No NavShell) */}
+              {/* Fullscreen Player, Reader & Details Sheet (No NavShell) */}
               <Route path="/player" element={<PlayerPage />} />
               <Route path="/reader" element={<ReaderPage />} />
+              <Route path="/details/:mediaType/:id" element={<DetailsPage />} />
 
               {/* Main Application Shell */}
               <Route element={<ShellLayout />}>
@@ -57,7 +58,6 @@ export const App: React.FC = () => {
                 <Route path="/downloads" element={<DownloadsPage />} />
                 <Route path="/calendar" element={<CalendarPage />} />
                 <Route path="/continue/:mediaType" element={<ContinueHistoryPage />} />
-                <Route path="/details/:mediaType/:id" element={<DetailsPage />} />
 
                 {/* Settings Suite */}
                 <Route path="/settings" element={<SettingsPage />} />

@@ -3,6 +3,7 @@ import {
   CalendarEntry,
   LibraryEntry,
   MediaCharacter,
+  MediaStaff,
   MediaType,
   SearchFormatFilter,
   SearchSort,
@@ -105,10 +106,11 @@ export function mapAniListMedia(m: any): UnifiedMedia {
     score: typeof m.averageScore === 'number' ? m.averageScore / 10 : null,
     genres: Array.isArray(m.genres) ? m.genres : [],
     tags: Array.isArray(m.tags)
-      ? m.tags.map((t: { id: number; name: string; category?: string }) => ({
+      ? m.tags.map((t: { id: number; name: string; category?: string; rank?: number }) => ({
           id: String(t.id),
           name: t.name,
           category: t.category || 'General',
+          rank: typeof t.rank === 'number' ? t.rank : null,
         }))
       : [],
     isAdult: m.isAdult ?? false,
@@ -152,6 +154,17 @@ export function mapAniListMedia(m: any): UnifiedMedia {
             description: edge.node?.description ?? null,
             voiceActorName: edge.voiceActors?.[0]?.name?.full ?? null,
             voiceActorImage: edge.voiceActors?.[0]?.image?.large ?? null,
+          }),
+        )
+      : [],
+    staff: Array.isArray(m.staff?.edges)
+      ? m.staff.edges.map(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (edge: any): MediaStaff => ({
+            id: String(edge.node?.id ?? ''),
+            name: edge.node?.name?.full ?? 'Unknown',
+            role: edge.role ?? null,
+            image: edge.node?.image?.large ?? null,
           }),
         )
       : [],
@@ -362,7 +375,7 @@ export async function fetchAniListDetails(id: string, type: MediaType): Promise<
         season
         startDate { year }
         trailer { id site }
-        tags { id name category }
+        tags { id name category rank }
         studios(isMain: true) { nodes { id name } }
         externalLinks { id url site icon }
         characters(perPage: 16, sort: [ROLE, RELEVANCE]) {
@@ -372,6 +385,16 @@ export async function fetchAniListDetails(id: string, type: MediaType): Promise<
             voiceActors(language: JAPANESE, sort: [RELEVANCE]) {
               id
               name { full native }
+              image { large }
+            }
+          }
+        }
+        staff(perPage: 12, sort: [RELEVANCE, ID]) {
+          edges {
+            role
+            node {
+              id
+              name { full }
               image { large }
             }
           }

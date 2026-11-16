@@ -24,7 +24,8 @@ export type HomeHeaderStyle =
   | 'prominent'
   | 'docked'
   | 'shizutv'
-  | 'clean';
+  | 'clean'
+  | 'cleanWave';
 export type BackgroundGradientStyle = 'none' | 'topGlow' | 'linear' | 'radial';
 
 export interface ExclusiveSchemeColors {

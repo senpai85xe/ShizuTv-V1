@@ -3,28 +3,28 @@
 @custom-variant short-screen (@media (max-height: 540px));
 
 :root {
-  --sx-primary: #ff6b00;
+  --sx-primary: #1e1e1e;
   --sx-on-primary: #ffffff;
-  --sx-primary-container: #ffe4cc;
-  --sx-on-primary-container: #4a1e00;
-  --sx-secondary: #f8a036;
-  --sx-tertiary: #6366f1;
+  --sx-primary-container: #e0e0e0;
+  --sx-on-primary-container: #111827;
+  --sx-secondary: #424242;
+  --sx-tertiary: #00e5ff;
   --sx-surface: #f4f5fb;
   --sx-surface-container: #ffffff;
   --sx-surface-high: #eaedf7;
   --sx-on-surface: #111827;
   --sx-on-surface-muted: #5b6476;
   --sx-outline: rgba(15, 23, 42, 0.09);
-  --sx-radius: 16px;
+  --sx-radius: 24px;
 }
 
 .dark {
-  --sx-primary: #ff6b00;
-  --sx-on-primary: #ffffff;
-  --sx-primary-container: #5a2300;
-  --sx-on-primary-container: #ffe4cc;
-  --sx-secondary: #f8a036;
-  --sx-tertiary: #818cf8;
+  --sx-primary: #e0e0e0;
+  --sx-on-primary: #0b0c10;
+  --sx-primary-container: #121212;
+  --sx-on-primary-container: #f8fafc;
+  --sx-secondary: #9e9e9e;
+  --sx-tertiary: #00e5ff;
   --sx-surface: #0b0c12;
   --sx-surface-container: #131520;
   --sx-surface-high: #1b1f2e;
@@ -362,4 +362,25 @@ button:not([role="switch"]):not([data-no-press]):active:not(:disabled) {
   button:not([role="switch"]):not([data-no-press]):active:not(:disabled) {
     transform: none;
   }
+}
+
+/* Circular radial wave transition for Light/Dark theme switching */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 9999;
+}
+
+html.sx-theme-wave-active,
+html.sx-theme-wave-active body,
+html.sx-theme-wave-active * {
+  transition-duration: 0ms !important;
 }

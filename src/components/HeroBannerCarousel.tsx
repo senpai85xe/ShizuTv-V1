@@ -372,8 +372,8 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
                     </span>
                   </>
                 )}
-                {activeMeta.slice(0, 3).map((part) => (
-                  <React.Fragment key={part}>
+                {activeMeta.slice(0, 3).map((part, idx) => (
+                  <React.Fragment key={`${part}-${idx}`}>
                     <span aria-hidden="true" className="text-white/45">
                       ·
                     </span>
@@ -705,8 +705,8 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
             <div className="min-w-0 flex-1 space-y-1">
               <div className="flex flex-wrap items-center gap-x-2 text-[11px] sm:text-xs font-bold text-white/80 tabular-nums">
                 <span className="text-[var(--sx-primary)]">#{safeIndex + 1}</span>
-                {activeMeta.slice(0, 2).map((part) => (
-                  <React.Fragment key={part}>
+                {activeMeta.slice(0, 2).map((part, idx) => (
+                  <React.Fragment key={`${part}-${idx}`}>
                     <span aria-hidden="true" className="text-white/40">
                       ·
                     </span>

@@ -25,33 +25,23 @@ import {
   resolveEpisodeChapterStyle,
 } from '../utils/episodeChapterStyle';
 import {
+  applyThemeToDocument,
+  createDefaultThemePrefs,
+  ThemePrefs,
+} from '../utils/themeDefaults';
+import {
   AppThemePreset,
-  BackgroundGradientStyle,
   BUILT_IN_PRESETS,
   EpisodeChapterStyle,
-  EXCLUSIVE_SCHEMES,
   HeroBannerStyle,
   HomeHeaderStyle,
   MediaCardStyle,
   NavBarStyle,
-  ThemeMode,
 } from '../data/themePresets';
 import { INBUILT_SOURCES } from '../services/sourceEngine';
 import { fetchAniListViewer, saveAniListMediaEntry } from '../services/anilist';
 
-export interface ThemePrefs {
-  themeMode: ThemeMode;
-  exclusiveScheme: string;
-  activePresetId: string | null;
-  useAmoled: boolean;
-  uiRoundness: number;
-  uiScale: number;
-  useGradients: boolean;
-  gradientStyle: BackgroundGradientStyle;
-  gradientIntensity: number;
-  useNoiseOverlay: boolean;
-  noiseOpacity: number;
-}
+export type { ThemePrefs };
 
 export interface UiPrefs {
   cardStyle: MediaCardStyle;
@@ -198,19 +188,7 @@ interface PersistedState {
 }
 
 const DEFAULT_STATE: PersistedState = {
-  themePrefs: {
-    themeMode: 'dark',
-    exclusiveScheme: 'shizutv',
-    activePresetId: null,
-    useAmoled: false,
-    uiRoundness: 16,
-    uiScale: 1,
-    useGradients: true,
-    gradientStyle: 'radial',
-    gradientIntensity: 0.55,
-    useNoiseOverlay: false,
-    noiseOpacity: 0.05,
-  },
+  themePrefs: createDefaultThemePrefs(),
   uiPrefs: {
     ...createDefaultCardStylePrefs(),
     wideCardMode: false,
@@ -431,37 +409,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Apply active theme scheme & dark/AMOLED CSS variables to document root
   useEffect(() => {
-    const { themePrefs } = state;
-    const root = document.documentElement;
     const prefersDark =
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const isDark =
-      themePrefs.themeMode === 'dark' ||
-      (themePrefs.themeMode === 'system' && prefersDark);
-
-    root.classList.toggle('dark', isDark);
-    root.classList.toggle('amoled', isDark && themePrefs.useAmoled);
-
-    const scheme =
-      EXCLUSIVE_SCHEMES.find((s) => s.id === themePrefs.exclusiveScheme) ??
-      EXCLUSIVE_SCHEMES[0];
-    const palette = isDark ? scheme.dark : scheme.light;
-
-    root.style.setProperty('--sx-primary', palette.primary);
-    root.style.setProperty('--sx-primary-container', palette.primaryContainer);
-    root.style.setProperty('--sx-secondary', palette.secondary);
-    root.style.setProperty('--sx-tertiary', palette.tertiary);
-    root.style.setProperty('--sx-radius', `${themePrefs.uiRoundness}px`);
-
-    // Contrast-aware on-primary
-    const hex = palette.primary.replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16) || 0;
-    const g = parseInt(hex.substring(2, 4), 16) || 0;
-    const b = parseInt(hex.substring(4, 6), 16) || 0;
-    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    root.style.setProperty('--sx-on-primary', luminance > 0.62 ? '#0b0c10' : '#ffffff');
-    root.style.setProperty('--sx-on-primary-container', isDark ? '#f8fafc' : '#111827');
+    applyThemeToDocument(document.documentElement, state.themePrefs, prefersDark);
   }, [state.themePrefs]);
 
   // Simulated background download worker for queued download tasks

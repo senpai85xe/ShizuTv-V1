@@ -42,6 +42,7 @@ import {
   HOME_MODE_TRANSITION_MS,
   startHomeModeTransition,
 } from '../utils/homeModeTransition';
+import { shouldOpenProfileSheet } from '../utils/themeDefaults';
 
 const HOME_MEDIA_MODE_KEY = 'shonenx_home_media_mode';
 
@@ -525,7 +526,7 @@ export const HomePage: React.FC = () => {
     <div className="min-h-screen space-y-7 pb-10">
       <HomeHeader
         onOpenProfile={() =>
-          state.uiPrefs.homeHeaderStyle === 'clean'
+          shouldOpenProfileSheet(state.uiPrefs.homeHeaderStyle)
             ? setProfileSheetOpen(true)
             : setProfileOpen(true)
         }
