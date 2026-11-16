@@ -1,0 +1,298 @@
+export type MediaType = 'ANIME' | 'MANGA' | 'NOVEL' | 'TV' | 'MOVIE';
+
+export type TitlePreference = 'english' | 'romaji' | 'native';
+export type AdultContentMode = 'safe' | 'mixed' | 'adultOnly';
+
+export interface MediaTitle {
+  romaji?: string | null;
+  english?: string | null;
+  native?: string | null;
+}
+
+export interface MediaTag {
+  id: string;
+  name: string;
+  category: string;
+}
+
+export interface MediaExternalLink {
+  id: string;
+  url: string;
+  site: string;
+  icon?: string | null;
+}
+
+export interface MediaCharacter {
+  id: string;
+  name: string;
+  nativeName?: string | null;
+  role?: string | null;
+  image?: string | null;
+  description?: string | null;
+  voiceActorName?: string | null;
+  voiceActorImage?: string | null;
+}
+
+export interface MediaExternalIds {
+  anilist?: string;
+  mal?: string;
+  simkl?: string;
+  tmdb?: string;
+  kitsu?: string;
+}
+
+export interface UnifiedMedia {
+  id: string;
+  type: MediaType;
+  sourceId?: string | null;
+  sourceName?: string | null;
+  providerId?: string | null;
+  externalIds?: MediaExternalIds;
+  idMal?: string | null;
+  url?: string | null;
+  title: MediaTitle;
+  format?: string | null;
+  cover?: string | null;
+  score?: number | null;
+  banner?: string | null;
+  description?: string | null;
+  tags?: MediaTag[];
+  genres?: string[];
+  isAdult?: boolean | null;
+  status?: string | null;
+  episodes?: number | null;
+  chapters?: number | null;
+  volumes?: number | null;
+  duration?: number | null;
+  source?: string | null;
+  popularity?: number | null;
+  favourites?: number | null;
+  studios?: string[];
+  synonyms?: string[];
+  externalLinks?: MediaExternalLink[];
+  characters?: MediaCharacter[];
+  season?: string | null;
+  year?: number | null;
+  trailer?: string | null;
+  airingAt?: string | null;
+  nextEpisode?: number | null;
+  relationType?: string | null;
+  relations?: UnifiedMedia[];
+  recommendations?: UnifiedMedia[];
+}
+
+export interface UnifiedEpisode {
+  id: string;
+  number: number;
+  title: string;
+  description?: string | null;
+  thumbnail?: string | null;
+  airDate?: string | null;
+  isFiller?: boolean;
+  durationSeconds?: number;
+}
+
+export interface UnifiedChapter {
+  id: string;
+  number: number;
+  title: string;
+  scanlator?: string | null;
+  releaseDate?: string | null;
+  pageCount?: number;
+  pages?: string[];
+}
+
+export interface VideoServer {
+  id: string;
+  name: string;
+  category: 'sub' | 'dub' | 'raw';
+}
+
+export interface VideoStream {
+  url: string;
+  quality: string;
+  isHls: boolean;
+  serverName: string;
+  subtitles?: Array<{
+    lang: string;
+    label: string;
+    url?: string;
+    cues?: Array<{ start: number; end: number; text: string }>;
+  }>;
+}
+
+export type TrackedStatus =
+  | 'CURRENT'
+  | 'PLANNING'
+  | 'COMPLETED'
+  | 'PAUSED'
+  | 'DROPPED'
+  | 'REPEATING';
+
+export type TrackerType = 'anilist' | 'myanimelist' | 'kitsu' | 'local';
+export type TrackerCategory = 'trending' | 'popular' | 'topRated' | 'recentlyUpdated';
+
+export interface LibraryEntry {
+  mediaId: string;
+  mediaType: MediaType;
+  media: UnifiedMedia;
+  status: TrackedStatus;
+  progress: number;
+  score: number;
+  notes?: string;
+  updatedAt: string;
+  trackerType: TrackerType;
+}
+
+export interface HistoryEntry {
+  id: string;
+  mediaId: string;
+  mediaType: MediaType;
+  media: UnifiedMedia;
+  episodeNumber?: number;
+  chapterNumber?: number;
+  episodeTitle?: string;
+  positionSeconds?: number;
+  durationSeconds?: number;
+  pageIndex?: number;
+  totalPages?: number;
+  sourceId?: string;
+  updatedAt: string;
+}
+
+export type DownloadStatus = 'pending' | 'downloading' | 'paused' | 'completed' | 'failed';
+
+export interface DownloadTask {
+  id: string;
+  mediaId: string;
+  mediaTitle: string;
+  mediaType: MediaType;
+  cover?: string | null;
+  itemNumber: number;
+  itemTitle: string;
+  quality: string;
+  progress: number; // 0 to 1
+  totalBytes: number;
+  downloadedBytes: number;
+  status: DownloadStatus;
+  createdAt: string;
+}
+
+export interface CalendarEntry {
+  id: string;
+  episode: number;
+  airingAt: string; // ISO
+  media: UnifiedMedia;
+}
+
+export type HomeSectionType = 'discovery' | 'continueMedia' | 'libraryStatus';
+
+export interface HomeSection {
+  id: string;
+  title: string;
+  type: HomeSectionType;
+  disabled: boolean;
+  libraryStatus?: TrackedStatus;
+  targetTracker?: TrackerType;
+  targetMediaType?: MediaType;
+  trackerCategory?: TrackerCategory;
+}
+
+export type SearchSort =
+  | 'POPULARITY_DESC'
+  | 'TRENDING_DESC'
+  | 'SCORE_DESC'
+  | 'FAVOURITES_DESC'
+  | 'START_DATE_DESC'
+  | 'SEARCH_MATCH';
+
+export type SearchStatusFilter = 'ALL' | 'RELEASING' | 'FINISHED' | 'NOT_YET_RELEASED' | 'CANCELLED';
+export type SearchFormatFilter = 'ALL' | 'TV' | 'MOVIE' | 'OVA' | 'ONA' | 'SPECIAL' | 'MANGA' | 'ONE_SHOT' | 'NOVEL';
+
+export interface SourceInfo {
+  id: string;
+  name: string;
+  type: 'inbuilt' | 'extension';
+  mediaTypes: MediaType[];
+  lang: string;
+  version: string;
+  repoUrl?: string;
+  iconUrl?: string;
+  description?: string;
+  isNsfw?: boolean;
+}
+
+export interface ExtensionRepo {
+  id: string;
+  name: string;
+  url: string;
+  manager: 'aniyomi' | 'mangayomi' | 'cloudstream' | 'shonenx';
+  addedAt: string;
+}
+
+export interface CommentEntry {
+  id: string;
+  mediaId: string;
+  author: string;
+  avatar?: string;
+  body: string;
+  createdAt: string;
+  likes: number;
+  spoiler?: boolean;
+}
+
+export interface TrackerProfile {
+  tracker: TrackerType;
+  id?: string;
+  username: string;
+  avatarUrl?: string;
+  bannerUrl?: string;
+  bio?: string;
+  siteUrl?: string;
+  episodesWatched?: number;
+  chaptersRead?: number;
+  animeCount?: number;
+  mangaCount?: number;
+  meanScore?: number;
+}
+
+export interface LogEntry {
+  id: string;
+  level: 'INFO' | 'WARN' | 'ERROR';
+  scope: string;
+  message: string;
+  timestamp: string;
+}
+
+export function getPreferredTitle(title: MediaTitle | undefined, pref: TitlePreference): string {
+  if (!title) return 'Unknown';
+  const e = title.english?.trim() || null;
+  const r = title.romaji?.trim() || null;
+  const n = title.native?.trim() || null;
+  switch (pref) {
+    case 'english':
+      return e ?? r ?? n ?? 'Unknown';
+    case 'romaji':
+      return r ?? e ?? n ?? 'Unknown';
+    case 'native':
+      return n ?? r ?? e ?? 'Unknown';
+  }
+}
+
+export function getStatusLabel(status: TrackedStatus, mediaType: MediaType): string {
+  const isReading = mediaType === 'MANGA' || mediaType === 'NOVEL';
+  switch (status) {
+    case 'CURRENT':
+      return isReading ? 'Reading' : 'Watching';
+    case 'PLANNING':
+      return isReading ? 'Plan to Read' : 'Plan to Watch';
+    case 'COMPLETED':
+      return 'Completed';
+    case 'PAUSED':
+      return 'Paused';
+    case 'DROPPED':
+      return 'Dropped';
+    case 'REPEATING':
+      return isReading ? 'Rereading' : 'Rewatching';
+  }
+}
