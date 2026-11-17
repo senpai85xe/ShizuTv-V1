@@ -1,34 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  buildFloatingEmojiParticle,
   buildWatchPartyWsUrl,
   computeSyncedPlaybackTime,
+  FloatingEmojiItem,
+  getOrCreateWatchPartyClientId,
   normalizeRoomCode,
+  REACTION_LIFETIME_MS,
+  WatchPartyChatMessage,
   WatchPartyConnectionStatus,
   WatchPartyParticipant,
+  WatchPartyReaction,
   WatchPartyRoom,
   WatchPartySyncPayload,
+  WatchPartyTrack,
 } from '../utils/watchParty';
-
-const CLIENT_ID_STORAGE_KEY = 'shizutv_watch_party_client_id';
-
-function getOrCreateClientId(): string {
-  if (typeof window === 'undefined') return 'server-client';
-  try {
-    const existing = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
-    if (existing) return existing;
-    const generated =
-      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : `wp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, generated);
-    return generated;
-  } catch {
-    return `wp-${Date.now()}`;
-  }
-}
 
 export interface CreateWatchPartyInput {
   userName: string;
+  roomName?: string;
+  track?: WatchPartyTrack;
+  hostAvatar?: string;
   isPublic?: boolean;
   mediaId: string;
   mediaTitle: string;
@@ -51,6 +43,18 @@ export interface UseWatchPartyOptions {
   onRoomHydrated?: (room: WatchPartyRoom, syncedTime: number) => void;
 }
 
+export interface UpdateWatchRoomInput {
+  mediaId?: string;
+  mediaTitle?: string;
+  mediaCover?: string | null;
+  mediaBanner?: string | null;
+  totalEpisodes?: number;
+  episodeNumber?: number;
+  episodeTitle?: string;
+  track?: WatchPartyTrack;
+  isPublic?: boolean;
+}
+
 export interface UseWatchPartyResult {
   room: WatchPartyRoom | null;
   participantId: string | null;
@@ -58,10 +62,16 @@ export interface UseWatchPartyResult {
   status: WatchPartyConnectionStatus;
   error: string | null;
   lastEventNotice: string | null;
+  messages: WatchPartyChatMessage[];
+  reactions: FloatingEmojiItem[];
   createRoom: (input: CreateWatchPartyInput) => void;
   joinRoom: (input: JoinWatchPartyInput) => void;
   leaveRoom: () => void;
+  endRoom: () => void;
   sendSync: (payload: WatchPartySyncPayload) => void;
+  sendChatMessage: (text: string) => void;
+  sendReaction: (emoji: string) => void;
+  updateRoomMeta: (patch: UpdateWatchRoomInput) => void;
   clearError: () => void;
 }
 
@@ -74,13 +84,16 @@ export function useWatchParty({
   const [status, setStatus] = useState<WatchPartyConnectionStatus>('disconnected');
   const [error, setError] = useState<string | null>(null);
   const [lastEventNotice, setLastEventNotice] = useState<string | null>(null);
+  const [messages, setMessages] = useState<WatchPartyChatMessage[]>([]);
+  const [reactions, setReactions] = useState<FloatingEmojiItem[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const clientIdRef = useRef<string>(getOrCreateClientId());
+  const clientIdRef = useRef<string>(getOrCreateWatchPartyClientId());
   const desiredRoomRef = useRef<{ roomCode: string; userName: string } | null>(null);
   const pendingConnectActionRef = useRef<(() => void) | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
+  const reactionTimersRef = useRef<Map<string, number>>(new Map());
   const reconnectAttemptRef = useRef(0);
   const unmountedRef = useRef(false);
 
@@ -184,6 +197,7 @@ export function useWatchParty({
           };
           setParticipantId(yourId);
           setRoom(nextRoom);
+          setMessages(Array.isArray(nextRoom.messages) ? nextRoom.messages : []);
           setError(null);
 
           const syncedTime = computeSyncedPlaybackTime(
@@ -251,12 +265,57 @@ export function useWatchParty({
           return;
         }
 
+        if (msgType === 'party:chat' && data.message && typeof data.message === 'object') {
+          const incoming = data.message as WatchPartyChatMessage;
+          setMessages((prev) =>
+            prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming],
+          );
+          return;
+        }
+
+        if (msgType === 'party:reaction' && data.reaction && typeof data.reaction === 'object') {
+          const incoming = data.reaction as WatchPartyReaction;
+          if (!incoming.id || !incoming.emoji) return;
+          const particle = buildFloatingEmojiParticle(incoming);
+          setReactions((prev) =>
+            prev.some((r) => r.id === particle.id)
+              ? prev
+              : [...prev.slice(-29), particle],
+          );
+          if (!reactionTimersRef.current.has(particle.id)) {
+            const timerId = window.setTimeout(() => {
+              reactionTimersRef.current.delete(particle.id);
+              setReactions((prev) => prev.filter((r) => r.id !== particle.id));
+            }, REACTION_LIFETIME_MS);
+            reactionTimersRef.current.set(particle.id, timerId);
+          }
+          return;
+        }
+
+        if (msgType === 'party:ended') {
+          const message =
+            typeof data.message === 'string'
+              ? data.message
+              : 'The host ended this Watch Party.';
+          desiredRoomRef.current = null;
+          pendingConnectActionRef.current = null;
+          clearReconnectTimer();
+          setRoom(null);
+          setParticipantId(null);
+          setMessages([]);
+          setReactions([]);
+          setStatus('disconnected');
+          setError(message);
+          return;
+        }
+
         if (msgType === 'party:error') {
           const message =
             typeof data.message === 'string' ? data.message : 'Watch Party error occurred.';
           if (data.code === 'ROOM_NOT_FOUND') {
             desiredRoomRef.current = null;
             setRoom(null);
+            setMessages([]);
           }
           setError(message);
         }
@@ -300,6 +359,9 @@ export function useWatchParty({
           type: 'party:create',
           clientId: clientIdRef.current,
           userName: input.userName.trim() || 'Guest',
+          roomName: input.roomName?.trim() || undefined,
+          track: input.track || 'H-Sub',
+          hostAvatar: input.hostAvatar || undefined,
           isPublic: input.isPublic !== false,
           mediaId: input.mediaId,
           mediaTitle: input.mediaTitle,
@@ -358,6 +420,35 @@ export function useWatchParty({
 
     setRoom(null);
     setParticipantId(null);
+    setMessages([]);
+    setReactions([]);
+    setError(null);
+    setLastEventNotice(null);
+    setStatus('disconnected');
+  }, [clearReconnectTimer, room?.roomCode, sendRaw]);
+
+  const endRoom = useCallback(() => {
+    const activeCode = desiredRoomRef.current?.roomCode || room?.roomCode;
+    desiredRoomRef.current = null;
+    pendingConnectActionRef.current = null;
+    clearReconnectTimer();
+
+    if (activeCode) {
+      sendRaw({ type: 'party:end', roomCode: activeCode });
+    }
+    if (wsRef.current) {
+      try {
+        wsRef.current.close();
+      } catch {
+        // Ignore close errors
+      }
+      wsRef.current = null;
+    }
+
+    setRoom(null);
+    setParticipantId(null);
+    setMessages([]);
+    setReactions([]);
     setError(null);
     setLastEventNotice(null);
     setStatus('disconnected');
@@ -379,6 +470,44 @@ export function useWatchParty({
     [room, sendRaw],
   );
 
+  const sendChatMessage = useCallback(
+    (text: string) => {
+      const cleaned = text.trim().slice(0, 280);
+      if (!cleaned || (!desiredRoomRef.current && !room)) return;
+      sendRaw({
+        type: 'party:chat',
+        roomCode: room?.roomCode ?? desiredRoomRef.current?.roomCode,
+        text: cleaned,
+      });
+    },
+    [room, sendRaw],
+  );
+
+  const sendReaction = useCallback(
+    (emoji: string) => {
+      const cleaned = emoji.trim().slice(0, 8);
+      if (!cleaned || (!desiredRoomRef.current && !room)) return;
+      sendRaw({
+        type: 'party:reaction',
+        roomCode: room?.roomCode ?? desiredRoomRef.current?.roomCode,
+        emoji: cleaned,
+      });
+    },
+    [room, sendRaw],
+  );
+
+  const updateRoomMeta = useCallback(
+    (patch: UpdateWatchRoomInput) => {
+      if (!desiredRoomRef.current && !room) return;
+      sendRaw({
+        type: 'party:update',
+        roomCode: room?.roomCode ?? desiredRoomRef.current?.roomCode,
+        ...patch,
+      });
+    },
+    [room, sendRaw],
+  );
+
   const clearError = useCallback(() => setError(null), []);
 
   useEffect(() => {
@@ -389,6 +518,10 @@ export function useWatchParty({
       if (noticeTimerRef.current !== null) {
         window.clearTimeout(noticeTimerRef.current);
       }
+      for (const timerId of reactionTimersRef.current.values()) {
+        window.clearTimeout(timerId);
+      }
+      reactionTimersRef.current.clear();
       const ws = wsRef.current;
       wsRef.current = null;
       if (ws) {
@@ -429,10 +562,16 @@ export function useWatchParty({
     status,
     error,
     lastEventNotice,
+    messages,
+    reactions,
     createRoom,
     joinRoom,
     leaveRoom,
+    endRoom,
     sendSync,
+    sendChatMessage,
+    sendReaction,
+    updateRoomMeta,
     clearError,
   };
 }

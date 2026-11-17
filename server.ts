@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
 
+type WatchPartyTrack = 'H-Sub' | 'Dub';
+
 interface WatchPartyParticipant {
   id: string;
   name: string;
@@ -13,9 +15,21 @@ interface WatchPartyParticipant {
   joinedAt: number;
 }
 
+interface WatchPartyChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  sentAt: number;
+}
+
 interface WatchPartyRoomState {
   roomCode: string;
+  roomName: string;
+  track: WatchPartyTrack;
   hostId: string;
+  hostClientId: string;
+  hostAvatar?: string;
   isPublic: boolean;
   mediaId: string;
   mediaTitle: string;
@@ -26,8 +40,34 @@ interface WatchPartyRoomState {
   episodeTitle: string;
   isPlaying: boolean;
   currentTime: number;
+  createdAt: number;
   updatedAt: number;
+  peakParticipants: number;
+  messagesCount: number;
+  emptySince?: number;
+  messages: WatchPartyChatMessage[];
   participants: WatchPartyParticipant[];
+}
+
+interface WatchPartyEndedRoomSummary {
+  roomCode: string;
+  roomName: string;
+  track: WatchPartyTrack;
+  hostName: string;
+  hostAvatar?: string;
+  hostClientId: string;
+  isPublic: boolean;
+  mediaId: string;
+  mediaTitle: string;
+  mediaCover?: string;
+  mediaBanner?: string;
+  episodeNumber: number;
+  episodeTitle: string;
+  createdAt: number;
+  endedAt: number;
+  durationMs: number;
+  peakParticipants: number;
+  messagesCount: number;
 }
 
 interface ConnectionMeta {
@@ -38,6 +78,7 @@ interface ConnectionMeta {
 }
 
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const EMPTY_ROOM_GRACE_MS = 120_000;
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
@@ -45,12 +86,34 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const rooms = new Map<string, WatchPartyRoomState>();
+const roomExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const endedRooms: WatchPartyEndedRoomSummary[] = [];
 const socketMeta = new Map<WebSocket, ConnectionMeta>();
+
+function clearRoomExpiryTimer(roomCode: string) {
+  const existing = roomExpiryTimers.get(roomCode);
+  if (existing) {
+    clearTimeout(existing);
+    roomExpiryTimers.delete(roomCode);
+  }
+}
 
 function sanitizeName(raw: unknown): string {
   if (typeof raw !== 'string') return 'Guest';
   const trimmed = raw.trim().slice(0, 28);
   return trimmed.length > 0 ? trimmed : 'Guest';
+}
+
+function sanitizeRoomName(raw: unknown, hostName: string): string {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim().slice(0, 48);
+    if (trimmed.length > 0) return trimmed;
+  }
+  return `${hostName}'s room`;
+}
+
+function sanitizeTrack(raw: unknown): WatchPartyTrack {
+  return raw === 'Dub' ? 'Dub' : 'H-Sub';
 }
 
 function sanitizeRoomCode(raw: unknown): string {
@@ -86,7 +149,11 @@ function generateUniqueRoomCode(): string {
 function serializeRoom(room: WatchPartyRoomState) {
   return {
     roomCode: room.roomCode,
+    roomName: room.roomName,
+    track: room.track,
     hostId: room.hostId,
+    hostClientId: room.hostClientId,
+    hostAvatar: room.hostAvatar,
     isPublic: room.isPublic,
     mediaId: room.mediaId,
     mediaTitle: room.mediaTitle,
@@ -97,7 +164,11 @@ function serializeRoom(room: WatchPartyRoomState) {
     episodeTitle: room.episodeTitle,
     isPlaying: room.isPlaying,
     currentTime: room.currentTime,
+    createdAt: room.createdAt,
     updatedAt: room.updatedAt,
+    peakParticipants: room.peakParticipants,
+    messagesCount: room.messagesCount,
+    messages: room.messages,
     participants: room.participants.map((p) => ({
       id: p.id,
       name: p.name,
@@ -107,11 +178,46 @@ function serializeRoom(room: WatchPartyRoomState) {
   };
 }
 
+function getAllLiveRoomsList() {
+  return Array.from(rooms.values())
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .map(serializeRoom);
+}
+
 function getPublicRoomsList() {
   return Array.from(rooms.values())
     .filter((room) => room.isPublic)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map(serializeRoom);
+}
+
+function recordEndedRoom(room: WatchPartyRoomState, lastHostName: string) {
+  const endedAt = Date.now();
+  const durationMs = Math.max(0, endedAt - room.createdAt);
+  const summary: WatchPartyEndedRoomSummary = {
+    roomCode: room.roomCode,
+    roomName: room.roomName,
+    track: room.track,
+    hostName: lastHostName || 'Host',
+    hostAvatar: room.hostAvatar,
+    hostClientId: room.hostClientId,
+    isPublic: room.isPublic,
+    mediaId: room.mediaId,
+    mediaTitle: room.mediaTitle,
+    mediaCover: room.mediaCover,
+    mediaBanner: room.mediaBanner,
+    episodeNumber: room.episodeNumber,
+    episodeTitle: room.episodeTitle,
+    createdAt: room.createdAt,
+    endedAt,
+    durationMs,
+    peakParticipants: Math.max(1, room.peakParticipants),
+    messagesCount: room.messagesCount,
+  };
+  endedRooms.unshift(summary);
+  if (endedRooms.length > 40) {
+    endedRooms.length = 40;
+  }
 }
 
 function sendJson(ws: WebSocket, payload: unknown) {
@@ -124,6 +230,8 @@ function broadcastLobbyRooms() {
   const payload = JSON.stringify({
     type: 'lobby:rooms',
     rooms: getPublicRoomsList(),
+    allLiveRooms: getAllLiveRoomsList(),
+    endedRooms,
   });
   for (const [clientWs, meta] of socketMeta.entries()) {
     if (meta.subscribedToLobby && clientWs.readyState === WebSocket.OPEN) {
@@ -149,6 +257,19 @@ function broadcastToRoom(
   }
 }
 
+function finalizeEndedRoom(roomCode: string, lastHostName?: string) {
+  clearRoomExpiryTimer(roomCode);
+  const room = rooms.get(roomCode);
+  if (!room) return;
+  const resolvedHostName =
+    lastHostName ||
+    room.participants.find((p) => p.id === room.hostId || p.isHost)?.name ||
+    'Host';
+  recordEndedRoom(room, resolvedHostName);
+  rooms.delete(roomCode);
+  broadcastLobbyRooms();
+}
+
 function detachFromCurrentRoom(ws: WebSocket) {
   const meta = socketMeta.get(ws);
   if (!meta || !meta.roomCode) return;
@@ -158,13 +279,26 @@ function detachFromCurrentRoom(ws: WebSocket) {
   const room = rooms.get(roomCode);
   if (!room) return;
 
-  const wasPublic = room.isPublic;
   const departing = room.participants.find((p) => p.id === meta.participantId);
+  const lastHostName =
+    room.participants.find((p) => p.id === room.hostId || p.isHost)?.name ||
+    departing?.name ||
+    'Host';
   room.participants = room.participants.filter((p) => p.id !== meta.participantId);
 
   if (room.participants.length === 0) {
-    rooms.delete(roomCode);
-    if (wasPublic) broadcastLobbyRooms();
+    room.isPlaying = false;
+    room.emptySince = Date.now();
+    room.updatedAt = Date.now();
+    clearRoomExpiryTimer(roomCode);
+    const expiryTimer = setTimeout(() => {
+      const current = rooms.get(roomCode);
+      if (current && current.participants.length === 0) {
+        finalizeEndedRoom(roomCode, lastHostName);
+      }
+    }, EMPTY_ROOM_GRACE_MS);
+    roomExpiryTimers.set(roomCode, expiryTimer);
+    broadcastLobbyRooms();
     return;
   }
 
@@ -185,7 +319,7 @@ function detachFromCurrentRoom(ws: WebSocket) {
     event: 'left',
     actorName: departing?.name || 'Guest',
   });
-  if (wasPublic) broadcastLobbyRooms();
+  broadcastLobbyRooms();
 }
 
 async function startServer() {
@@ -193,7 +327,11 @@ async function startServer() {
   app.use(express.json());
 
   app.get('/api/watch-party/rooms', (_req, res) => {
-    res.json({ rooms: getPublicRoomsList() });
+    res.json({
+      rooms: getPublicRoomsList(),
+      allLiveRooms: getAllLiveRoomsList(),
+      endedRooms,
+    });
   });
 
   app.get('/api/watch-party/rooms/:roomCode', (req, res) => {
@@ -251,6 +389,8 @@ async function startServer() {
         sendJson(ws, {
           type: 'lobby:rooms',
           rooms: getPublicRoomsList(),
+          allLiveRooms: getAllLiveRoomsList(),
+          endedRooms,
         });
         return;
       }
@@ -272,10 +412,11 @@ async function startServer() {
 
         const roomCode = generateUniqueRoomCode();
         const now = Date.now();
+        const hostName = sanitizeName(msg.userName);
         const participant: WatchPartyParticipant = {
           id: meta.participantId,
           clientId,
-          name: sanitizeName(msg.userName),
+          name: hostName,
           isHost: true,
           joinedAt: now,
         };
@@ -291,7 +432,11 @@ async function startServer() {
 
         const room: WatchPartyRoomState = {
           roomCode,
+          roomName: sanitizeRoomName(msg.roomName, hostName),
+          track: sanitizeTrack(msg.track),
           hostId: participant.id,
+          hostClientId: clientId,
+          hostAvatar: sanitizeOptionalUrl(msg.hostAvatar),
           isPublic: msg.isPublic !== false,
           mediaId: typeof msg.mediaId === 'string' ? msg.mediaId : 'demo-anime',
           mediaTitle:
@@ -311,10 +456,15 @@ async function startServer() {
             typeof msg.currentTime === 'number' && Number.isFinite(msg.currentTime)
               ? Math.max(0, msg.currentTime)
               : 0,
+          createdAt: now,
           updatedAt: now,
+          peakParticipants: 1,
+          messagesCount: 0,
+          messages: [],
           participants: [participant],
         };
 
+        clearRoomExpiryTimer(roomCode);
         rooms.set(roomCode, room);
         meta.roomCode = roomCode;
 
@@ -323,7 +473,7 @@ async function startServer() {
           yourParticipantId: participant.id,
           room: serializeRoom(room),
         });
-        if (room.isPublic) broadcastLobbyRooms();
+        broadcastLobbyRooms();
         return;
       }
 
@@ -350,7 +500,6 @@ async function startServer() {
           detachFromCurrentRoom(ws);
         }
 
-        // Replace any stale open socket sharing the same clientId in this room
         for (const [otherWs, otherMeta] of socketMeta.entries()) {
           if (
             otherWs !== ws &&
@@ -365,13 +514,24 @@ async function startServer() {
         meta.participantId = clientId;
         meta.roomCode = requestedCode;
 
+        clearRoomExpiryTimer(requestedCode);
+        delete room.emptySince;
+
         const now = Date.now();
         const displayName = sanitizeName(msg.userName);
+        const shouldBecomeHost =
+          room.participants.length === 0 || room.hostClientId === clientId;
+
+        if (shouldBecomeHost) {
+          room.hostId = clientId;
+        }
+
         const existingIdx = room.participants.findIndex((p) => p.id === clientId);
         if (existingIdx >= 0) {
           room.participants[existingIdx] = {
             ...room.participants[existingIdx],
             name: displayName,
+            isHost: room.hostId === clientId,
           };
         } else {
           room.participants.push({
@@ -382,6 +542,15 @@ async function startServer() {
             joinedAt: now,
           });
         }
+
+        if (shouldBecomeHost) {
+          room.participants = room.participants.map((p) => ({
+            ...p,
+            isHost: p.id === room.hostId,
+          }));
+        }
+
+        room.peakParticipants = Math.max(room.peakParticipants, room.participants.length);
 
         sendJson(ws, {
           type: 'party:state',
@@ -401,7 +570,7 @@ async function startServer() {
           },
           ws,
         );
-        if (room.isPublic) broadcastLobbyRooms();
+        broadcastLobbyRooms();
         return;
       }
 
@@ -455,6 +624,141 @@ async function startServer() {
         if (room.isPublic && action === 'episode') {
           broadcastLobbyRooms();
         }
+        return;
+      }
+
+      if (msgType === 'party:chat') {
+        const roomCode = meta.roomCode;
+        if (!roomCode) return;
+        const room = rooms.get(roomCode);
+        if (!room) return;
+        const text = typeof msg.text === 'string' ? msg.text.trim().slice(0, 280) : '';
+        if (!text) return;
+
+        const sender = room.participants.find((p) => p.id === meta.participantId);
+        const chatMsg: WatchPartyChatMessage = {
+          id: crypto.randomUUID(),
+          senderId: meta.participantId,
+          senderName: sender?.name || sanitizeName(msg.userName),
+          text,
+          sentAt: Date.now(),
+        };
+        room.messages.push(chatMsg);
+        if (room.messages.length > 80) {
+          room.messages.shift();
+        }
+        room.messagesCount += 1;
+        room.updatedAt = Date.now();
+
+        broadcastToRoom(roomCode, {
+          type: 'party:chat',
+          roomCode,
+          message: chatMsg,
+          messagesCount: room.messagesCount,
+        });
+        broadcastLobbyRooms();
+        return;
+      }
+
+      if (msgType === 'party:reaction') {
+        const roomCode = meta.roomCode;
+        if (!roomCode) return;
+        const room = rooms.get(roomCode);
+        if (!room) return;
+        const emoji = typeof msg.emoji === 'string' ? msg.emoji.trim().slice(0, 8) : '';
+        if (!emoji) return;
+
+        const sender = room.participants.find((p) => p.id === meta.participantId);
+        broadcastToRoom(roomCode, {
+          type: 'party:reaction',
+          roomCode,
+          reaction: {
+            id: crypto.randomUUID(),
+            emoji,
+            senderId: meta.participantId,
+            senderName: sender?.name || sanitizeName(msg.userName),
+            sentAt: Date.now(),
+            laneSeed: Math.random(),
+          },
+        });
+        return;
+      }
+
+      if (msgType === 'party:update') {
+        const roomCode = meta.roomCode;
+        if (!roomCode) return;
+        const room = rooms.get(roomCode);
+        if (!room || room.hostId !== meta.participantId) return;
+
+        if (typeof msg.mediaId === 'string' && msg.mediaId.trim()) {
+          room.mediaId = msg.mediaId.trim().slice(0, 64);
+          room.currentTime = 0;
+        }
+        if (typeof msg.mediaTitle === 'string' && msg.mediaTitle.trim()) {
+          room.mediaTitle = msg.mediaTitle.trim().slice(0, 120);
+        }
+        if ('mediaCover' in msg) {
+          room.mediaCover = sanitizeOptionalUrl(msg.mediaCover);
+        }
+        if ('mediaBanner' in msg) {
+          room.mediaBanner = sanitizeOptionalUrl(msg.mediaBanner);
+        }
+        if (typeof msg.totalEpisodes === 'number' && Number.isFinite(msg.totalEpisodes)) {
+          room.totalEpisodes = Math.max(1, Math.floor(msg.totalEpisodes));
+        }
+        if (typeof msg.episodeNumber === 'number' && Number.isFinite(msg.episodeNumber)) {
+          room.episodeNumber = Math.max(1, Math.floor(msg.episodeNumber));
+        }
+        if (typeof msg.episodeTitle === 'string' && msg.episodeTitle.trim()) {
+          room.episodeTitle = msg.episodeTitle.trim().slice(0, 120);
+        }
+        if (msg.track === 'H-Sub' || msg.track === 'Dub') {
+          room.track = msg.track;
+        }
+        if (typeof msg.isPublic === 'boolean') {
+          room.isPublic = msg.isPublic;
+        }
+        room.updatedAt = Date.now();
+
+        for (const [clientWs, clientMeta] of socketMeta.entries()) {
+          if (clientMeta.roomCode === roomCode && clientWs.readyState === WebSocket.OPEN) {
+            sendJson(clientWs, {
+              type: 'party:state',
+              yourParticipantId: clientMeta.participantId,
+              room: serializeRoom(room),
+            });
+          }
+        }
+        broadcastLobbyRooms();
+        return;
+      }
+
+      if (msgType === 'party:end') {
+        const roomCode = meta.roomCode;
+        if (!roomCode) return;
+        const room = rooms.get(roomCode);
+        if (!room) return;
+        if (room.hostId !== meta.participantId && room.hostClientId !== meta.clientId) {
+          detachFromCurrentRoom(ws);
+          return;
+        }
+
+        const hostActor =
+          room.participants.find((p) => p.id === meta.participantId)?.name || 'Host';
+
+        for (const [clientWs, clientMeta] of socketMeta.entries()) {
+          if (clientMeta.roomCode === roomCode) {
+            clientMeta.roomCode = null;
+            if (clientWs !== ws) {
+              sendJson(clientWs, {
+                type: 'party:ended',
+                roomCode,
+                message: `${hostActor} ended the Watch Party.`,
+              });
+            }
+          }
+        }
+        finalizeEndedRoom(roomCode, hostActor);
         return;
       }
 

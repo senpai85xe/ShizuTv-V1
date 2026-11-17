@@ -2,19 +2,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyCodePaste,
+  buildDefaultRoomName,
+  buildFloatingEmojiParticle,
   buildWatchPartyInviteUrl,
   buildWatchPartyWsUrl,
   computeSyncedPlaybackTime,
   createEmptyCodeSlots,
+  EMPTY_ROOM_GRACE_MS,
+  filterMyEndedRooms,
+  filterMyLiveRooms,
   filterPublicRooms,
+  formatRoomClosedAgo,
+  formatRoomDuration,
   getHostDisplayName,
   getParticipantInitial,
+  isRoomGraceExpired,
+  isSupportedReactionEmoji,
   isValidRoomCode,
   joinCodeSlots,
   normalizeRoomCode,
   removeParticipant,
   resolveDefaultDisplayName,
   shouldApplyRemoteSeek,
+  shouldRestoreHostRole,
   splitCodeIntoSlots,
   updateCodeSlot,
   upsertParticipant,
@@ -131,8 +141,125 @@ test('buildWatchPartyWsUrl and invite URLs map http/https cleanly', () => {
   );
   assert.equal(
     buildWatchPartyInviteUrl('k9x4m2', 'https://shizutv.app'),
-    'https://shizutv.app/player?room=K9X4M2',
+    'https://shizutv.app/watch-together/K9X4M2',
   );
+  assert.equal(isSupportedReactionEmoji('🔥'), true);
+  assert.equal(isSupportedReactionEmoji(''), false);
+  const particle = buildFloatingEmojiParticle({
+    id: 'rx-1',
+    emoji: '❤️',
+    senderId: 'u1',
+    senderName: 'Senpai',
+    sentAt: 1000,
+    laneSeed: 0.5,
+  });
+  assert.equal(particle.emoji, '❤️');
+  assert.ok(particle.xPercent >= 14 && particle.xPercent <= 86);
   assert.equal(getParticipantInitial('  asta'), 'A');
   assert.equal(getParticipantInitial(''), 'G');
 });
+
+test('buildDefaultRoomName, formatRoomDuration, formatRoomClosedAgo, and filterMyRooms work cleanly', () => {
+  assert.equal(buildDefaultRoomName('senpai85xe'), "senpai85xe's room");
+  assert.equal(buildDefaultRoomName('   '), "Guest's room");
+
+  assert.equal(formatRoomDuration(25_000), '<1 min');
+  assert.equal(formatRoomDuration(13 * 60_000), '13 min');
+  assert.equal(formatRoomDuration(75 * 60_000), '1h 15m');
+
+  const baseNow = 1_700_000_000_000;
+  assert.equal(formatRoomClosedAgo(baseNow - 20_000, baseNow), 'Just now');
+  assert.equal(formatRoomClosedAgo(baseNow - 15 * 60_000, baseNow), '15m ago');
+  assert.equal(formatRoomClosedAgo(baseNow - 3 * 3600_000, baseNow), '3h ago');
+
+  const live = [
+    {
+      roomCode: 'MY1111',
+      hostId: 'c1',
+      hostClientId: 'c1',
+      isPublic: false,
+      mediaId: '20',
+      mediaTitle: 'Naruto',
+      episodeNumber: 1,
+      episodeTitle: 'Episode 1',
+      isPlaying: false,
+      currentTime: 0,
+      updatedAt: 100,
+      participants: [{ id: 'c1', name: 'Senpai', isHost: true, joinedAt: 100 }],
+    },
+    {
+      roomCode: 'OT2222',
+      hostId: 'c2',
+      hostClientId: 'c2',
+      isPublic: true,
+      mediaId: '21',
+      mediaTitle: 'One Piece',
+      episodeNumber: 1,
+      episodeTitle: 'Episode 1',
+      isPlaying: true,
+      currentTime: 0,
+      updatedAt: 100,
+      participants: [{ id: 'c2', name: 'Arsh', isHost: true, joinedAt: 100 }],
+    },
+  ];
+  assert.deepEqual(
+    filterMyLiveRooms(live, 'c1', 'Guest').map((r) => r.roomCode),
+    ['MY1111'],
+  );
+
+  const ended = [
+    {
+      roomCode: 'END111',
+      roomName: "Senpai's room",
+      track: 'H-Sub' as const,
+      hostName: 'Senpai',
+      hostClientId: 'c1',
+      isPublic: true,
+      mediaId: '20',
+      mediaTitle: 'Naruto',
+      episodeNumber: 1,
+      episodeTitle: 'Episode 1',
+      createdAt: 1000,
+      endedAt: 2000,
+      durationMs: 600_000,
+      peakParticipants: 2,
+      messagesCount: 3,
+    },
+    {
+      roomCode: 'END222',
+      roomName: "Arsh's room",
+      track: 'H-Sub' as const,
+      hostName: 'Arsh',
+      hostClientId: 'c2',
+      isPublic: true,
+      mediaId: '21',
+      mediaTitle: 'Black Clover',
+      episodeNumber: 1,
+      episodeTitle: 'Episode 1',
+      createdAt: 1000,
+      endedAt: 2000,
+      durationMs: 780_000,
+      peakParticipants: 2,
+      messagesCount: 1,
+    },
+  ];
+  assert.deepEqual(
+    filterMyEndedRooms(ended, 'c1', 'Senpai').map((r) => r.roomCode),
+    ['END111'],
+  );
+});
+
+test('room grace period and host restoration helpers behave predictably', () => {
+  assert.equal(EMPTY_ROOM_GRACE_MS, 120_000);
+  assert.equal(isRoomGraceExpired(undefined, 500_000), false);
+  assert.equal(isRoomGraceExpired(400_000, 490_000, 120_000), false);
+  assert.equal(isRoomGraceExpired(400_000, 520_000, 120_000), true);
+
+  // Original host rejoining while others kept the room active reclaims host role
+  assert.equal(shouldRestoreHostRole('host-1', 'host-1', 2), true);
+  // First person joining an empty grace-period room becomes acting host
+  assert.equal(shouldRestoreHostRole('host-1', 'viewer-2', 0), true);
+  // Regular viewer joining an occupied room stays viewer
+  assert.equal(shouldRestoreHostRole('host-1', 'viewer-2', 1), false);
+});
+

@@ -58,6 +58,8 @@ import { SmartImage } from '../components/SmartImage';
 import { MediaCard } from '../components/MediaCard';
 import { EpisodeChapterList } from '../components/EpisodeChapterList';
 import { InlineAnimePlayer } from '../components/InlineAnimePlayer';
+import { formatMediaDocumentTitle } from '../utils/documentTitle';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   DetailsHeroSkeleton,
   DetailsSynopsisSkeleton,
@@ -127,7 +129,17 @@ export const DetailsPage: React.FC = () => {
     likeComment,
   } = useApp();
 
-  const initialMedia = (location.state as { media?: UnifiedMedia } | null)?.media;
+  const navMediaState =
+    (location.state as {
+      media?: UnifiedMedia;
+      initialTab?: DetailsTab;
+      episodeIndex?: number;
+      startTime?: number;
+      resumePlaying?: boolean;
+      activeSubLang?: 'en' | 'ja';
+      editedCuesMap?: Record<string, import('../utils/inlinePlayer').SubtitleCue[]>;
+    } | null) ?? null;
+  const initialMedia = navMediaState?.media;
   const resolvedType: MediaType =
     paramType?.toUpperCase() === 'MANGA'
       ? 'MANGA'
@@ -138,7 +150,7 @@ export const DetailsPage: React.FC = () => {
   const detailsRouteKey = `/details/${resolvedType.toLowerCase()}/${id || ''}`;
   const prevVisitedRouteRef = React.useRef<string | null>(getPreviousVisitedRoute());
   const detailsTransitionKind =
-    prevVisitedRouteRef.current === '/player' || prevVisitedRouteRef.current === '/reader'
+    prevVisitedRouteRef.current === '/reader'
       ? 'pop'
       : getRouteTransitionKind(prevVisitedRouteRef.current, detailsRouteKey);
   const detailsTransitionClass =
@@ -157,8 +169,7 @@ export const DetailsPage: React.FC = () => {
     },
   );
   const [loadingDetails, setLoadingDetails] = useState(true);
-  const initialRequestedTab =
-    (location.state as { initialTab?: DetailsTab } | null)?.initialTab || 'info';
+  const initialRequestedTab = navMediaState?.initialTab || 'info';
   const [activeTab, setActiveTab] = useState<DetailsTab>(initialRequestedTab);
   const prevTabRef = React.useRef<DetailsTab>(initialRequestedTab);
   const [tabDirection, setTabDirection] = useState<DetailsTabDirection>('none');
@@ -168,9 +179,14 @@ export const DetailsPage: React.FC = () => {
     setActiveTab(nextTab);
   };
   const tabTransitionClass = getDetailsTabTransitionClass(tabDirection);
-  const [inlineEpisodeIndex, setInlineEpisodeIndex] = useState(0);
-  const [hasPickedInlineEpisode, setHasPickedInlineEpisode] = useState(false);
+  const hasSuppliedInitialEpisode =
+    typeof navMediaState?.episodeIndex === 'number' && navMediaState.episodeIndex >= 0;
+  const [inlineEpisodeIndex, setInlineEpisodeIndex] = useState(
+    hasSuppliedInitialEpisode ? navMediaState!.episodeIndex! : 0,
+  );
+  const [hasPickedInlineEpisode, setHasPickedInlineEpisode] = useState(hasSuppliedInitialEpisode);
   const [inlinePlaySignal, setInlinePlaySignal] = useState(0);
+  const prevDetailsIdRef = React.useRef<string>(`${resolvedType}:${id || ''}`);
 
   const [episodes, setEpisodes] = useState<UnifiedEpisode[]>([]);
   const [chapters, setChapters] = useState<UnifiedChapter[]>([]);
@@ -285,14 +301,20 @@ export const DetailsPage: React.FC = () => {
 
   useEffect(() => {
     if (!id) return;
+    const nextRouteIdentity = `${resolvedType}:${id}`;
+    const isRouteChanged = prevDetailsIdRef.current !== nextRouteIdentity;
+    prevDetailsIdRef.current = nextRouteIdentity;
+
     setLoadingDetails(true);
     setSelectedRangeId('all');
     setOnlyDownloaded(false);
     setEpFilter('');
     setMatchedTitleOverride('');
-    setHasPickedInlineEpisode(false);
-    setInlineEpisodeIndex(0);
-    setInlinePlaySignal(0);
+    if (isRouteChanged) {
+      setHasPickedInlineEpisode(false);
+      setInlineEpisodeIndex(0);
+      setInlinePlaySignal(0);
+    }
     fetchMediaDetails(id, resolvedType, initialMedia?.providerId)
       .then(async (full) => {
         const merged = { ...initialMedia, ...full };
@@ -311,6 +333,11 @@ export const DetailsPage: React.FC = () => {
   }, [id, resolvedType]);
 
   const title = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
+  useDocumentTitle(
+    loadingDetails && (!title || title === 'Unknown')
+      ? 'ShizuTv — Loading...'
+      : formatMediaDocumentTitle({ mediaTitle: title }),
+  );
   const effectiveSourceTitle = matchedTitleOverride.trim() || title;
   const activeSource =
     availableSources.find((s) => s.id === selectedSourceId) ?? availableSources[0];
@@ -553,6 +580,10 @@ export const DetailsPage: React.FC = () => {
               episodeIndex={activeInlineEpisodeIndex}
               sourceId={selectedSourceId}
               playSignal={inlinePlaySignal}
+              initialTime={navMediaState?.startTime ?? null}
+              initialResumePlaying={Boolean(navMediaState?.resumePlaying)}
+              initialSubLang={navMediaState?.activeSubLang ?? 'en'}
+              initialEditedCuesMap={navMediaState?.editedCuesMap}
               onChangeEpisodeIndex={(nextIdx) => {
                 setHasPickedInlineEpisode(true);
                 setInlineEpisodeIndex(nextIdx);
@@ -1926,7 +1957,7 @@ export const DetailsPage: React.FC = () => {
         (() => {
           const modalContent = (
             <div
-              className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4 sx-backdrop-enter"
+              className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-md p-0 sm:p-4 sx-backdrop-enter"
               onClick={() => setTrackerOpen(false)}
               role="dialog"
               aria-modal="true"
@@ -1934,7 +1965,7 @@ export const DetailsPage: React.FC = () => {
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="w-full sm:max-w-md bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl sx-sheet-enter"
+                className="w-full sm:max-w-md bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl sx-sheet-enter"
               >
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-extrabold">Custom List &amp; Tracker</h2>
@@ -2072,7 +2103,7 @@ export const DetailsPage: React.FC = () => {
         (() => {
           const modalContent = (
             <div
-              className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4 sx-backdrop-enter"
+              className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-md p-0 sm:p-4 sx-backdrop-enter"
               onClick={() => setWrongTitleOpen(false)}
               role="dialog"
               aria-modal="true"
@@ -2080,7 +2111,7 @@ export const DetailsPage: React.FC = () => {
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="w-full sm:max-w-md bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl sx-sheet-enter"
+                className="w-full sm:max-w-md bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl sx-sheet-enter"
               >
                 <div className="flex items-center justify-between">
                   <h2 className="text-base font-extrabold">Fix Matched Title</h2>
@@ -2168,7 +2199,7 @@ export const DetailsPage: React.FC = () => {
         (() => {
           const modalContent = (
             <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 sx-backdrop-enter"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 sx-backdrop-enter"
               onClick={() => setTrailerOpen(false)}
               role="dialog"
               aria-modal="true"
@@ -2176,7 +2207,7 @@ export const DetailsPage: React.FC = () => {
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="sx-sheet-enter w-full max-w-3xl rounded-3xl overflow-hidden bg-black border border-white/15 shadow-2xl"
+                className="sx-sheet-enter w-full max-w-3xl rounded-3xl overflow-hidden bg-zinc-950/90 backdrop-blur-2xl border border-white/15 ring-1 ring-inset ring-white/10 shadow-2xl"
               >
                 <div className="flex items-center justify-between px-4 py-3 bg-zinc-900/90 text-white">
                   <span className="text-xs font-extrabold truncate">{title} — Trailer</span>

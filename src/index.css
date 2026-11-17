@@ -498,110 +498,77 @@ html.sx-theme-wave-active * {
   transform: scale(0.92);
 }
 
-/* iOS Fullscreen Player Stage, Topbar, Lock Pill & Comments Sheet Animations */
-@keyframes sxFsStageEnter {
-  0% {
-    opacity: 0.72;
-    transform: scale(0.94);
-  }
-  70% {
-    opacity: 1;
-    transform: scale(1.006);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
+/* iOS Fullscreen Player Overlay, Topbar, Lock Pill & Comments Sheet Animations (zero scale/layout thrash on <video> host) */
 @keyframes sxFsTopbarEnter {
   0% {
     opacity: 0;
-    transform: translate3d(0, -14px, 0) scale(0.97);
+    transform: translate3d(0, -10px, 0);
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 @keyframes sxLockPillEnter {
   0% {
     opacity: 0;
-    transform: translate3d(0, 12px, 0) scale(0.86);
-  }
-  65% {
-    opacity: 1;
-    transform: translate3d(0, -2px, 0) scale(1.04);
+    transform: translate3d(0, 10px, 0);
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 @keyframes sxCommentsSheetEnter {
   0% {
     opacity: 0;
-    transform: translate3d(0, 34px, 0) scale(0.94);
-  }
-  72% {
-    opacity: 1;
-    transform: translate3d(0, -2px, 0) scale(1.005);
+    transform: translate3d(0, 22px, 0);
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 .sx-fs-stage-enter {
-  animation: sxFsStageEnter 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  will-change: transform, opacity;
+  /* Intentionally no scale/keyframes on the fullscreen video host to keep enter/exit instant & lag-free */
 }
 
 .sx-fs-topbar-enter {
-  animation: sxFsTopbarEnter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  will-change: transform, opacity;
+  animation: sxFsTopbarEnter 240ms var(--sx-ease-ios) both;
 }
 
 .sx-lock-pill-enter {
-  animation: sxLockPillEnter 280ms cubic-bezier(0.34, 1.38, 0.64, 1) both;
-  will-change: transform, opacity;
+  animation: sxLockPillEnter 220ms var(--sx-ease-ios) both;
 }
 
 .sx-comments-sheet-enter {
-  animation: sxCommentsSheetEnter 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  will-change: transform, opacity;
+  animation: sxCommentsSheetEnter 280ms var(--sx-ease-spring) both;
 }
 
 .sx-fs-rotate-spring {
-  transition:
-    transform 440ms cubic-bezier(0.22, 1, 0.36, 1),
-    width 320ms cubic-bezier(0.32, 0.72, 0, 1),
-    height 320ms cubic-bezier(0.32, 0.72, 0, 1);
-  will-change: transform;
+  /* Transition transform only (never width/height) so fullscreen resize has zero layout thrash */
+  transition: transform 280ms var(--sx-ease-ios);
 }
 
 .sx-fs-bar-top {
   transition:
-    opacity 280ms var(--sx-ease-ios),
-    transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: opacity, transform;
+    opacity 220ms var(--sx-ease-ios),
+    transform 260ms var(--sx-ease-spring);
 }
 
 .sx-fs-bar-bottom {
   transition:
-    opacity 280ms var(--sx-ease-ios),
-    transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: opacity, transform;
+    opacity 220ms var(--sx-ease-ios),
+    transform 260ms var(--sx-ease-spring);
 }
 
 .sx-fs-center-cluster {
   transition:
-    opacity 260ms var(--sx-ease-ios),
-    transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: opacity, transform;
+    opacity 200ms var(--sx-ease-ios),
+    transform 240ms var(--sx-ease-spring);
 }
 
 @keyframes sxSpeedPopoverUp {
@@ -701,6 +668,56 @@ html.sx-theme-wave-active * {
   }
 }
 
+/* Watch Party Transient Floating Emoji Reactions (spring-animated, compositor-only) */
+@keyframes sxWatchPartyEmojiFloat {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.42) rotate(0deg);
+  }
+  16% {
+    opacity: 1;
+    transform: translate3d(calc(var(--sx-emoji-drift, 0px) * 0.22), -24px, 0) scale(calc(var(--sx-emoji-scale, 1) * 1.18)) rotate(calc(var(--sx-emoji-rot, 6deg) * 0.45));
+  }
+  58% {
+    opacity: 0.96;
+    transform: translate3d(calc(var(--sx-emoji-drift, 0px) * -0.45), -135px, 0) scale(var(--sx-emoji-scale, 1)) rotate(calc(var(--sx-emoji-rot, 6deg) * -0.55));
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--sx-emoji-drift, 0px), -235px, 0) scale(calc(var(--sx-emoji-scale, 1) * 0.86)) rotate(var(--sx-emoji-rot, 6deg));
+  }
+}
+
+.sx-watch-emoji-float {
+  animation: sxWatchPartyEmojiFloat 2200ms var(--sx-ease-spring) forwards;
+  will-change: transform, opacity;
+}
+
+.sx-reaction-btn {
+  transition:
+    transform 240ms var(--sx-ease-bounce),
+    background-color 180ms ease,
+    border-color 180ms ease;
+}
+
+.sx-reaction-btn:hover {
+  transform: translate3d(0, -3px, 0) scale(1.16);
+}
+
+.sx-reaction-btn:active {
+  transform: translate3d(0, 0, 0) scale(0.88);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sx-watch-emoji-float {
+    animation-duration: 900ms;
+  }
+  .sx-reaction-btn:hover,
+  .sx-reaction-btn:active {
+    transform: none;
+  }
+}
+
 /* Anime Details Page & Inline/Full Player Fluid Animations */
 @keyframes sxDetailsBackdropEnter {
   0% {
@@ -727,7 +744,7 @@ html.sx-theme-wave-active * {
 @keyframes sxDetailsTabEnter {
   0% {
     opacity: 0;
-    transform: translate3d(0, 14px, 0) scale(0.988);
+    transform: translate3d(0, 10px, 0);
   }
   100% {
     opacity: 1;
@@ -738,7 +755,7 @@ html.sx-theme-wave-active * {
 @keyframes sxDetailsTabForward {
   0% {
     opacity: 0;
-    transform: translate3d(26px, 0, 0) scale(0.988);
+    transform: translate3d(16px, 0, 0);
   }
   100% {
     opacity: 1;
@@ -749,7 +766,7 @@ html.sx-theme-wave-active * {
 @keyframes sxDetailsTabBackward {
   0% {
     opacity: 0;
-    transform: translate3d(-26px, 0, 0) scale(0.988);
+    transform: translate3d(-16px, 0, 0);
   }
   100% {
     opacity: 1;
@@ -760,15 +777,9 @@ html.sx-theme-wave-active * {
 @keyframes sxPlayerStageEnter {
   0% {
     opacity: 0;
-    transform: translate3d(0, 16px, 0) scale(0.965);
-  }
-  70% {
-    opacity: 1;
-    transform: translate3d(0, -2px, 0) scale(1.004);
   }
   100% {
     opacity: 1;
-    transform: none;
   }
 }
 
@@ -904,19 +915,24 @@ html.sx-theme-wave-active * {
 }
 
 .sx-details-tab-enter {
-  animation: sxDetailsTabEnter 340ms var(--sx-ease-ios) backwards;
+  animation: sxDetailsTabEnter 260ms var(--sx-ease-ios) backwards;
 }
 
 .sx-details-tab-forward {
-  animation: sxDetailsTabForward 340ms var(--sx-ease-spring) backwards;
+  animation: sxDetailsTabForward 260ms var(--sx-ease-spring) backwards;
 }
 
 .sx-details-tab-backward {
-  animation: sxDetailsTabBackward 340ms var(--sx-ease-spring) backwards;
+  animation: sxDetailsTabBackward 260ms var(--sx-ease-spring) backwards;
 }
 
 .sx-player-stage-enter {
-  animation: sxPlayerStageEnter 440ms var(--sx-ease-spring) backwards;
+  animation: sxPlayerStageEnter 320ms var(--sx-ease-spring) backwards;
+}
+
+.sx-ep-row-contain {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 74px;
 }
 
 .sx-ep-badge-next {

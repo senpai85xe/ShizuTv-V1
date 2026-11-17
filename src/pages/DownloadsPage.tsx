@@ -125,16 +125,27 @@ export const DownloadsPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() =>
-                        navigate(task.mediaType === 'MANGA' ? '/reader' : '/player', {
-                          state: {
-                            media: {
-                              id: task.mediaId,
-                              type: task.mediaType,
-                              title: { english: task.mediaTitle },
-                              cover: task.cover,
+                        navigate(
+                          task.mediaType === 'MANGA'
+                            ? '/reader'
+                            : `/details/${task.mediaType.toLowerCase()}/${task.mediaId}`,
+                          {
+                            state: {
+                              media: {
+                                id: task.mediaId,
+                                type: task.mediaType,
+                                title: { english: task.mediaTitle },
+                                cover: task.cover,
+                              },
+                              ...(task.mediaType !== 'MANGA'
+                                ? {
+                                    initialTab: 'watch',
+                                    episodeIndex: Math.max(0, task.itemNumber - 1),
+                                  }
+                                : {}),
                             },
                           },
-                        })
+                        )
                       }
                       className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-bold"
                     >

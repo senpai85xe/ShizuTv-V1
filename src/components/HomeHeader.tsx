@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, Compass, Moon, Puzzle, Settings, Sun, User, Users } from 'lucide-react';
+import { Calendar, Compass, Moon, Puzzle, Settings, Sun, User } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { SmartImage } from './SmartImage';
 import { ShizuTvLogo } from './ShonenXLogo';
@@ -72,17 +72,6 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
 
       <button
         type="button"
-        data-testid="home-watch-party-btn"
-        onClick={() => navigate('/watch-together')}
-        title="Watch Together"
-        aria-label="Watch Together"
-        className="p-2.5 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-all duration-150 active:scale-95"
-      >
-        <Users className="w-4 h-4" />
-      </button>
-
-      <button
-        type="button"
         onClick={() => navigate('/calendar')}
         title="Airing Calendar"
         aria-label="Airing Calendar"
@@ -139,17 +128,6 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            data-testid="home-watch-party-btn"
-            onClick={() => navigate('/watch-together')}
-            aria-label="Watch Together"
-            title="Watch Together"
-            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 border border-[var(--sx-primary)]/25 flex items-center justify-center text-[var(--sx-on-surface)] transition-all duration-150 active:scale-95 shrink-0"
-          >
-            <Users className="w-5 h-5" />
-          </button>
-
           <button
             ref={themeToggleRef}
             type="button"
@@ -217,17 +195,6 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            data-testid="home-watch-party-btn"
-            onClick={() => navigate('/watch-together')}
-            aria-label="Watch Together"
-            title="Watch Together"
-            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 border border-[var(--sx-primary)]/25 flex items-center justify-center text-[var(--sx-on-surface)] transition-all duration-150 active:scale-95 shrink-0"
-          >
-            <Users className="w-5 h-5" />
-          </button>
-
           <button
             type="button"
             onClick={onOpenProfile}

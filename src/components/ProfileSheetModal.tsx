@@ -125,7 +125,7 @@ export const ProfileSheetModal: React.FC<ProfileSheetModalProps> = ({
 
   const modalContent = (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4 sx-backdrop-enter"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-md p-0 sm:p-4 sx-backdrop-enter"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -133,7 +133,7 @@ export const ProfileSheetModal: React.FC<ProfileSheetModalProps> = ({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full sm:max-w-md bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] rounded-t-[28px] sm:rounded-[28px] p-4 sm:p-5 space-y-3.5 shadow-2xl max-h-[88dvh] overflow-y-auto no-scrollbar sx-sheet-enter"
+        className="w-full sm:max-w-md bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-[28px] sm:rounded-[28px] p-4 sm:p-5 space-y-3.5 shadow-2xl max-h-[88dvh] overflow-y-auto no-scrollbar sx-sheet-enter"
       >
         <div className="w-10 h-1 rounded-full bg-[var(--sx-on-surface-muted)]/35 mx-auto mb-1" />
 

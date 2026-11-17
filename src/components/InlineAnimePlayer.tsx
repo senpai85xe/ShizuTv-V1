@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Hls from 'hls.js';
 import {
   ArrowLeft,
@@ -18,12 +19,14 @@ import {
   Pause,
   PictureInPicture2,
   Play,
+  Radio,
   RotateCcw,
   RotateCw,
   Scaling,
   Settings,
   Sun,
   Unlock,
+  Users,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -82,6 +85,15 @@ import { PlayerEpisodeDrawer } from './PlayerEpisodeDrawer';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
 import { PlayerCommentsModal } from './PlayerCommentsModal';
 import {
+  CreateWatchRoomModal,
+  CreateWatchRoomPayload,
+} from './CreateWatchRoomModal';
+import {
+  FloatingEmojiItem,
+  shouldApplyRemoteSeek,
+  WatchPartySyncPayload,
+} from '../utils/watchParty';
+import {
   EpisodeChangeDirection,
   getEpisodeBadgeTransitionClass,
   getEpisodeChangeDirection,
@@ -113,12 +125,26 @@ const ScreenRotateIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h
   </svg>
 );
 
+export interface InlineWatchPartyMode {
+  isHost: boolean;
+  viewerCount: number;
+  remoteSyncSignal?: { seq: number; currentTime: number; isPlaying: boolean } | null;
+  onPlaybackSync?: (payload: WatchPartySyncPayload) => void;
+  reactions?: FloatingEmojiItem[];
+  hideBottomControlsBar?: boolean;
+}
+
 interface InlineAnimePlayerProps {
   media: UnifiedMedia;
   episodes: UnifiedEpisode[];
   episodeIndex: number;
   sourceId?: string;
   playSignal?: number;
+  initialTime?: number | null;
+  initialResumePlaying?: boolean;
+  initialSubLang?: 'en' | 'ja';
+  initialEditedCuesMap?: Record<string, SubtitleCue[]>;
+  watchPartyMode?: InlineWatchPartyMode;
   onChangeEpisodeIndex: (nextIndex: number) => void;
 }
 
@@ -128,8 +154,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   episodeIndex,
   sourceId,
   playSignal = 0,
+  initialTime = null,
+  initialResumePlaying = false,
+  initialSubLang = 'en',
+  initialEditedCuesMap,
+  watchPartyMode,
   onChangeEpisodeIndex,
 }) => {
+  const navigate = useNavigate();
   const { state, updatePlayerPrefs, recordHistory, getLibraryEntry, upsertLibraryEntry } =
     useApp();
   const { pipSession, enterInAppPip, closePip, isPipActive } = usePip();
@@ -179,9 +211,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const prevPlaySignalRef = useRef(0);
   const mountedAtRef = useRef(typeof performance !== 'undefined' ? performance.now() : Date.now());
   const handledPipExitRef = useRef(false);
-  const pendingStartTimeRef = useRef<number | null>(null);
-  const pendingResumePlayRef = useRef<boolean>(false);
+  const pendingStartTimeRef = useRef<number | null>(
+    typeof initialTime === 'number' && initialTime > 0 ? initialTime : null,
+  );
+  const pendingResumePlayRef = useRef<boolean>(Boolean(initialResumePlaying));
   const pipConsumedOnMountRef = useRef(false);
+  const isApplyingRemoteSyncRef = useRef(false);
+  const lastAppliedSyncSeqRef = useRef<number>(0);
 
   const ambientEnabled = state.playerPrefs.ambientGlow;
   const activeAudioLangOption = resolveAudioLanguageOption(state.playerPrefs.audioLanguage);
@@ -193,16 +229,20 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const [muted, setMuted] = useState(false);
   const [brightness, setBrightness] = useState(1);
   const [speed, setSpeed] = useState(state.playerPrefs.defaultSpeed || 1);
-  const [activeSubLang, setActiveSubLang] = useState<'en' | 'ja'>('en');
-  const [editedCuesMap, setEditedCuesMap] = useState<Record<string, SubtitleCue[]>>({});
+  const [activeSubLang, setActiveSubLang] = useState<'en' | 'ja'>(initialSubLang);
+  const [editedCuesMap, setEditedCuesMap] = useState<Record<string, SubtitleCue[]>>(
+    initialEditedCuesMap ?? {},
+  );
   const [hlsQualityOptions, setHlsQualityOptions] = useState<HlsQualityOption[]>([
     { index: -1, label: 'Auto' },
   ]);
   const [selectedHlsLevel, setSelectedHlsLevel] = useState<number>(-1);
+  const [showCreateWatchPartyModal, setShowCreateWatchPartyModal] = useState(false);
 
   const [showControls, setShowControls] = useState(true);
   const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
   const [isCssFullscreen, setIsCssFullscreen] = useState(false);
+  const wantsFullscreenRef = useRef(false);
   const isFullscreen = isNativeFullscreen || isCssFullscreen;
   const [isLandscapeRotated, setIsLandscapeRotated] = useState(false);
   const [nativeOrientationLandscape, setNativeOrientationLandscape] = useState(false);
@@ -243,17 +283,15 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     null,
   );
   const seekSeqRef = useRef(0);
-  const [epTransition, setEpTransition] = useState<{ index: number; dir: EpisodeChangeDirection }>({
-    index: safeIndex,
-    dir: 'none',
-  });
-  if (epTransition.index !== safeIndex) {
-    setEpTransition({
-      index: safeIndex,
-      dir: getEpisodeChangeDirection(epTransition.index, safeIndex),
-    });
-  }
-  const epBadgeAnimClass = getEpisodeBadgeTransitionClass(epTransition.dir);
+  const prevEpIndexRef = useRef(safeIndex);
+  const [epTransitionDir, setEpTransitionDir] = useState<EpisodeChangeDirection>('none');
+  useEffect(() => {
+    if (prevEpIndexRef.current !== safeIndex) {
+      setEpTransitionDir(getEpisodeChangeDirection(prevEpIndexRef.current, safeIndex));
+      prevEpIndexRef.current = safeIndex;
+    }
+  }, [safeIndex]);
+  const epBadgeAnimClass = getEpisodeBadgeTransitionClass(epTransitionDir);
   const [skipIntervals, setSkipIntervals] = useState<SkipInterval[]>([]);
 
   const autoPlay = state.playerPrefs.autoPlay;
@@ -291,8 +329,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   useEffect(() => {
     const onFsChange = () => {
       const active = Boolean(document.fullscreenElement);
+      if (active && !wantsFullscreenRef.current) {
+        setIsNativeFullscreen(false);
+        document.exitFullscreen().catch(() => {});
+        return;
+      }
       setIsNativeFullscreen(active);
-      if (!active && !isCssFullscreen) {
+      if (!active && !wantsFullscreenRef.current) {
+        setIsCssFullscreen(false);
         setIsLandscapeRotated(false);
         setNativeOrientationLandscape(false);
         setIsScreenLocked(false);
@@ -303,7 +347,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     };
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
-  }, [isCssFullscreen]);
+  }, []);
 
   useEffect(() => {
     if (!isFullscreen) return;
@@ -483,6 +527,38 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playSignal]);
 
+  // Apply incoming Watch Together live sync state
+  useEffect(() => {
+    const signal = watchPartyMode?.remoteSyncSignal;
+    if (!signal || signal.seq === lastAppliedSyncSeqRef.current) return;
+    lastAppliedSyncSeqRef.current = signal.seq;
+
+    const v = videoRef.current;
+    isApplyingRemoteSyncRef.current = true;
+    if (!v || v.readyState === 0) {
+      pendingStartTimeRef.current = signal.currentTime;
+      pendingResumePlayRef.current = signal.isPlaying;
+    } else {
+      if (shouldApplyRemoteSeek(v.currentTime || 0, signal.currentTime)) {
+        try {
+          v.currentTime = signal.currentTime;
+          setCurrentTime(signal.currentTime);
+        } catch {
+          // Ignore seek errors before ready
+        }
+      }
+      if (signal.isPlaying && v.paused) {
+        v.play().catch(() => {});
+      } else if (!signal.isPlaying && !v.paused) {
+        v.pause();
+      }
+    }
+    const clearTimer = window.setTimeout(() => {
+      isApplyingRemoteSyncRef.current = false;
+    }, 350);
+    return () => window.clearTimeout(clearTimer);
+  }, [watchPartyMode?.remoteSyncSignal]);
+
   // Sync playback rate & muted state
   useEffect(() => {
     if (videoRef.current) {
@@ -497,14 +573,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     fetchAniSkipIntervals(media.idMal, currentEpisode.number).then(setSkipIntervals);
   }, [media.idMal, currentEpisode.number]);
 
-  // Subtle ambient background glow sampled from active playing frames
+  // Subtle ambient background glow sampled from active playing frames (paused in fullscreen to prevent lag)
   useEffect(() => {
-    if (!ambientEnabled || !playing) return;
+    if (!ambientEnabled || !playing || isFullscreen) return;
     let rafId = 0;
     let lastSample = 0;
 
     const sampleAmbient = (ts: number) => {
-      if (ts - lastSample >= 90) {
+      if (ts - lastSample >= 120) {
         lastSample = ts;
         const video = videoRef.current;
         const canvas = ambientCanvasRef.current;
@@ -524,7 +600,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
 
     rafId = window.requestAnimationFrame(sampleAmbient);
     return () => window.cancelAnimationFrame(rafId);
-  }, [ambientEnabled, playing]);
+  }, [ambientEnabled, playing, isFullscreen]);
 
   // Record Watch History & advance progress when playing an episode
   useEffect(() => {
@@ -591,6 +667,21 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     seekFeedbackTimerRef.current = window.setTimeout(() => setSeekBadge(null), 650);
   };
 
+  const emitWatchPartySync = (
+    action: WatchPartySyncPayload['action'],
+    nextTime: number,
+    nextPlaying: boolean,
+  ) => {
+    if (!watchPartyMode?.onPlaybackSync || isApplyingRemoteSyncRef.current) return;
+    watchPartyMode.onPlaybackSync({
+      action,
+      currentTime: nextTime,
+      isPlaying: nextPlaying,
+      episodeNumber: currentEpisode.number,
+      episodeTitle: currentEpisode.title,
+    });
+  };
+
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
@@ -598,9 +689,11 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       if (pipSession) closePip();
       v.play().catch(() => {});
       scheduleHideControls(true);
+      emitWatchPartySync('play', v.currentTime || 0, true);
     } else {
       v.pause();
       scheduleHideControls(false);
+      emitWatchPartySync('pause', v.currentTime || 0, false);
     }
   };
 
@@ -761,9 +854,44 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     setCurrentTime(next);
     triggerSeekFeedback(delta);
     scheduleHideControls();
+    emitWatchPartySync('seek', next, !v.paused);
+  };
+
+  const handleWatchPartyModalSubmit = (payload: CreateWatchRoomPayload) => {
+    setShowCreateWatchPartyModal(false);
+    const v = videoRef.current;
+    const snapTime = Math.max(0, Math.floor(v?.currentTime ?? currentTime ?? 0));
+    if (v && !v.paused) {
+      v.pause();
+    }
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    setIsCssFullscreen(false);
+    navigate('/watch-together/new', {
+      state: {
+        autoCreateWatchParty: {
+          media: payload.media,
+          episodes: payload.episodes,
+          episodeIndex: payload.episodeIndex,
+          track: payload.track,
+          roomName: payload.roomName,
+          isPublic: payload.isPublic,
+          userName: payload.userName,
+          hostAvatar: payload.hostAvatar,
+          currentTime:
+            payload.media.id === media.id &&
+            payload.episodes[payload.episodeIndex]?.number === currentEpisode.number
+              ? snapTime
+              : 0,
+          isPlaying: true,
+        },
+      },
+    });
   };
 
   const enterFullscreen = async () => {
+    wantsFullscreenRef.current = true;
     setShowSettingsMenu(false);
     setShowEpisodeDrawer(false);
     setShowAudioLangMenu(false);
@@ -782,11 +910,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     try {
       if (playerContainerRef.current && !document.fullscreenElement) {
         await playerContainerRef.current.requestFullscreen();
+        if (!wantsFullscreenRef.current && document.fullscreenElement) {
+          await document.exitFullscreen().catch(() => {});
+        }
       }
     } catch {
       // Fallback CSS cinema fullscreen remains smoothly engaged
     }
-    if (playing) {
+    if (wantsFullscreenRef.current && playing) {
       hideTimerRef.current = window.setTimeout(() => {
         setShowControls(false);
       }, 5200);
@@ -794,6 +925,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   };
 
   const exitFullscreen = async () => {
+    wantsFullscreenRef.current = false;
     if (hideTimerRef.current) {
       window.clearTimeout(hideTimerRef.current);
       hideTimerRef.current = null;
@@ -1234,53 +1366,50 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     <section
       data-testid="inline-anime-player"
       aria-label={`Inline player for ${animeTitle}`}
-      className="sx-player-stage-enter relative mb-5"
+      className={`sx-player-stage-enter relative z-20 ${
+        watchPartyMode?.hideBottomControlsBar ? 'mb-0' : 'mb-5'
+      }`}
     >
-      {/* Ambient Aura Glow Effect around the Player when Anime Plays */}
-      <div
-        data-testid="inline-player-ambient"
-        data-playing={playing ? 'true' : 'false'}
-        aria-hidden="true"
-        className={`pointer-events-none absolute -inset-4 sm:-inset-7 -z-10 transition-all duration-700 ${
-          ambientEnabled
-            ? playing
-              ? 'opacity-80 scale-[1.03]'
-              : 'opacity-25 scale-[0.98]'
-            : 'opacity-0'
-        }`}
-      >
-        {backdropArtwork && (
-          <img
-            src={backdropArtwork}
-            alt=""
-            className={`w-full h-full object-cover rounded-[42px] blur-3xl saturate-150 transition-transform duration-1000 ${
-              playing ? 'animate-pulse' : ''
-            }`}
-            style={{ animationDuration: '4.8s' }}
-          />
-        )}
-
-        <canvas
-          ref={ambientCanvasRef}
-          width={32}
-          height={18}
-          className={`absolute inset-0 w-full h-full rounded-[42px] blur-3xl saturate-150 transition-opacity duration-500 ${
-            playing && hasVideoFrame ? 'opacity-85' : 'opacity-0'
-          }`}
-        />
-
+      {/* Ambient Aura Glow Effect around Inline Player (unmounted/paused during fullscreen for zero GPU lag) */}
+      {!isFullscreen && (
         <div
-          className={`absolute -inset-2 rounded-[40px] blur-2xl transition-opacity duration-700 ${
-            playing ? 'opacity-65' : 'opacity-20'
+          data-testid="inline-player-ambient"
+          data-playing={playing ? 'true' : 'false'}
+          aria-hidden="true"
+          className={`pointer-events-none absolute -inset-4 sm:-inset-7 -z-10 transition-opacity duration-500 ${
+            ambientEnabled ? (playing ? 'opacity-80' : 'opacity-25') : 'opacity-0'
           }`}
-          style={{
-            background:
-              'radial-gradient(circle at 20% 35%, color-mix(in srgb, var(--sx-primary) 42%, transparent), transparent 58%), radial-gradient(circle at 82% 70%, color-mix(in srgb, var(--sx-tertiary) 28%, transparent), transparent 55%)',
-          }}
-        />
-      </div>
+        >
+          {backdropArtwork && ambientEnabled && (
+            <img
+              src={backdropArtwork}
+              alt=""
+              className="w-full h-full object-cover rounded-[42px] blur-3xl saturate-150"
+            />
+          )}
 
-      {/* Outer Video Host (never rotated directly so native :fullscreen rules never conflict) */}
+          <canvas
+            ref={ambientCanvasRef}
+            width={32}
+            height={18}
+            className={`absolute inset-0 w-full h-full rounded-[42px] blur-3xl saturate-150 transition-opacity duration-500 ${
+              playing && hasVideoFrame ? 'opacity-85' : 'opacity-0'
+            }`}
+          />
+
+          <div
+            className={`absolute -inset-2 rounded-[40px] blur-2xl transition-opacity duration-500 ${
+              playing ? 'opacity-65' : 'opacity-20'
+            }`}
+            style={{
+              background:
+                'radial-gradient(circle at 20% 35%, color-mix(in srgb, var(--sx-primary) 42%, transparent), transparent 58%), radial-gradient(circle at 82% 70%, color-mix(in srgb, var(--sx-tertiary) 28%, transparent), transparent 55%)',
+            }}
+          />
+        </div>
+      )}
+
+      {/* Outer Video Host (instant geometry switch on fullscreen enter/exit for zero lag) */}
       <div
         ref={playerContainerRef}
         data-fullscreen={isFullscreen ? 'true' : 'false'}
@@ -1294,10 +1423,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
         style={{
           borderRadius: isFullscreen ? '0px' : `${state.themePrefs.uiRoundness}px`,
         }}
-        className={`bg-black text-white select-none transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+        className={`bg-black text-white select-none ${
           isFullscreen
-            ? 'fixed inset-0 w-full h-full z-50 sx-fs-stage-enter overflow-hidden'
-            : `relative w-full aspect-video border border-white/25 dark:border-white/15 ${
+            ? 'fixed inset-0 w-full h-full z-50 overflow-hidden'
+            : `relative w-full aspect-video border border-white/25 dark:border-white/15 transition-shadow duration-300 ${
                 playing && ambientEnabled
                   ? 'shadow-[0_18px_52px_-12px_rgba(0,0,0,0.65),0_0_46px_-8px_color-mix(in srgb,var(--sx-primary)_45%,transparent)]'
                   : 'shadow-[0_14px_38px_rgba(15,23,42,0.28)]'
@@ -1313,22 +1442,30 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           onPointerCancel={handleStagePointerEnd}
           style={
             isFullscreen
-              ? {
-                  width: `${rotationStage.stageWidthPx}px`,
-                  height: `${rotationStage.stageHeightPx}px`,
-                  top: '50%',
-                  left: '50%',
-                  transform: rotationStage.cssRotated
-                    ? 'translate3d(-50%, -50%, 0) rotate(90deg)'
-                    : 'translate3d(-50%, -50%, 0) rotate(0deg)',
-                  borderRadius: '0px',
-                }
+              ? rotationStage.cssRotated
+                ? {
+                    width: `${rotationStage.stageWidthPx}px`,
+                    height: `${rotationStage.stageHeightPx}px`,
+                    top: '50%',
+                    left: '50%',
+                    translate: '-50% -50%',
+                    transform: 'rotate(90deg)',
+                    borderRadius: '0px',
+                  }
+                : {
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    borderRadius: '0px',
+                  }
               : {
                   borderRadius: `${state.themePrefs.uiRoundness}px`,
                 }
           }
-          className={`sx-fs-rotate-spring bg-black ${
-            isFullscreen ? 'absolute touch-none overflow-hidden' : 'absolute inset-0'
+          className={`bg-black ${
+            isFullscreen
+              ? `${rotationStage.cssRotated ? 'sx-fs-rotate-spring ' : ''}absolute touch-none overflow-hidden`
+              : 'absolute inset-0'
           }`}
         >
         {/* Inner Rounded Stage Clipping Wrapper (clips video/vignette/drawer without clipping settings popover in inline mode) */}
@@ -1336,23 +1473,19 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           style={{ borderRadius: isFullscreen ? '0px' : `${state.themePrefs.uiRoundness}px` }}
           className="absolute inset-0 overflow-hidden flex items-center justify-center bg-black"
         >
-          {/* Uncropped Artwork Preview + Blurred Ambient Fill ONLY before first video frame loads */}
-          {backdropArtwork && (
+          {/* Uncropped Artwork Preview + Blurred Ambient Fill ONLY before first video frame loads in inline mode */}
+          {backdropArtwork && !hasVideoFrame && !isFullscreen && (
             <>
               <img
                 src={backdropArtwork}
                 alt=""
                 aria-hidden="true"
-                className={`pointer-events-none absolute inset-0 w-full h-full object-cover blur-2xl scale-110 transition-opacity duration-500 ${
-                  hasVideoFrame || isFullscreen ? 'opacity-0' : 'opacity-45'
-                }`}
+                className="pointer-events-none absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-45"
               />
               <img
                 src={backdropArtwork}
                 alt={currentEpisode.title}
-                className={`pointer-events-none absolute inset-0 w-full h-full object-contain transition-opacity duration-500 ${
-                  hasVideoFrame || isFullscreen ? 'opacity-0' : 'opacity-80'
-                }`}
+                className="pointer-events-none absolute inset-0 w-full h-full object-contain opacity-80"
               />
             </>
           )}
@@ -1605,6 +1738,34 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             </div>
           )}
 
+          {/* Floating Watch Party Animated Emojis across the screen (compositor spring motion) */}
+          {watchPartyMode?.reactions && watchPartyMode.reactions.length > 0 && (
+            <div
+              data-testid="watch-party-player-floating-emojis"
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 bottom-8 top-4 z-30 overflow-hidden"
+            >
+              {watchPartyMode.reactions.map((item) => (
+                <div
+                  key={item.id}
+                  style={
+                    {
+                      left: `${item.xPercent}%`,
+                      '--sx-emoji-drift': `${item.driftPx}px`,
+                      '--sx-emoji-rot': `${item.rotateDeg}deg`,
+                      '--sx-emoji-scale': String(item.scale),
+                    } as React.CSSProperties
+                  }
+                  className="sx-watch-emoji-float absolute bottom-0 flex flex-col items-center select-none"
+                >
+                  <span className="text-2xl sm:text-3xl drop-shadow-[0_4px_12px_rgba(0,0,0,0.55)]">
+                    {item.emoji}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Screen Locked Floating Unlock Shield (only interactive target while locked) */}
           {isFullscreen && isScreenLocked && (
             <div
@@ -1764,6 +1925,27 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                     <ListVideo className="w-4 h-4" />
                   </button>
 
+                  {!watchPartyMode && (
+                    <button
+                      type="button"
+                      aria-label="Watch Together"
+                      title="Watch Together"
+                      data-testid="inline-player-watch-party-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowCreateWatchPartyModal(true);
+                        setShowSettingsMenu(false);
+                        setShowAudioLangMenu(false);
+                        setShowCommentsModal(false);
+                        setShowEpisodeDrawer(false);
+                        setShowSpeedMenu(false);
+                      }}
+                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-2xl border border-white/15 flex items-center justify-center text-white transition-colors shrink-0"
+                    >
+                      <Users className="w-4 h-4" />
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     aria-label="Player settings"
@@ -1787,19 +1969,40 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                 </div>
               </div>
             ) : (
-              <div
-                className={`relative flex items-center justify-between gap-2 transition-all duration-300 ${
-                  controlsVisible
-                    ? 'opacity-100 translate-y-0 pointer-events-auto'
-                    : 'opacity-0 -translate-y-2 pointer-events-none'
-                }`}
-              >
-                <span
-                  key={`ep-pill-${currentEpisode.id}`}
-                  className={`${epBadgeAnimClass} px-2.5 py-1 rounded-full bg-black/45 backdrop-blur-md border border-white/15 text-[10px] sm:text-[11px] font-bold tracking-wide text-white/95 truncate max-w-[60%]`}
+              <>
+                {watchPartyMode && !controlsVisible && (
+                  <span
+                    data-testid="watch-party-live-badge"
+                    className="pointer-events-none absolute top-2.5 left-2.5 sm:top-4 sm:left-4 z-20 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/90 backdrop-blur-md border border-red-400/40 text-[10px] sm:text-[11px] font-black tracking-wide text-white shadow-sm"
+                  >
+                    <Radio className="w-3 h-3 animate-pulse" />
+                    <span>LIVE</span>
+                  </span>
+                )}
+                <div
+                  className={`relative flex items-center justify-between gap-2 transition-all duration-300 ${
+                    controlsVisible
+                      ? 'opacity-100 translate-y-0 pointer-events-auto'
+                      : 'opacity-0 -translate-y-2 pointer-events-none'
+                  }`}
                 >
-                  EP {currentEpisode.number} · {currentEpisode.title}
-                </span>
+                  <div className="flex items-center gap-1.5 min-w-0 max-w-[62%]">
+                    {watchPartyMode ? (
+                      <span
+                        data-testid="watch-party-live-badge"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/90 backdrop-blur-md border border-red-400/40 text-[10px] sm:text-[11px] font-black tracking-wide text-white shrink-0 shadow-sm"
+                      >
+                        <Radio className="w-3 h-3 animate-pulse" />
+                        <span>LIVE</span>
+                      </span>
+                    ) : null}
+                    <span
+                      key={`ep-pill-${currentEpisode.id}`}
+                      className={`${epBadgeAnimClass} px-2.5 py-1 rounded-full bg-black/45 backdrop-blur-md border border-white/15 text-[10px] sm:text-[11px] font-bold tracking-wide text-white/95 truncate`}
+                    >
+                      EP {currentEpisode.number} · {currentEpisode.title}
+                    </span>
+                  </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
@@ -1830,6 +2033,23 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                     <ListVideo className="w-4 h-4" />
                   </button>
 
+                  {!watchPartyMode && (
+                    <button
+                      type="button"
+                      aria-label="Watch Together"
+                      title="Watch Together"
+                      data-testid="inline-player-watch-party-btn"
+                      onClick={() => {
+                        setShowCreateWatchPartyModal(true);
+                        setShowSettingsMenu(false);
+                        setShowEpisodeDrawer(false);
+                      }}
+                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-black/45 hover:bg-black/70 backdrop-blur-md border border-white/15 flex items-center justify-center text-white transition-colors"
+                    >
+                      <Users className="w-4 h-4" />
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     aria-label="Player settings"
@@ -1848,6 +2068,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                   </button>
                 </div>
               </div>
+              </>
             )}
 
             {/* Center Playback Cluster (-10s · Play/Pause · +10s) */}
@@ -2080,6 +2301,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       const next = Number(e.target.value);
                       if (videoRef.current) videoRef.current.currentTime = next;
                       setCurrentTime(next);
+                      emitWatchPartySync('seek', next, playing);
                     }}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   />
@@ -2201,6 +2423,20 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             episodeTitle={currentEpisode.title}
             onClose={() => setShowCommentsModal(false)}
           />
+
+          {/* Quick Pre-Seeded Watch Party Modal (renders inside fullscreen stage when fullscreen) */}
+          {!watchPartyMode && (
+            <CreateWatchRoomModal
+              open={showCreateWatchPartyModal}
+              variant="quick-episode"
+              isFullscreen={isFullscreen}
+              initialMedia={media}
+              initialEpisodes={episodes}
+              initialEpisodeNumber={currentEpisode.number}
+              onClose={() => setShowCreateWatchPartyModal(false)}
+              onSubmit={handleWatchPartyModalSubmit}
+            />
+          )}
         </div>
 
         {/* Shared Settings Popover (Playback, Quality, Subtitle Editor) — z-40 & rotated cleanly with stage */}
@@ -2253,106 +2489,109 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           }}
           episodeCount={episodes.length}
           compact={!isFullscreen}
+          portalInline={!isFullscreen}
         />
         </div>
       </div>
 
-      {/* Episode Navigation & Auto Controls Bar Below Player (responsive across all viewports) */}
-      <div
-        data-testid="inline-player-controls-bar"
-        className="mt-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-y-2 gap-x-1.5 sm:gap-2"
-      >
-        <button
-          type="button"
-          data-testid="inline-player-prev-btn"
-          disabled={!navState.hasPrev}
-          onClick={() => onChangeEpisodeIndex(navState.prevIndex)}
-          className="order-1 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-extrabold text-[var(--sx-on-surface)] hover:text-[var(--sx-primary)] disabled:opacity-35 disabled:pointer-events-none transition-colors shrink-0"
+      {/* Episode Navigation & Auto Controls Bar Below Player (hidden when WatchTogetherRoomPage supplies its own controls row) */}
+      {!watchPartyMode?.hideBottomControlsBar && (
+        <div
+          data-testid="inline-player-controls-bar"
+          className="mt-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-y-2 gap-x-1.5 sm:gap-2"
         >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          <span>Prev</span>
-        </button>
-
-        <span className="order-2 sm:hidden text-[11px] font-extrabold text-[var(--sx-on-surface-muted)] tabular-nums">
-          EP {currentEpisode.number} / {episodes.length || 1}
-        </span>
-
-        <div className="order-4 sm:order-2 w-full sm:w-auto sm:flex-1 min-w-0 grid grid-cols-3 sm:flex sm:flex-wrap items-center sm:justify-center gap-1.5 sm:gap-2">
           <button
             type="button"
-            data-testid="toggle-auto-play"
-            aria-pressed={autoPlay}
-            onClick={() => updatePlayerPrefs({ autoPlay: !autoPlay })}
-            className={`w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full backdrop-blur-lg border text-[10px] sm:text-[11px] font-bold whitespace-nowrap transition-all ${
-              autoPlay
-                ? 'bg-[var(--sx-surface-container)]/45 dark:bg-white/12 border-[var(--sx-primary)]/45 text-[var(--sx-on-surface)] shadow-sm'
-                : 'bg-[var(--sx-surface-container)]/22 dark:bg-white/5 border-white/30 dark:border-white/10 text-[var(--sx-on-surface-muted)]'
-            }`}
+            data-testid="inline-player-prev-btn"
+            disabled={!navState.hasPrev}
+            onClick={() => onChangeEpisodeIndex(navState.prevIndex)}
+            className="order-1 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-extrabold text-[var(--sx-on-surface)] hover:text-[var(--sx-primary)] disabled:opacity-35 disabled:pointer-events-none transition-colors shrink-0"
           >
-            <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Prev</span>
+          </button>
+
+          <span className="order-2 sm:hidden text-[11px] font-extrabold text-[var(--sx-on-surface-muted)] tabular-nums">
+            EP {currentEpisode.number} / {episodes.length || 1}
+          </span>
+
+          <div className="order-4 sm:order-2 w-full sm:w-auto sm:flex-1 min-w-0 grid grid-cols-3 sm:flex sm:flex-wrap items-center sm:justify-center gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              data-testid="toggle-auto-play"
+              aria-pressed={autoPlay}
+              onClick={() => updatePlayerPrefs({ autoPlay: !autoPlay })}
+              className={`w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full backdrop-blur-lg border text-[10px] sm:text-[11px] font-bold whitespace-nowrap transition-all ${
                 autoPlay
-                  ? 'bg-[var(--sx-primary)] shadow-[0_0_8px_var(--sx-primary)]'
-                  : 'bg-[var(--sx-on-surface-muted)]/60'
+                  ? 'bg-[var(--sx-surface-container)]/45 dark:bg-white/12 border-[var(--sx-primary)]/45 text-[var(--sx-on-surface)] shadow-sm'
+                  : 'bg-[var(--sx-surface-container)]/22 dark:bg-white/5 border-white/30 dark:border-white/10 text-[var(--sx-on-surface-muted)]'
               }`}
-            />
-            <span className="truncate">Auto Play</span>
-          </button>
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${
+                  autoPlay
+                    ? 'bg-[var(--sx-primary)] shadow-[0_0_8px_var(--sx-primary)]'
+                    : 'bg-[var(--sx-on-surface-muted)]/60'
+                }`}
+              />
+              <span className="truncate">Auto Play</span>
+            </button>
 
-          <button
-            type="button"
-            data-testid="toggle-auto-next"
-            aria-pressed={autoNext}
-            onClick={() => updatePlayerPrefs({ autoNextEpisode: !autoNext })}
-            className={`w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full backdrop-blur-lg border text-[10px] sm:text-[11px] font-bold whitespace-nowrap transition-all ${
-              autoNext
-                ? 'bg-[var(--sx-surface-container)]/45 dark:bg-white/12 border-[var(--sx-primary)]/45 text-[var(--sx-on-surface)] shadow-sm'
-                : 'bg-[var(--sx-surface-container)]/22 dark:bg-white/5 border-white/30 dark:border-white/10 text-[var(--sx-on-surface-muted)]'
-            }`}
-          >
-            <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${
+            <button
+              type="button"
+              data-testid="toggle-auto-next"
+              aria-pressed={autoNext}
+              onClick={() => updatePlayerPrefs({ autoNextEpisode: !autoNext })}
+              className={`w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full backdrop-blur-lg border text-[10px] sm:text-[11px] font-bold whitespace-nowrap transition-all ${
                 autoNext
-                  ? 'bg-[var(--sx-primary)] shadow-[0_0_8px_var(--sx-primary)]'
-                  : 'bg-[var(--sx-on-surface-muted)]/60'
+                  ? 'bg-[var(--sx-surface-container)]/45 dark:bg-white/12 border-[var(--sx-primary)]/45 text-[var(--sx-on-surface)] shadow-sm'
+                  : 'bg-[var(--sx-surface-container)]/22 dark:bg-white/5 border-white/30 dark:border-white/10 text-[var(--sx-on-surface-muted)]'
               }`}
-            />
-            <span className="truncate">Auto Next</span>
-          </button>
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${
+                  autoNext
+                    ? 'bg-[var(--sx-primary)] shadow-[0_0_8px_var(--sx-primary)]'
+                    : 'bg-[var(--sx-on-surface-muted)]/60'
+                }`}
+              />
+              <span className="truncate">Auto Next</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="toggle-auto-skip"
+              aria-pressed={autoSkip}
+              onClick={() => updatePlayerPrefs({ autoSkipOp: !autoSkip, autoSkipEd: !autoSkip })}
+              className={`w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full backdrop-blur-lg border text-[10px] sm:text-[11px] font-bold whitespace-nowrap transition-all ${
+                autoSkip
+                  ? 'bg-[var(--sx-surface-container)]/45 dark:bg-white/12 border-[var(--sx-primary)]/45 text-[var(--sx-on-surface)] shadow-sm'
+                  : 'bg-[var(--sx-surface-container)]/22 dark:bg-white/5 border-white/30 dark:border-white/10 text-[var(--sx-on-surface-muted)]'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${
+                  autoSkip
+                    ? 'bg-[var(--sx-primary)] shadow-[0_0_8px_var(--sx-primary)]'
+                    : 'bg-[var(--sx-on-surface-muted)]/60'
+                }`}
+              />
+              <span className="truncate">Auto Skip</span>
+            </button>
+          </div>
 
           <button
             type="button"
-            data-testid="toggle-auto-skip"
-            aria-pressed={autoSkip}
-            onClick={() => updatePlayerPrefs({ autoSkipOp: !autoSkip, autoSkipEd: !autoSkip })}
-            className={`w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full backdrop-blur-lg border text-[10px] sm:text-[11px] font-bold whitespace-nowrap transition-all ${
-              autoSkip
-                ? 'bg-[var(--sx-surface-container)]/45 dark:bg-white/12 border-[var(--sx-primary)]/45 text-[var(--sx-on-surface)] shadow-sm'
-                : 'bg-[var(--sx-surface-container)]/22 dark:bg-white/5 border-white/30 dark:border-white/10 text-[var(--sx-on-surface-muted)]'
-            }`}
+            data-testid="inline-player-next-btn"
+            disabled={!navState.hasNext}
+            onClick={() => onChangeEpisodeIndex(navState.nextIndex)}
+            className="order-3 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-extrabold text-[var(--sx-on-surface)] hover:text-[var(--sx-primary)] disabled:opacity-35 disabled:pointer-events-none transition-colors shrink-0"
           >
-            <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${
-                autoSkip
-                  ? 'bg-[var(--sx-primary)] shadow-[0_0_8px_var(--sx-primary)]'
-                  : 'bg-[var(--sx-on-surface-muted)]/60'
-              }`}
-            />
-            <span className="truncate">Auto Skip</span>
+            <span>Next</span>
+            <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
-
-        <button
-          type="button"
-          data-testid="inline-player-next-btn"
-          disabled={!navState.hasNext}
-          onClick={() => onChangeEpisodeIndex(navState.nextIndex)}
-          className="order-3 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-extrabold text-[var(--sx-on-surface)] hover:text-[var(--sx-primary)] disabled:opacity-35 disabled:pointer-events-none transition-colors shrink-0"
-        >
-          <span>Next</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </button>
-      </div>
+      )}
     </section>
   );
 };

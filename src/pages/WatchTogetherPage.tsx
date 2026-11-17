@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  ChevronLeft,
-  KeyRound,
-  LogIn,
+  Clock,
+  MessageSquare,
   MonitorOff,
   Plus,
   RotateCw,
@@ -11,39 +10,52 @@ import {
   Users,
 } from 'lucide-react';
 import {
-  applyCodePaste,
   buildWatchPartyWsUrl,
-  createEmptyCodeSlots,
+  filterMyEndedRooms,
+  filterMyLiveRooms,
   filterPublicRooms,
+  formatRoomClosedAgo,
+  formatRoomDuration,
   getHostDisplayName,
+  getOrCreateWatchPartyClientId,
+  getParticipantInitial,
   isValidRoomCode,
-  joinCodeSlots,
   normalizeRoomCode,
-  updateCodeSlot,
-  WATCH_PARTY_CODE_LENGTH,
+  resolveDefaultDisplayName,
+  WatchPartyEndedRoom,
+  WatchPartyLobbyTab,
   WatchPartyRoom,
 } from '../utils/watchParty';
+import { useApp } from '../store/AppContext';
 import { SmartImage } from '../components/SmartImage';
+import {
+  CreateWatchRoomModal,
+  CreateWatchRoomPayload,
+} from '../components/CreateWatchRoomModal';
 
 export const WatchTogetherPage: React.FC = () => {
   const navigate = useNavigate();
-  const location = useLocation();
+  const { state } = useApp();
 
-  const [codeSlots, setCodeSlots] = useState<string[]>(() =>
-    createEmptyCodeSlots(WATCH_PARTY_CODE_LENGTH),
-  );
-  const slotInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const clientId = useMemo(() => getOrCreateWatchPartyClientId(), []);
+  const displayName = resolveDefaultDisplayName(state.profiles);
+
+  const [roomCodeInput, setRoomCodeInput] = useState('');
   const [joinError, setJoinError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
+  const [activeTab, setActiveTab] = useState<WatchPartyLobbyTab>('live');
   const [publicRooms, setPublicRooms] = useState<WatchPartyRoom[]>([]);
+  const [allLiveRooms, setAllLiveRooms] = useState<WatchPartyRoom[]>([]);
+  const [endedRooms, setEndedRooms] = useState<WatchPartyEndedRoom[]>([]);
   const [loadingRooms, setLoadingRooms] = useState(true);
   const [refreshSpinning, setRefreshSpinning] = useState(false);
 
-  const enteredCode = joinCodeSlots(codeSlots);
-  const canJoinCode = isValidRoomCode(enteredCode) && !joining;
+  const normalizedInputCode = normalizeRoomCode(roomCodeInput);
+  const canJoinCode = isValidRoomCode(normalizedInputCode) && !joining;
 
-  const fetchPublicRooms = useCallback(async (manual = false) => {
+  const fetchLobbyState = useCallback(async (manual = false) => {
     if (manual) {
       setRefreshSpinning(true);
     } else {
@@ -52,9 +64,21 @@ export const WatchTogetherPage: React.FC = () => {
     try {
       const res = await fetch('/api/watch-party/rooms');
       if (res.ok) {
-        const data = (await res.json()) as { rooms?: WatchPartyRoom[] };
+        const data = (await res.json()) as {
+          rooms?: WatchPartyRoom[];
+          allLiveRooms?: WatchPartyRoom[];
+          endedRooms?: WatchPartyEndedRoom[];
+        };
         if (Array.isArray(data.rooms)) {
           setPublicRooms(filterPublicRooms(data.rooms));
+        }
+        if (Array.isArray(data.allLiveRooms)) {
+          setAllLiveRooms(data.allLiveRooms);
+        } else if (Array.isArray(data.rooms)) {
+          setAllLiveRooms(data.rooms);
+        }
+        if (Array.isArray(data.endedRooms)) {
+          setEndedRooms(data.endedRooms);
         }
       }
     } catch {
@@ -68,7 +92,7 @@ export const WatchTogetherPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    void fetchPublicRooms(false);
+    void fetchLobbyState(false);
 
     if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
     let ws: WebSocket | null = null;
@@ -86,9 +110,21 @@ export const WatchTogetherPage: React.FC = () => {
           const msg = JSON.parse(String(event.data)) as {
             type?: string;
             rooms?: WatchPartyRoom[];
+            allLiveRooms?: WatchPartyRoom[];
+            endedRooms?: WatchPartyEndedRoom[];
           };
-          if (msg.type === 'lobby:rooms' && Array.isArray(msg.rooms)) {
-            setPublicRooms(filterPublicRooms(msg.rooms));
+          if (msg.type === 'lobby:rooms') {
+            if (Array.isArray(msg.rooms)) {
+              setPublicRooms(filterPublicRooms(msg.rooms));
+            }
+            if (Array.isArray(msg.allLiveRooms)) {
+              setAllLiveRooms(msg.allLiveRooms);
+            } else if (Array.isArray(msg.rooms)) {
+              setAllLiveRooms(msg.rooms);
+            }
+            if (Array.isArray(msg.endedRooms)) {
+              setEndedRooms(msg.endedRooms);
+            }
             setLoadingRooms(false);
           }
         } catch {
@@ -122,7 +158,7 @@ export const WatchTogetherPage: React.FC = () => {
         }
       }
     };
-  }, [fetchPublicRooms]);
+  }, [fetchLobbyState]);
 
   const navigateIntoRoom = (roomCode: string, room?: WatchPartyRoom) => {
     const normalized = normalizeRoomCode(roomCode);
@@ -137,7 +173,7 @@ export const WatchTogetherPage: React.FC = () => {
             : `Episode ${idx + 1}`,
         thumbnail: room.mediaBanner || room.mediaCover || null,
       }));
-      navigate(`/player?room=${encodeURIComponent(normalized)}`, {
+      navigate(`/watch-together/${encodeURIComponent(normalized)}`, {
         state: {
           media: {
             id: room.mediaId,
@@ -153,12 +189,12 @@ export const WatchTogetherPage: React.FC = () => {
       });
       return;
     }
-    navigate(`/player?room=${encodeURIComponent(normalized)}`);
+    navigate(`/watch-together/${encodeURIComponent(normalized)}`);
   };
 
   const handleJoinByCode = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!isValidRoomCode(enteredCode)) {
+    if (!isValidRoomCode(normalizedInputCode)) {
       setJoinError('Enter a 6-character room code to join.');
       return;
     }
@@ -166,327 +202,451 @@ export const WatchTogetherPage: React.FC = () => {
     setJoining(true);
     setJoinError(null);
     try {
-      const res = await fetch(`/api/watch-party/rooms/${encodeURIComponent(enteredCode)}`);
+      const res = await fetch(`/api/watch-party/rooms/${encodeURIComponent(normalizedInputCode)}`);
       if (!res.ok) {
-        setJoinError(`Room ${enteredCode} was not found. Check the code and try again.`);
+        setJoinError(`Room ${normalizedInputCode} was not found. Check the code and try again.`);
         setJoining(false);
         return;
       }
       const data = (await res.json()) as { exists?: boolean; room?: WatchPartyRoom };
       if (!data.exists || !data.room) {
-        setJoinError(`Room ${enteredCode} was not found.`);
+        setJoinError(`Room ${normalizedInputCode} was not found.`);
         setJoining(false);
         return;
       }
-      navigateIntoRoom(enteredCode, data.room);
+      navigateIntoRoom(normalizedInputCode, data.room);
     } catch {
       setJoinError('Unable to reach Watch Party server. Please try again.');
       setJoining(false);
     }
   };
 
-  const handleSlotChange = (index: number, raw: string) => {
-    setJoinError(null);
-    const { nextSlots, nextFocusIndex } = updateCodeSlot(codeSlots, index, raw);
-    setCodeSlots(nextSlots);
-    if (raw.trim().length > 0 && nextFocusIndex !== index) {
-      slotInputRefs.current[nextFocusIndex]?.focus();
-    }
+  const handleCreateRoomSubmit = (payload: CreateWatchRoomPayload) => {
+    setCreateOpen(false);
+    navigate('/watch-together/new', {
+      state: {
+        autoCreateWatchParty: {
+          media: payload.media,
+          episodes: payload.episodes,
+          episodeIndex: payload.episodeIndex,
+          userName: payload.userName,
+          roomName: payload.roomName,
+          track: payload.track,
+          isPublic: payload.isPublic,
+          hostAvatar: payload.hostAvatar,
+          currentTime: 0,
+          isPlaying: true,
+        },
+      },
+    });
   };
 
-  const handleSlotKeyDown = (
-    index: number,
-    e: React.KeyboardEvent<HTMLInputElement>,
-  ) => {
-    if (e.key === 'Backspace') {
-      if (codeSlots[index]) {
-        const next = [...codeSlots];
-        next[index] = '';
-        setCodeSlots(next);
-        setJoinError(null);
-        return;
-      }
-      if (index > 0) {
-        e.preventDefault();
-        const next = [...codeSlots];
-        next[index - 1] = '';
-        setCodeSlots(next);
-        slotInputRefs.current[index - 1]?.focus();
-      }
-      return;
-    }
-    if (e.key === 'ArrowLeft' && index > 0) {
-      e.preventDefault();
-      slotInputRefs.current[index - 1]?.focus();
-      return;
-    }
-    if (e.key === 'ArrowRight' && index < WATCH_PARTY_CODE_LENGTH - 1) {
-      e.preventDefault();
-      slotInputRefs.current[index + 1]?.focus();
-      return;
-    }
-    if (e.key === 'Enter') {
-      void handleJoinByCode();
-    }
+  const myLiveRooms = useMemo(
+    () => filterMyLiveRooms(allLiveRooms, clientId, displayName),
+    [allLiveRooms, clientId, displayName],
+  );
+  const myEndedRooms = useMemo(
+    () => filterMyEndedRooms(endedRooms, clientId, displayName),
+    [endedRooms, clientId, displayName],
+  );
+
+  const renderLiveRoomCard = (room: WatchPartyRoom) => {
+    const hostName = getHostDisplayName(room);
+    const thumb = room.mediaCover || room.mediaBanner;
+    const trackLabel = (room.track || 'H-Sub').toUpperCase();
+    const roomLabel = room.roomName || `${hostName}'s room`;
+    const msgCount = room.messagesCount ?? 0;
+
+    return (
+      <li
+        key={room.roomCode}
+        data-testid="watch-together-room-card"
+        className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/80 backdrop-blur-xl border border-[var(--sx-outline)] p-3.5 sm:p-4 flex items-start justify-between gap-3.5 transition-colors hover:border-[var(--sx-primary)]/40"
+      >
+        <div className="flex items-start gap-3.5 min-w-0 flex-1">
+          <div className="w-16 h-24 sm:w-20 sm:h-28 rounded-xl overflow-hidden bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] shrink-0 flex items-center justify-center">
+            {thumb ? (
+              <SmartImage
+                src={thumb}
+                alt={room.mediaTitle}
+                fallbackTitle={room.mediaTitle}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <Tv className="w-5 h-5 text-[var(--sx-primary)]" />
+            )}
+          </div>
+
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <h3 className="text-sm sm:text-base font-extrabold text-[var(--sx-on-surface)] truncate">
+              {room.mediaTitle}
+            </h3>
+
+            <p className="text-xs font-medium text-[var(--sx-on-surface-muted)] truncate">
+              <span>Ep {room.episodeNumber}</span>
+              <span aria-hidden="true"> · </span>
+              <span>{trackLabel}</span>
+              <span aria-hidden="true"> · </span>
+              <span>{roomLabel}</span>
+            </p>
+
+            <div className="flex items-center gap-2 min-w-0">
+              {room.hostAvatar ? (
+                <img
+                  src={room.hostAvatar}
+                  alt={hostName}
+                  referrerPolicy="no-referrer"
+                  className="w-5 h-5 rounded-full object-cover shrink-0 border border-[var(--sx-outline)]"
+                />
+              ) : (
+                <span className="w-5 h-5 rounded-full bg-[var(--sx-primary)]/20 text-[var(--sx-primary)] text-[10px] font-extrabold flex items-center justify-center shrink-0">
+                  {getParticipantInitial(hostName)}
+                </span>
+              )}
+              <span className="text-xs font-semibold text-[var(--sx-on-surface)]/85 truncate">
+                {hostName}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--sx-on-surface-muted)] pt-0.5">
+              <span className="inline-flex items-center gap-1 tabular-nums">
+                <Clock className="w-3.5 h-3.5" />
+                <span>Live · {formatRoomDuration(Date.now() - (room.createdAt || room.updatedAt))}</span>
+              </span>
+              <span className="inline-flex items-center gap-1 tabular-nums">
+                <Users className="w-3.5 h-3.5" />
+                <span>{room.participants.length} watching</span>
+              </span>
+              <span className="inline-flex items-center gap-1 tabular-nums">
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>
+                  {msgCount} {msgCount === 1 ? 'message' : 'messages'}
+                </span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          data-testid={`watch-together-join-public-${room.roomCode}`}
+          onClick={() => navigateIntoRoom(room.roomCode, room)}
+          className="min-h-[40px] px-4 py-2 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-bold whitespace-nowrap shrink-0 shadow-sm hover:opacity-90 transition-opacity self-center"
+        >
+          Join
+        </button>
+      </li>
+    );
   };
 
-  const handleSlotPaste = (
-    index: number,
-    e: React.ClipboardEvent<HTMLInputElement>,
-  ) => {
-    e.preventDefault();
-    const pasted = e.clipboardData.getData('text');
-    const { nextSlots, nextFocusIndex } = applyCodePaste(codeSlots, index, pasted);
-    setJoinError(null);
-    setCodeSlots(nextSlots);
-    slotInputRefs.current[nextFocusIndex]?.focus();
-  };
+  const renderEndedRoomCard = (room: WatchPartyEndedRoom) => {
+    const thumb = room.mediaCover || room.mediaBanner;
+    const trackLabel = (room.track || 'H-Sub').toUpperCase();
 
-  const handleBack = () => {
-    if (location.key !== 'default') {
-      navigate(-1);
-    } else {
-      navigate('/home');
-    }
+    return (
+      <li
+        key={`${room.roomCode}-${room.endedAt}`}
+        data-testid="watch-together-ended-card"
+        className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/80 backdrop-blur-xl border border-[var(--sx-outline)] p-3.5 sm:p-4 flex items-start gap-3.5"
+      >
+        <div className="w-16 h-24 sm:w-20 sm:h-28 rounded-xl overflow-hidden bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] shrink-0 flex items-center justify-center">
+          {thumb ? (
+            <SmartImage
+              src={thumb}
+              alt={room.mediaTitle}
+              fallbackTitle={room.mediaTitle}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <Tv className="w-5 h-5 text-[var(--sx-primary)]" />
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <h3 className="text-sm sm:text-base font-extrabold text-[var(--sx-on-surface)] truncate">
+            {room.mediaTitle}
+          </h3>
+
+          <p className="text-xs font-medium text-[var(--sx-on-surface-muted)] truncate">
+            <span>Ep {room.episodeNumber}</span>
+            <span aria-hidden="true"> · </span>
+            <span>{trackLabel}</span>
+            <span aria-hidden="true"> · </span>
+            <span>{room.roomName}</span>
+          </p>
+
+          <div className="flex items-center gap-2 min-w-0">
+            {room.hostAvatar ? (
+              <img
+                src={room.hostAvatar}
+                alt={room.hostName}
+                referrerPolicy="no-referrer"
+                className="w-5 h-5 rounded-full object-cover shrink-0 border border-[var(--sx-outline)]"
+              />
+            ) : (
+              <span className="w-5 h-5 rounded-full bg-[var(--sx-primary)]/20 text-[var(--sx-primary)] text-[10px] font-extrabold flex items-center justify-center shrink-0">
+                {getParticipantInitial(room.hostName)}
+              </span>
+            )}
+            <span className="text-xs font-semibold text-[var(--sx-on-surface)]/85 truncate">
+              {room.hostName}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--sx-on-surface-muted)] pt-0.5">
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <Clock className="w-3.5 h-3.5" />
+              <span>
+                Closed {formatRoomClosedAgo(room.endedAt)} · {formatRoomDuration(room.durationMs)}
+              </span>
+            </span>
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <Users className="w-3.5 h-3.5" />
+              <span>Peak {room.peakParticipants}</span>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1 text-xs text-[var(--sx-on-surface-muted)] tabular-nums">
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>
+              {room.messagesCount} {room.messagesCount === 1 ? 'message' : 'messages'}
+            </span>
+          </div>
+        </div>
+      </li>
+    );
   };
 
   return (
     <div
       data-testid="watch-together-page"
-      className="min-h-screen px-4 sm:px-6 pt-5 pb-12 max-w-2xl mx-auto space-y-6"
+      className="px-4 sm:px-6 lg:px-8 pt-6 pb-8 max-w-4xl mx-auto space-y-5"
     >
-      {/* Top Floating Pill Header */}
-      <header className="flex items-center justify-between gap-3 pt-[env(safe-area-inset-top)]">
-        <div className="inline-flex items-center gap-2.5 pl-1.5 pr-4 py-1.5 rounded-full bg-[var(--sx-surface-container)]/78 backdrop-blur-xl border border-[var(--sx-outline)] shadow-sm">
-          <button
-            type="button"
-            data-testid="watch-together-back-btn"
-            onClick={handleBack}
-            aria-label="Back"
-            className="w-9 h-9 rounded-full bg-[var(--sx-surface-high)]/80 hover:bg-[var(--sx-surface-high)] flex items-center justify-center text-[var(--sx-on-surface)] transition-colors shrink-0"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-[var(--sx-on-surface)] whitespace-nowrap">
+      {/* Header matching reference screenshot */}
+      <header className="flex items-start justify-between gap-4">
+        <div className="space-y-1.5">
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-[var(--sx-on-surface)]">
             Watch Together
           </h1>
+          <p className="text-sm text-[var(--sx-on-surface-muted)] leading-relaxed">
+            Watch anime in sync with friends and chat while you watch.
+          </p>
         </div>
 
         <button
           type="button"
           data-testid="watch-together-refresh-btn"
-          onClick={() => void fetchPublicRooms(true)}
+          onClick={() => void fetchLobbyState(true)}
           aria-label="Refresh active rooms"
           title="Refresh active rooms"
-          className="w-11 h-11 rounded-full bg-[var(--sx-surface-container)]/78 backdrop-blur-xl border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/40 flex items-center justify-center text-[var(--sx-on-surface)] shadow-sm transition-colors shrink-0"
+          className="w-11 h-11 rounded-full bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/40 flex items-center justify-center text-[var(--sx-on-surface)] transition-colors shrink-0"
         >
-          <RotateCw
-            className={`w-4 h-4 ${refreshSpinning ? 'animate-spin' : ''}`}
-          />
+          <RotateCw className={`w-4 h-4 ${refreshSpinning ? 'animate-spin' : ''}`} />
         </button>
       </header>
 
-      {/* Card 1: Join with Code */}
-      <section
-        aria-labelledby="join-code-heading"
-        className="rounded-[28px] bg-[var(--sx-surface-container)]/80 backdrop-blur-2xl border border-[var(--sx-outline)] p-5 sm:p-6 shadow-sm space-y-5"
-      >
-        <div className="flex items-start gap-3.5">
-          <span
-            aria-hidden="true"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--sx-primary)]/12 text-[var(--sx-primary)]"
-          >
-            <KeyRound className="w-5 h-5" />
-          </span>
-          <div className="min-w-0">
-            <h2
-              id="join-code-heading"
-              className="text-base font-extrabold tracking-tight text-[var(--sx-on-surface)]"
-            >
-              Join with Code
-            </h2>
-            <p className="text-xs font-medium text-[var(--sx-on-surface-muted)] mt-0.5 leading-relaxed">
-              Enter a 6-character room code to join a watch party
-            </p>
-          </div>
-        </div>
-
-        <div className="border-t border-[var(--sx-outline)]" />
-
-        <form onSubmit={(e) => void handleJoinByCode(e)} className="space-y-4">
-          <div
-            role="group"
-            aria-label="6-character room code"
-            className="grid grid-cols-6 gap-2 sm:gap-3"
-          >
-            {codeSlots.map((char, idx) => (
-              <input
-                key={idx}
-                ref={(el) => {
-                  slotInputRefs.current[idx] = el;
-                }}
-                type="text"
-                inputMode="text"
-                autoComplete="off"
-                autoCapitalize="characters"
-                maxLength={1}
-                aria-label={`Room code character ${idx + 1}`}
-                data-testid={`watch-together-code-slot-${idx}`}
-                value={char}
-                onChange={(e) => handleSlotChange(idx, e.target.value)}
-                onKeyDown={(e) => handleSlotKeyDown(idx, e)}
-                onPaste={(e) => handleSlotPaste(idx, e)}
-                className="h-12 sm:h-14 w-full rounded-2xl border border-[var(--sx-outline)] bg-[var(--sx-surface-high)]/45 text-center font-mono-tabular text-base sm:text-lg font-extrabold uppercase text-[var(--sx-on-surface)] focus:outline-none focus:border-[var(--sx-primary)] focus:ring-2 focus:ring-[var(--sx-primary)]/20 transition-all"
-              />
-            ))}
-          </div>
-
-          {joinError && (
-            <p
-              data-testid="watch-together-code-error"
-              className="text-xs font-semibold text-red-500 dark:text-red-300 bg-red-500/10 border border-red-500/25 rounded-2xl px-3.5 py-2.5"
-            >
-              {joinError}
-            </p>
-          )}
-
+      {/* Join by Room Code + Create Room CTA */}
+      <div className="space-y-3">
+        <form
+          onSubmit={(e) => void handleJoinByCode(e)}
+          className="flex items-center gap-2.5"
+        >
+          <input
+            type="text"
+            data-testid="watch-together-code-input"
+            value={roomCodeInput}
+            maxLength={8}
+            autoCapitalize="characters"
+            autoComplete="off"
+            aria-label="Room code"
+            onChange={(e) => {
+              setRoomCodeInput(normalizeRoomCode(e.target.value));
+              setJoinError(null);
+            }}
+            placeholder="Room code"
+            className="flex-1 min-w-0 min-h-[48px] px-5 py-3 rounded-full bg-[var(--sx-surface-container)]/90 border border-[var(--sx-outline)] text-sm font-semibold text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
+          />
           <button
             type="submit"
             data-testid="watch-together-join-btn"
             disabled={!canJoinCode}
-            className="w-full min-h-[48px] px-4 py-3 rounded-2xl bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-sm font-bold flex items-center justify-center gap-2 whitespace-nowrap shadow-sm disabled:opacity-55 transition-all"
+            className="min-h-[48px] px-6 py-3 rounded-full bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] text-sm font-bold text-[var(--sx-on-surface)] disabled:opacity-50 whitespace-nowrap shrink-0 transition-colors"
           >
-            <LogIn className="w-4 h-4 shrink-0" />
-            <span>{joining ? 'Joining...' : 'Join Room'}</span>
+            {joining ? 'Joining...' : 'Join'}
           </button>
         </form>
-      </section>
 
-      {/* Card 2: Active Public Rooms */}
-      <section
-        aria-labelledby="active-rooms-heading"
-        className="rounded-[28px] bg-[var(--sx-surface-container)]/80 backdrop-blur-2xl border border-[var(--sx-outline)] p-5 sm:p-6 shadow-sm space-y-5"
+        {joinError && (
+          <p
+            data-testid="watch-together-code-error"
+            className="text-xs font-semibold text-red-500 dark:text-red-300 bg-red-500/10 border border-red-500/25 rounded-2xl px-4 py-2.5"
+          >
+            {joinError}
+          </p>
+        )}
+
+        <button
+          type="button"
+          data-testid="watch-together-host-btn"
+          onClick={() => setCreateOpen(true)}
+          className="w-full min-h-[50px] px-5 py-3 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-sm font-extrabold flex items-center justify-center gap-2 whitespace-nowrap shadow-md hover:opacity-92 active:scale-[0.99] transition-all"
+        >
+          <Plus className="w-4 h-4 shrink-0 stroke-[2.5]" />
+          <span>Create room</span>
+        </button>
+      </div>
+
+      {/* Segmented Lobby Tabs: Live now | Ended | My rooms */}
+      <div
+        role="tablist"
+        aria-label="Watch Together room categories"
+        className="flex items-center gap-2 pt-2 overflow-x-auto no-scrollbar"
       >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <span
-              aria-hidden="true"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--sx-primary)]/12 text-[var(--sx-primary)]"
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'live'}
+          data-testid="watch-tab-live"
+          onClick={() => setActiveTab('live')}
+          className={`min-h-[40px] px-4 py-2 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap inline-flex items-center gap-2 border transition-colors ${
+            activeTab === 'live'
+              ? 'bg-[var(--sx-primary)] border-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
+              : 'bg-[var(--sx-surface-container)]/75 backdrop-blur-md border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+          }`}
+        >
+          <span>Live now</span>
+          <span
+            data-testid="watch-together-active-count"
+            className="tabular-nums opacity-75"
+          >
+            {publicRooms.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'ended'}
+          data-testid="watch-tab-ended"
+          onClick={() => setActiveTab('ended')}
+          className={`min-h-[40px] px-4 py-2 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap inline-flex items-center gap-2 border transition-colors ${
+            activeTab === 'ended'
+              ? 'bg-[var(--sx-primary)] border-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
+              : 'bg-[var(--sx-surface-container)]/75 backdrop-blur-md border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+          }`}
+        >
+          <span>Ended</span>
+          {endedRooms.length > 0 && (
+            <span className="tabular-nums opacity-75">{endedRooms.length}</span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'my'}
+          data-testid="watch-tab-my"
+          onClick={() => setActiveTab('my')}
+          className={`min-h-[40px] px-4 py-2 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap inline-flex items-center gap-2 border transition-colors ${
+            activeTab === 'my'
+              ? 'bg-[var(--sx-primary)] border-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
+              : 'bg-[var(--sx-surface-container)]/75 backdrop-blur-md border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+          }`}
+        >
+          <span>My rooms</span>
+        </button>
+      </div>
+
+      {/* Rooms Feed */}
+      <section aria-live="polite" className="space-y-3">
+        {loadingRooms &&
+        publicRooms.length === 0 &&
+        endedRooms.length === 0 ? (
+          <div className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)] py-12 text-center text-xs font-semibold text-[var(--sx-on-surface-muted)]">
+            Loading watch rooms...
+          </div>
+        ) : activeTab === 'live' ? (
+          publicRooms.length === 0 ? (
+            <div
+              data-testid="watch-together-empty-rooms"
+              className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)] py-12 px-4 text-center space-y-2.5"
             >
-              <Users className="w-5 h-5" />
-            </span>
-            <div className="flex items-center gap-2.5 min-w-0">
-              <h2
-                id="active-rooms-heading"
-                className="text-base font-extrabold tracking-tight text-[var(--sx-on-surface)] truncate"
-              >
-                Active Rooms
-              </h2>
-              <span
-                data-testid="watch-together-active-count"
-                className="inline-flex h-6 min-w-[24px] items-center justify-center rounded-full bg-[var(--sx-primary)]/12 px-2 text-xs font-extrabold tabular-nums text-[var(--sx-primary)]"
-              >
-                {publicRooms.length}
-              </span>
+              <MonitorOff
+                aria-hidden="true"
+                className="w-10 h-10 mx-auto text-[var(--sx-on-surface)]/75 stroke-[1.75]"
+              />
+              <p className="text-sm font-extrabold text-[var(--sx-on-surface)]">
+                No live rooms right now
+              </p>
+              <p className="text-xs font-medium text-[var(--sx-on-surface-muted)] max-w-[260px] mx-auto leading-relaxed">
+                Tap Create room above to start watching anime in sync with friends.
+              </p>
             </div>
-          </div>
-
-          <button
-            type="button"
-            data-testid="watch-together-host-btn"
-            onClick={() => navigate('/player?host=1')}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-[var(--sx-primary)]/12 hover:bg-[var(--sx-primary)]/20 text-xs font-bold text-[var(--sx-primary)] whitespace-nowrap shrink-0 transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Host</span>
-          </button>
-        </div>
-
-        <div className="border-t border-[var(--sx-outline)]" />
-
-        {loadingRooms && publicRooms.length === 0 ? (
-          <div className="py-10 text-center text-xs font-semibold text-[var(--sx-on-surface-muted)]">
-            Checking active public rooms...
-          </div>
-        ) : publicRooms.length === 0 ? (
+          ) : (
+            <ul
+              data-testid="watch-together-rooms-list"
+              className="grid grid-cols-1 lg:grid-cols-2 gap-3"
+            >
+              {publicRooms.map(renderLiveRoomCard)}
+            </ul>
+          )
+        ) : activeTab === 'ended' ? (
+          endedRooms.length === 0 ? (
+            <div
+              data-testid="watch-together-empty-ended"
+              className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)] py-12 px-4 text-center space-y-2.5"
+            >
+              <Clock
+                aria-hidden="true"
+                className="w-10 h-10 mx-auto text-[var(--sx-on-surface)]/75 stroke-[1.75]"
+              />
+              <p className="text-sm font-extrabold text-[var(--sx-on-surface)]">
+                No ended rooms yet
+              </p>
+              <p className="text-xs font-medium text-[var(--sx-on-surface-muted)] max-w-[260px] mx-auto leading-relaxed">
+                Completed watch sessions will appear here with viewer and message summaries.
+              </p>
+            </div>
+          ) : (
+            <ul
+              data-testid="watch-together-ended-list"
+              className="grid grid-cols-1 lg:grid-cols-2 gap-3"
+            >
+              {endedRooms.map(renderEndedRoomCard)}
+            </ul>
+          )
+        ) : myLiveRooms.length === 0 && myEndedRooms.length === 0 ? (
           <div
-            data-testid="watch-together-empty-rooms"
-            className="py-10 sm:py-12 text-center space-y-2.5"
+            data-testid="watch-together-empty-my"
+            className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)] py-12 px-4 text-center space-y-2.5"
           >
-            <MonitorOff
+            <Users
               aria-hidden="true"
-              className="w-10 h-10 mx-auto text-[var(--sx-on-surface)]/80 stroke-[1.75]"
+              className="w-10 h-10 mx-auto text-[var(--sx-on-surface)]/75 stroke-[1.75]"
             />
             <p className="text-sm font-extrabold text-[var(--sx-on-surface)]">
-              No active rooms
+              You haven&apos;t hosted any rooms yet
             </p>
-            <p className="text-xs font-medium text-[var(--sx-on-surface-muted)] max-w-[240px] mx-auto leading-relaxed">
-              Rooms will appear here when someone creates one
+            <p className="text-xs font-medium text-[var(--sx-on-surface-muted)] max-w-[260px] mx-auto leading-relaxed">
+              Rooms you create appear here so you can jump back in or review past sessions.
             </p>
           </div>
         ) : (
           <ul
-            data-testid="watch-together-rooms-list"
-            className="divide-y divide-[var(--sx-outline)]"
+            data-testid="watch-together-my-list"
+            className="grid grid-cols-1 lg:grid-cols-2 gap-3"
           >
-            {publicRooms.map((room) => {
-              const hostName = getHostDisplayName(room);
-              const thumb = room.mediaCover || room.mediaBanner;
-              return (
-                <li
-                  key={room.roomCode}
-                  data-testid="watch-together-room-card"
-                  className="py-3.5 first:pt-1 last:pb-1 flex items-center justify-between gap-3"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-12 h-16 rounded-xl overflow-hidden bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] shrink-0 flex items-center justify-center">
-                      {thumb ? (
-                        <SmartImage
-                          src={thumb}
-                          alt={room.mediaTitle}
-                          fallbackTitle={room.mediaTitle}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <Tv className="w-5 h-5 text-[var(--sx-primary)]" />
-                      )}
-                    </div>
-                    <div className="min-w-0 space-y-1">
-                      <p className="text-sm font-extrabold text-[var(--sx-on-surface)] truncate">
-                        {room.mediaTitle}
-                      </p>
-                      <p className="text-xs font-semibold text-[var(--sx-on-surface-muted)] truncate">
-                        EP {room.episodeNumber} · {room.episodeTitle}
-                      </p>
-                      <p className="text-[11px] font-medium text-[var(--sx-on-surface-muted)] truncate">
-                        <span>Host {hostName}</span>
-                        <span aria-hidden="true"> · </span>
-                        <span className="tabular-nums">
-                          {room.participants.length}{' '}
-                          {room.participants.length === 1 ? 'viewer' : 'viewers'}
-                        </span>
-                        <span aria-hidden="true"> · </span>
-                        <span className="font-mono-tabular font-bold text-[var(--sx-on-surface)]">
-                          {room.roomCode}
-                        </span>
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    data-testid={`watch-together-join-public-${room.roomCode}`}
-                    onClick={() => navigateIntoRoom(room.roomCode, room)}
-                    className="min-h-[40px] px-4 py-2 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-bold whitespace-nowrap shrink-0 shadow-sm hover:opacity-90 transition-opacity"
-                  >
-                    Join
-                  </button>
-                </li>
-              );
-            })}
+            {myLiveRooms.map(renderLiveRoomCard)}
+            {myEndedRooms.map(renderEndedRoomCard)}
           </ul>
         )}
       </section>
+
+      <CreateWatchRoomModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onSubmit={handleCreateRoomSubmit}
+      />
     </div>
   );
 };

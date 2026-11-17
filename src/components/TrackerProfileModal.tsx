@@ -38,7 +38,7 @@ export const TrackerProfileModal: React.FC<TrackerProfileModalProps> = ({ open, 
 
   const modalContent = (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4 sx-backdrop-enter"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-md p-0 sm:p-4 sx-backdrop-enter"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -46,7 +46,7 @@ export const TrackerProfileModal: React.FC<TrackerProfileModalProps> = ({ open, 
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full sm:max-w-lg bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] rounded-t-2xl sm:rounded-2xl overflow-hidden shadow-2xl sx-sheet-enter"
+        className="w-full sm:max-w-lg bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-2xl sm:rounded-2xl overflow-hidden shadow-2xl sx-sheet-enter"
       >
         {activeProfile?.bannerUrl && (
           <div className="h-28 w-full relative">

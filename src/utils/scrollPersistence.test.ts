@@ -92,11 +92,11 @@ test('shouldRestoreSavedScroll restores on POP or returning from Details to Home
     false,
   );
 
-  // Returning to Details from Player (POP) restores Details scroll
+  // Returning to Details from Reader (POP) restores Details scroll
   assert.equal(
     shouldRestoreSavedScroll({
       routeKey: '/details/anime/21',
-      previousPath: '/player',
+      previousPath: '/reader',
       navigationType: 'POP',
       savedY: 500,
     }),

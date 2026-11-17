@@ -1,14 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  computeInitialVisibleEpisodeCount,
+  computeNextVisibleEpisodeCount,
   DEFAULT_EPISODE_CHAPTER_STYLE,
   EPISODE_CHAPTER_STYLE_ORDER,
+  EPISODE_RENDER_BATCH_SIZE,
   formatChapterMetaLine,
   formatEpisodeDurationLabel,
   formatEpisodeMetaLine,
   getEpisodeChapterContainerClass,
   getNextEpisodeChapterStyle,
+  LARGE_EPISODE_LIST_THRESHOLD,
+  MAX_ANIMATED_EPISODE_ROWS,
   resolveEpisodeChapterStyle,
+  shouldAnimateEpisodeRow,
+  shouldUseLightweightEpisodeRow,
 } from './episodeChapterStyle';
 
 test('resolveEpisodeChapterStyle defaults to classic and preserves valid styles', () => {
@@ -64,3 +71,22 @@ test('formatEpisodeDurationLabel and meta formatters handle optional fields clea
     'Official Release · 19 pages',
   );
 });
+
+test('progressive episode rendering batches 100+ lists without capping total access', () => {
+  assert.equal(computeInitialVisibleEpisodeCount(0), 0);
+  assert.equal(computeInitialVisibleEpisodeCount(24), 24);
+  assert.equal(computeInitialVisibleEpisodeCount(1180), EPISODE_RENDER_BATCH_SIZE);
+
+  let visible = computeInitialVisibleEpisodeCount(120);
+  visible = computeNextVisibleEpisodeCount(visible, 120);
+  assert.equal(visible, Math.min(120, EPISODE_RENDER_BATCH_SIZE * 2));
+  visible = computeNextVisibleEpisodeCount(visible, 120);
+  assert.equal(visible, 120);
+
+  assert.equal(shouldUseLightweightEpisodeRow(LARGE_EPISODE_LIST_THRESHOLD), false);
+  assert.equal(shouldUseLightweightEpisodeRow(LARGE_EPISODE_LIST_THRESHOLD + 1), true);
+  assert.equal(shouldAnimateEpisodeRow(0, false), true);
+  assert.equal(shouldAnimateEpisodeRow(MAX_ANIMATED_EPISODE_ROWS, false), false);
+  assert.equal(shouldAnimateEpisodeRow(0, true), false);
+});
+

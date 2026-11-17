@@ -1,6 +1,14 @@
 export type RouteTransitionKind = 'tab' | 'push' | 'pop' | 'none';
 
-const TOP_LEVEL_TABS = ['/home', '/discover', '/library', '/downloads', '/calendar', '/settings'];
+const TOP_LEVEL_TABS = [
+  '/home',
+  '/discover',
+  '/watch-together',
+  '/library',
+  '/downloads',
+  '/calendar',
+  '/settings',
+];
 
 function normalizePath(pathname: string): string {
   if (!pathname || pathname === '/') return '/home';

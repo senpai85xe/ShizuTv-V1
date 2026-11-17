@@ -52,11 +52,11 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ compact = fa
               role="dialog"
               aria-modal="true"
               aria-label="Install ShizuTv on iOS"
-              className="sx-backdrop-enter fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4"
+              className="sx-backdrop-enter fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-md p-0 sm:p-4"
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="sx-sheet-enter w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] p-5 shadow-2xl space-y-4"
+                className="sx-sheet-enter w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 p-5 shadow-2xl space-y-4"
               >
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-base font-extrabold tracking-tight">Install ShizuTv</h3>

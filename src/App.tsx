@@ -11,9 +11,9 @@ import { HomePage } from './pages/HomePage';
 import { DiscoverPage } from './pages/DiscoverPage';
 import { DetailsPage } from './pages/DetailsPage';
 import { LibraryPage } from './pages/LibraryPage';
-import { PlayerPage } from './pages/PlayerPage';
 import { ReaderPage } from './pages/ReaderPage';
 import { WatchTogetherPage } from './pages/WatchTogetherPage';
+import { WatchTogetherRoomPage } from './pages/WatchTogetherRoomPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { DownloadsPage } from './pages/DownloadsPage';
 import { ContinueHistoryPage } from './pages/ContinueHistoryPage';
@@ -34,10 +34,14 @@ import {
   UiSettingsPage,
 } from './pages/SettingsSubPages';
 import { recordVisitedRoute } from './utils/scrollPersistence';
+import { resolveRouteDocumentTitle } from './utils/documentTitle';
+import { useDocumentTitle } from './hooks/useDocumentTitle';
 
 const RouteScrollCoordinator: React.FC = () => {
   const location = useLocation();
   recordVisitedRoute(location.pathname);
+  const routeTitle = resolveRouteDocumentTitle(location.pathname);
+  useDocumentTitle(routeTitle);
   return null;
 };
 
@@ -56,10 +60,8 @@ export const App: React.FC = () => {
             <RouteScrollCoordinator />
             <PipProvider>
               <Routes>
-                {/* Fullscreen Player, Reader, Watch Together & Details Sheet (No NavShell) */}
-                <Route path="/player" element={<PlayerPage />} />
+                {/* Fullscreen Reader & Details Sheet (No NavShell) */}
                 <Route path="/reader" element={<ReaderPage />} />
-                <Route path="/watch-together" element={<WatchTogetherPage />} />
                 <Route path="/details/:mediaType/:id" element={<DetailsPage />} />
 
                 {/* Main Application Shell */}
@@ -67,6 +69,8 @@ export const App: React.FC = () => {
                   <Route path="/" element={<Navigate to="/home" replace />} />
                   <Route path="/home" element={<HomePage />} />
                   <Route path="/discover" element={<DiscoverPage />} />
+                  <Route path="/watch-together" element={<WatchTogetherPage />} />
+                  <Route path="/watch-together/:roomCode" element={<WatchTogetherRoomPage />} />
                   <Route path="/library" element={<LibraryPage />} />
                   <Route path="/downloads" element={<DownloadsPage />} />
                   <Route path="/calendar" element={<CalendarPage />} />

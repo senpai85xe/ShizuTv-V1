@@ -12,6 +12,7 @@ test('getRouteTransitionKind distinguishes tab switches, deeper pushes, and back
   assert.equal(getRouteTransitionKind(null, '/home'), 'none');
   assert.equal(getRouteTransitionKind('/home', '/home'), 'none');
   assert.equal(getRouteTransitionKind('/home', '/discover'), 'tab');
+  assert.equal(getRouteTransitionKind('/home', '/watch-together'), 'tab');
   assert.equal(getRouteTransitionKind('/library', '/settings'), 'tab');
   assert.equal(getRouteTransitionKind('/settings', '/settings/ui'), 'push');
   assert.equal(getRouteTransitionKind('/home', '/details/anime/21'), 'push');

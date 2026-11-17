@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useNavigationType } from 'react-router-dom';
-import { Home, Search, BookMarked, Download, Settings, Calendar, Tv } from 'lucide-react';
+import { Home, Search, BookMarked, Download, Settings, Calendar, Tv, Users } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { ShonenXLogo } from './ShonenXLogo';
 import { useSlidingPill } from '../hooks/useSlidingPill';
@@ -35,6 +35,7 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
   const navItems = [
     { path: '/home', label: 'Home', icon: Home },
     { path: '/discover', label: 'Discover', icon: Search },
+    { path: '/watch-together', label: 'Watch Together', icon: Users },
     { path: '/library', label: 'Library', icon: BookMarked },
     { path: '/downloads', label: 'Downloads', icon: Download, badge: downloadCount },
   ];
@@ -42,25 +43,29 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
   const isActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(`${path}/`);
 
+  const routeStageKey = location.pathname.startsWith('/watch-together/')
+    ? '/watch-together/:roomCode'
+    : location.pathname;
+
   const initialPrevPath = getPreviousVisitedRoute();
-  const prevPathRef = useRef<string | null>(location.pathname);
+  const prevPathRef = useRef<string | null>(routeStageKey);
   const transitionRef = useRef<{
     path: string;
     prevPath: string | null;
     kind: RouteTransitionKind;
   }>({
-    path: location.pathname,
+    path: routeStageKey,
     prevPath: initialPrevPath,
     kind: getRouteTransitionKind(initialPrevPath, location.pathname),
   });
-  if (transitionRef.current.path !== location.pathname) {
+  if (transitionRef.current.path !== routeStageKey) {
     const prevPath = prevPathRef.current;
     transitionRef.current = {
-      path: location.pathname,
+      path: routeStageKey,
       prevPath,
       kind: getRouteTransitionKind(prevPath, location.pathname),
     };
-    prevPathRef.current = location.pathname;
+    prevPathRef.current = routeStageKey;
   }
 
   useEffect(() => {
@@ -73,16 +78,21 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
     ) {
       window.scrollTo({ top: 0, behavior: 'auto' });
     }
-  }, [location.pathname, navigationType]);
+  }, [routeStageKey, location.pathname, navigationType]);
 
   const transitionKind = transitionRef.current.kind;
   const transitionClass = getRouteTransitionClass(transitionKind);
 
   const tvActivePath =
-    ['/home', '/discover', '/library', '/downloads', '/calendar'].find((p) => isActive(p)) || '';
-  const sideActivePath = ['/home', '/discover', '/library'].find((p) => isActive(p)) || '';
+    ['/home', '/discover', '/watch-together', '/library', '/downloads', '/calendar'].find((p) =>
+      isActive(p),
+    ) || '';
+  const sideActivePath =
+    ['/home', '/discover', '/watch-together', '/library'].find((p) => isActive(p)) || '';
   const mobileActivePath =
-    ['/home', '/discover', '/library', '/downloads'].find((p) => isActive(p)) || '';
+    ['/home', '/discover', '/watch-together', '/library', '/downloads'].find((p) =>
+      isActive(p),
+    ) || '';
 
   const tvPill = useSlidingPill<HTMLElement>(tvActivePath, isTvMode);
   const sidePill = useSlidingPill<HTMLElement>(sideActivePath, `${isTvMode}-${navStyle}`);
@@ -179,7 +189,7 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
         </header>
         <main className="flex-1 pb-12 overflow-x-clip">
           <div
-            key={location.pathname}
+            key={routeStageKey}
             data-testid="app-route-stage"
             data-transition={transitionKind}
             className={transitionClass}
@@ -239,7 +249,7 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
                 className="sx-pill-glide pointer-events-none absolute left-0 top-0 bg-[var(--sx-primary)] shadow-sm"
               />
             )}
-            {navItems.slice(0, 3).map((item) => {
+            {navItems.slice(0, 4).map((item) => {
               const Icon = item.icon;
               const active = isActive(item.path);
               return (
@@ -247,9 +257,12 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
                   key={item.path}
                   ref={sidePill.registerItemRef(item.path)}
                   type="button"
+                  data-testid={
+                    item.path === '/watch-together' ? 'side-nav-watch-together-btn' : undefined
+                  }
                   onClick={() => navigate(item.path)}
                   style={{ borderRadius: `calc(${roundness} * 0.75)` }}
-                  className={`relative z-10 w-full py-3 short-screen:py-1.5 flex flex-col items-center justify-center gap-1 short-screen:gap-0.5 transition-colors duration-200 ${
+                  className={`relative z-10 w-full py-3 short-screen:py-1.5 px-1 flex flex-col items-center justify-center gap-1 short-screen:gap-0.5 transition-colors duration-200 ${
                     active
                       ? sidePill.pillRect.ready
                         ? 'text-[var(--sx-on-primary)]'
@@ -257,9 +270,9 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
                       : 'text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] hover:bg-[var(--sx-surface-high)]'
                   }`}
                 >
-                  <Icon className="w-5 h-5 short-screen:w-4 short-screen:h-4" />
-                  <span className="text-[10px] short-screen:text-[9px] font-bold tracking-tight leading-none">
-                    {item.label}
+                  <Icon className="w-5 h-5 short-screen:w-4 short-screen:h-4 shrink-0" />
+                  <span className="text-[10px] short-screen:text-[9px] font-bold tracking-tight leading-tight text-center">
+                    {item.path === '/watch-together' ? 'Watch' : item.label}
                   </span>
                 </button>
               );
@@ -334,7 +347,7 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
       {/* Main Content */}
       <main className="flex-1 min-w-0 pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-24 md:pb-10 landscape:pb-10 overflow-x-clip">
         <div
-          key={location.pathname}
+          key={routeStageKey}
           data-testid="app-route-stage"
           data-transition={transitionKind}
           className={transitionClass}
@@ -383,9 +396,15 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
                 key={item.path}
                 ref={mobilePill.registerItemRef(item.path)}
                 type="button"
+                aria-label={item.label}
+                data-testid={
+                  item.path === '/watch-together' ? 'mobile-nav-watch-together-btn' : undefined
+                }
                 onClick={() => navigate(item.path)}
                 style={{ borderRadius: '14px' }}
-                className={`relative z-10 flex items-center justify-center gap-1.5 min-h-[40px] px-3.5 py-1.5 text-xs font-bold transition-colors duration-200 ${
+                className={`relative z-10 flex items-center justify-center gap-1.5 min-h-[40px] ${
+                  active ? 'px-3 py-1.5' : 'px-2.5 py-1.5'
+                } text-[11px] sm:text-xs font-bold transition-colors duration-200 ${
                   active
                     ? mobilePill.pillRect.ready
                       ? 'text-[var(--sx-on-primary)]'

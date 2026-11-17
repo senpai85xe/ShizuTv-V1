@@ -88,10 +88,11 @@ export const PipProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       document.exitPictureInPicture().catch(() => {});
     }
     commitSession(null);
-    navigate('/player', {
+    const mediaTypeSlug = (current.media.type || 'ANIME').toLowerCase();
+    navigate(`/details/${mediaTypeSlug}/${current.media.id}`, {
       state: {
         media: current.media,
-        episodes: current.episodes,
+        initialTab: 'watch',
         episodeIndex: current.episodeIndex,
         sourceId: current.sourceId,
         serverId: current.serverId,

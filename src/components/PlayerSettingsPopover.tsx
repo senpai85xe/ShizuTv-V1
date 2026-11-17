@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Check,
   Keyboard,
@@ -65,6 +66,7 @@ interface PlayerSettingsPopoverProps {
   episodeCount?: number;
   onOpenShortcuts?: () => void;
   compact?: boolean;
+  portalInline?: boolean;
 }
 
 const SUBTITLE_COLORS = [
@@ -103,6 +105,7 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
   episodeCount,
   onOpenShortcuts,
   compact = false,
+  portalInline = false,
 }) => {
   const [activeTab, setActiveTab] = useState<PlayerSettingsTab>('playback');
   const [importOpen, setImportOpen] = useState(false);
@@ -143,15 +146,20 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
     }
   };
 
-  return (
+  const popoverCard = (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Player settings"
       data-no-gesture="true"
       data-testid="player-settings-popover"
       onClick={(e) => e.stopPropagation()}
-      className={`sx-player-popover absolute z-40 rounded-2xl bg-zinc-950/75 backdrop-blur-2xl backdrop-saturate-150 border border-white/20 ring-1 ring-inset ring-white/10 shadow-2xl text-white overflow-hidden flex flex-col ${
-        compact
-          ? 'top-11 right-2.5 w-[min(20rem,calc(100vw-2rem))] max-h-[min(66vh,380px)]'
-          : 'top-14 right-3 sm:right-5 w-80 sm:w-96 max-w-[calc(100vw-1.5rem)] max-h-[76vh]'
+      className={`sx-player-popover rounded-2xl bg-zinc-950/94 backdrop-blur-2xl backdrop-saturate-150 border border-white/20 ring-1 ring-inset ring-white/10 shadow-[0_24px_64px_rgba(0,0,0,0.75)] text-white overflow-hidden flex flex-col ${
+        portalInline
+          ? 'relative z-10 w-full max-w-[360px] max-h-[min(80vh,520px)]'
+          : compact
+            ? 'absolute z-50 top-11 right-2.5 w-[min(20rem,calc(100%-1.25rem))] max-h-[min(72vh,400px)]'
+            : 'absolute z-50 top-14 right-3 sm:right-5 w-80 sm:w-96 max-w-[calc(100%-1.5rem)] max-h-[76vh]'
       }`}
     >
       {/* Tab Header */}
@@ -774,5 +782,34 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
         </div>
       </div>
     </div>
+  );
+
+  if (portalInline && typeof document !== 'undefined') {
+    return createPortal(
+      <div
+        data-no-gesture="true"
+        data-testid="player-settings-portal-backdrop"
+        onClick={onClose}
+        className="sx-backdrop-enter fixed inset-0 z-[120] flex items-center justify-center sm:items-start sm:justify-end bg-black/55 backdrop-blur-md p-4 sm:pt-20 sm:pr-6"
+      >
+        {popoverCard}
+      </div>,
+      document.body,
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Dismiss player settings"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        className="absolute inset-0 z-40 w-full h-full bg-black/25 cursor-default"
+      />
+      {popoverCard}
+    </>
   );
 };

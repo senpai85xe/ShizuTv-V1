@@ -1,8 +1,21 @@
-import React, { useState } from 'react';
-import { Check, ChevronDown, ChevronUp, Copy, LogOut, Share2, Users } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  LogOut,
+  MessageSquare,
+  Send,
+  Share2,
+  Users,
+} from 'lucide-react';
 import {
   buildWatchPartyInviteUrl,
+  FloatingEmojiItem,
   getParticipantInitial,
+  WATCH_PARTY_REACTIONS,
+  WatchPartyChatMessage,
   WatchPartyConnectionStatus,
   WatchPartyRoom,
 } from '../utils/watchParty';
@@ -12,7 +25,16 @@ export interface WatchPartyUIProps {
   currentParticipantId: string | null;
   connectionStatus: WatchPartyConnectionStatus;
   lastEventNotice?: string | null;
+  messages?: WatchPartyChatMessage[];
+  reactions?: FloatingEmojiItem[];
+  onSendMessage?: (text: string) => void;
+  onSendReaction?: (emoji: string) => void;
   onLeaveRoom: () => void;
+  collapsible?: boolean;
+  showInviteStrip?: boolean;
+  focusSignal?: number;
+  subTab?: 'chat' | 'people';
+  onSubTabChange?: (tab: 'chat' | 'people') => void;
 }
 
 export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
@@ -20,10 +42,43 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
   currentParticipantId,
   connectionStatus,
   lastEventNotice,
+  messages = [],
+  reactions = [],
+  onSendMessage,
+  onSendReaction,
   onLeaveRoom,
+  collapsible = true,
+  showInviteStrip = true,
+  focusSignal = 0,
+  subTab,
+  onSubTabChange,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
+  const [internalSubTab, setInternalSubTab] = useState<'people' | 'chat'>('chat');
+  const activeSubTab = subTab ?? internalSubTab;
+  const setActiveSubTab = (tab: 'chat' | 'people') => {
+    setInternalSubTab(tab);
+    onSubTabChange?.(tab);
+  };
+  const [chatDraft, setChatDraft] = useState('');
   const [copiedTarget, setCopiedTarget] = useState<'code' | 'link' | null>(null);
+  const [burstingEmoji, setBurstingEmoji] = useState<string | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (activeSubTab === 'chat') {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [messages.length, activeSubTab]);
+
+  useEffect(() => {
+    if (focusSignal > 0) {
+      setCollapsed(false);
+      setActiveSubTab('chat');
+      window.setTimeout(() => chatInputRef.current?.focus(), 80);
+    }
+  }, [focusSignal]);
 
   const handleCopy = async (kind: 'code' | 'link') => {
     const value =
@@ -41,147 +96,318 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
     }
   };
 
+  const handleChatSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = chatDraft.trim();
+    if (!cleaned || !onSendMessage) return;
+    onSendMessage(cleaned);
+    setChatDraft('');
+  };
+
+  const handleReactionTap = (emoji: string) => {
+    if (!onSendReaction) return;
+    setBurstingEmoji(emoji);
+    onSendReaction(emoji);
+    window.setTimeout(() => {
+      setBurstingEmoji((curr) => (curr === emoji ? null : curr));
+    }, 240);
+  };
+
   const isReconnecting = connectionStatus === 'reconnecting';
   const statusText = isReconnecting ? 'Reconnecting' : 'Live Sync';
+  const displayMessages = messages.length > 0 ? messages : room.messages || [];
 
   return (
     <aside
       data-testid="watch-party-ui"
       data-no-gesture="true"
-      aria-label="Watch Party"
-      className="sx-player-popover w-full rounded-3xl bg-zinc-950/88 backdrop-blur-2xl border border-white/15 text-white shadow-2xl overflow-hidden"
+      aria-label="Live Chat and Reactions"
+      className="relative w-full rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/82 backdrop-blur-xl border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 text-[var(--sx-on-surface)] shadow-lg overflow-hidden"
     >
+      {/* Ambient live reaction preview ribbon at the top-right inside panel if no video overlay exists */}
+      {reactions.length > 0 && (
+        <div
+          data-testid="watch-party-ui-floating-emojis"
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 bottom-28 top-12 overflow-hidden z-20"
+        >
+          {reactions.slice(-8).map((item) => (
+            <span
+              key={`panel-${item.id}`}
+              style={
+                {
+                  left: `${item.xPercent}%`,
+                  '--sx-emoji-drift': `${item.driftPx}px`,
+                  '--sx-emoji-rot': `${item.rotateDeg}deg`,
+                  '--sx-emoji-scale': String(item.scale),
+                } as React.CSSProperties
+              }
+              className="sx-watch-emoji-float absolute bottom-0 text-xl select-none drop-shadow-md"
+            >
+              {item.emoji}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Header Row */}
-      <div className="flex items-center justify-between gap-2 px-3 py-2 sm:px-4 sm:py-3 border-b border-white/10">
-        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-          <span className="flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-[var(--sx-player-accent)]">
-            <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--sx-outline)]">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--sx-surface-high)] text-[var(--sx-primary)]">
+            <MessageSquare className="w-4 h-4" />
           </span>
           <div className="min-w-0">
-            <h2 className="text-xs font-extrabold tracking-tight text-white truncate">
-              Watch Party
+            <h2 className="text-xs sm:text-sm font-extrabold tracking-tight text-[var(--sx-on-surface)] truncate">
+              Live chat
             </h2>
-            <p className="flex items-center gap-1.5 text-[11px] font-medium text-white/70 truncate">
+            <p className="flex items-center gap-1.5 text-[11px] font-medium text-[var(--sx-on-surface-muted)] truncate">
               <span
                 aria-hidden="true"
                 className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                  isReconnecting ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'
+                  isReconnecting ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'
                 }`}
               />
               <span>{statusText}</span>
-              <span aria-hidden="true">·</span>
-              <span>{room.isPublic === false ? 'Private' : 'Public'}</span>
+              {room.track && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>{room.track}</span>
+                </>
+              )}
               <span aria-hidden="true">·</span>
               <span className="tabular-nums">
                 {room.participants.length}{' '}
-                {room.participants.length === 1 ? 'viewer' : 'viewers'}
+                {room.participants.length === 1 ? 'watching' : 'watching'}
               </span>
             </p>
           </div>
         </div>
 
-        <button
-          type="button"
-          data-testid="watch-party-collapse-btn"
-          onClick={() => setCollapsed((v) => !v)}
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? 'Expand Watch Party' : 'Minimize Watch Party'}
-          className="min-h-[32px] min-w-[32px] sm:min-h-[36px] sm:min-w-[36px] rounded-full hover:bg-white/10 flex items-center justify-center text-white/75 hover:text-white transition-colors shrink-0"
-        >
-          {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-        </button>
-      </div>
-
-      {collapsed ? (
-        <div className="px-3.5 py-2 sm:px-4 sm:py-2.5 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0 text-xs">
-            <span className="text-white/65">Room</span>
-            <span
-              data-testid="watch-party-room-code"
-              className="font-mono-tabular font-black tracking-[0.14em] text-white"
-            >
-              {room.roomCode}
-            </span>
-          </div>
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
-            data-testid="watch-party-leave-btn"
+            data-testid="watch-party-leave-header-btn"
             onClick={onLeaveRoom}
-            className="px-3 py-1.5 rounded-full bg-red-500/20 hover:bg-red-500/30 border border-red-400/30 text-red-200 text-[11px] font-bold whitespace-nowrap shrink-0 transition-colors"
+            title="Leave Room"
+            className="min-h-[34px] px-3 py-1 rounded-full bg-red-500/12 hover:bg-red-500/20 border border-red-500/25 text-red-600 dark:text-red-300 text-[11px] font-bold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
           >
-            Leave Room
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Leave</span>
           </button>
+
+          {collapsible && (
+            <button
+              type="button"
+              data-testid="watch-party-collapse-btn"
+              onClick={() => setCollapsed((v) => !v)}
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? 'Expand Live Chat' : 'Minimize Live Chat'}
+              className="min-h-[34px] min-w-[34px] rounded-full hover:bg-[var(--sx-surface-high)] flex items-center justify-center text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors shrink-0"
+            >
+              {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+            </button>
+          )}
         </div>
-      ) : (
-        <div className="p-2.5 space-y-2 sm:p-4 sm:space-y-4">
-          {/* Room Code & Invite Controls */}
-          <div className="rounded-2xl bg-white/[0.06] border border-white/10 px-3 py-1.5 sm:px-3.5 sm:py-3 flex items-center justify-between gap-2.5 sm:gap-3">
-            <div className="min-w-0 flex sm:block items-baseline gap-2">
-              <p className="text-[11px] font-medium text-white/65">Room</p>
-              <p
-                data-testid="watch-party-room-code"
-                className="font-mono-tabular text-sm sm:text-lg font-black tracking-[0.16em] sm:tracking-[0.18em] text-white leading-tight sm:mt-0.5 select-all"
-              >
-                {room.roomCode}
-              </p>
+      </div>
+
+      {!collapsed && (
+        <div className="p-3.5 sm:p-4 space-y-3">
+          {showInviteStrip && (
+            <div className="rounded-2xl bg-[var(--sx-surface-high)]/65 border border-[var(--sx-outline)] px-3.5 py-2 flex items-center justify-between gap-2.5">
+              <div className="min-w-0 flex items-baseline gap-2">
+                <span className="text-[11px] font-medium text-[var(--sx-on-surface-muted)]">
+                  Room
+                </span>
+                <span
+                  data-testid="watch-party-room-code"
+                  className="font-mono-tabular text-sm font-black tracking-[0.16em] text-[var(--sx-on-surface)] select-all"
+                >
+                  {room.roomCode}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  data-testid="watch-party-copy-code-btn"
+                  onClick={() => void handleCopy('code')}
+                  aria-label="Copy room code"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[11px] font-bold text-[var(--sx-on-surface)] whitespace-nowrap"
+                >
+                  {copiedTarget === 'code' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  data-testid="watch-party-copy-link-btn"
+                  onClick={() => void handleCopy('link')}
+                  aria-label="Copy invite link"
+                  className="min-h-[30px] min-w-[30px] rounded-full bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] flex items-center justify-center text-[var(--sx-on-surface)]"
+                >
+                  {copiedTarget === 'link' ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-500" />
+                  ) : (
+                    <Share2 className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                data-testid="watch-party-copy-code-btn"
-                onClick={() => void handleCopy('code')}
-                aria-label="Copy room code"
-                title="Copy room code"
-                className="inline-flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 text-[11px] font-bold text-white whitespace-nowrap shrink-0 transition-colors"
-              >
-                {copiedTarget === 'code' ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Copied</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy</span>
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                data-testid="watch-party-copy-link-btn"
-                onClick={() => void handleCopy('link')}
-                aria-label="Copy invite link"
-                title="Copy invite link"
-                className="min-h-[30px] min-w-[30px] sm:min-h-[34px] sm:min-w-[34px] rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors shrink-0"
-              >
-                {copiedTarget === 'link' ? (
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                ) : (
-                  <Share2 className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </div>
-          </div>
+          )}
 
           {lastEventNotice && (
             <p
               data-testid="watch-party-event-notice"
-              className="text-[11px] font-medium text-white/75 px-1 truncate"
+              className="text-[11px] font-medium text-[var(--sx-on-surface-muted)] px-1 truncate"
             >
               {lastEventNotice}
             </p>
           )}
 
-          {/* Current Participants List */}
-          <div className="space-y-1 sm:space-y-2">
-            <div className="flex items-center justify-between px-0.5">
-              <h3 className="text-[11px] sm:text-xs font-bold text-white/85">
-                Current Participants ({room.participants.length})
-              </h3>
+          {/* Sub-tabs: Comments/Chat vs Viewers */}
+          <div className="grid grid-cols-2 gap-1 p-1 rounded-full bg-[var(--sx-surface-high)]/70 border border-[var(--sx-outline)]">
+            <button
+              type="button"
+              data-testid="watch-party-tab-chat"
+              onClick={() => setActiveSubTab('chat')}
+              className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                activeSubTab === 'chat'
+                  ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
+                  : 'text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+              }`}
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span className="tabular-nums">Comments ({displayMessages.length})</span>
+            </button>
+            <button
+              type="button"
+              data-testid="watch-party-tab-people"
+              onClick={() => setActiveSubTab('people')}
+              className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                activeSubTab === 'people'
+                  ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
+                  : 'text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span className="tabular-nums">Viewers ({room.participants.length})</span>
+            </button>
+          </div>
+
+          {activeSubTab === 'chat' ? (
+            <div className="space-y-3">
+              {/* YouTube Live Style Scrolling Comment Feed */}
+              <div
+                data-testid="watch-party-chat-list"
+                className="h-44 sm:h-56 overflow-y-auto space-y-2 pr-1 text-xs"
+              >
+                {displayMessages.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center py-6 px-3">
+                    <p className="text-xs font-semibold text-[var(--sx-on-surface-muted)]">
+                      No comments yet — chat or send a reaction while watching live!
+                    </p>
+                  </div>
+                ) : (
+                  displayMessages.map((msg) => {
+                    const isSelf = msg.senderId === currentParticipantId;
+                    const isMsgHost = msg.senderId === room.hostId;
+                    return (
+                      <div
+                        key={msg.id}
+                        data-testid="watch-party-chat-item"
+                        className="flex items-start gap-2 leading-snug break-words"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-extrabold ${
+                            isMsgHost
+                              ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                              : 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface)]'
+                          }`}
+                        >
+                          {getParticipantInitial(msg.senderName)}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <span
+                            className={`font-bold mr-1.5 ${
+                              isSelf
+                                ? 'text-[var(--sx-primary)]'
+                                : 'text-[var(--sx-on-surface)]'
+                            }`}
+                          >
+                            {msg.senderName}
+                          </span>
+                          <span className="text-[var(--sx-on-surface-muted)]">
+                            {msg.text}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Floating Emoji Reaction Bar (uses spring animation tokens) */}
+              {onSendReaction && (
+                <div
+                  data-testid="watch-party-reaction-bar"
+                  aria-label="Floating emoji reaction bar"
+                  className="flex items-center justify-between gap-1 px-2 py-1.5 rounded-2xl bg-[var(--sx-surface-high)]/65 border border-[var(--sx-outline)] overflow-x-auto no-scrollbar"
+                >
+                  {WATCH_PARTY_REACTIONS.map((emoji, idx) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      data-testid={`watch-party-reaction-btn-${idx}`}
+                      aria-label={`Send ${emoji} reaction`}
+                      onClick={() => handleReactionTap(emoji)}
+                      className={`sx-reaction-btn min-w-[38px] min-h-[38px] rounded-full flex items-center justify-center text-lg leading-none select-none hover:bg-[var(--sx-surface-container)] ${
+                        burstingEmoji === emoji ? 'scale-110 bg-[var(--sx-surface-container)] shadow-sm' : ''
+                      }`}
+                    >
+                      <span aria-hidden="true">{emoji}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Comment / Chat Input */}
+              {onSendMessage && (
+                <form onSubmit={handleChatSubmit} className="flex items-center gap-2">
+                  <input
+                    ref={chatInputRef}
+                    type="text"
+                    data-testid="watch-party-chat-input"
+                    value={chatDraft}
+                    maxLength={280}
+                    onChange={(e) => setChatDraft(e.target.value)}
+                    placeholder="Comment live..."
+                    className="flex-1 min-w-0 min-h-[42px] px-4 py-2 rounded-full bg-[var(--sx-surface-high)]/60 border border-[var(--sx-outline)] text-xs sm:text-sm text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
+                  />
+                  <button
+                    type="submit"
+                    data-testid="watch-party-chat-send-btn"
+                    aria-label="Send comment"
+                    disabled={!chatDraft.trim()}
+                    className="w-10 h-10 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] flex items-center justify-center shrink-0 disabled:opacity-45 shadow-sm transition-opacity"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </form>
+              )}
             </div>
+          ) : (
             <ul
               data-testid="watch-party-participants-list"
-              className="max-h-16 sm:max-h-40 overflow-y-auto divide-y divide-white/10 pr-0.5"
+              className="max-h-56 overflow-y-auto divide-y divide-[var(--sx-outline)] pr-0.5"
             >
               {room.participants.map((participant) => {
                 const isSelf = participant.id === currentParticipantId;
@@ -191,42 +417,31 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
                   <li
                     key={participant.id}
                     data-testid="watch-party-participant"
-                    className="flex items-center justify-between gap-2 py-1 sm:py-2 first:pt-0.5 last:pb-0.5"
+                    className="flex items-center justify-between gap-2 py-2 first:pt-1 last:pb-1"
                   >
-                    <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+                    <div className="flex items-center gap-2.5 min-w-0">
                       <span
                         aria-hidden="true"
-                        className={`flex h-5 w-5 sm:h-7 sm:w-7 shrink-0 items-center justify-center rounded-full text-[10px] sm:text-xs font-extrabold ${
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-extrabold ${
                           participant.isHost
-                            ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)]'
-                            : 'bg-white/12 text-white'
+                            ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                            : 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface)]'
                         }`}
                       >
                         {getParticipantInitial(participant.name)}
                       </span>
-                      <span className="text-xs font-semibold text-white truncate">
+                      <span className="text-xs font-semibold text-[var(--sx-on-surface)] truncate">
                         {participant.name}
                       </span>
                     </div>
-                    <span className="text-[11px] font-medium text-white/65 whitespace-nowrap shrink-0">
+                    <span className="text-[11px] font-medium text-[var(--sx-on-surface-muted)] whitespace-nowrap shrink-0">
                       {roleSegments.join(' · ')}
                     </span>
                   </li>
                 );
               })}
             </ul>
-          </div>
-
-          {/* Leave Room Button */}
-          <button
-            type="button"
-            data-testid="watch-party-leave-btn"
-            onClick={onLeaveRoom}
-            className="w-full min-h-[38px] sm:min-h-[44px] px-4 py-1.5 sm:py-2.5 rounded-2xl bg-red-500/18 hover:bg-red-500/28 border border-red-400/30 text-red-200 text-xs font-bold flex items-center justify-center gap-2 whitespace-nowrap transition-colors"
-          >
-            <LogOut className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-            <span>Leave Room</span>
-          </button>
+          )}
         </div>
       )}
     </aside>

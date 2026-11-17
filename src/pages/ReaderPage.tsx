@@ -11,6 +11,8 @@ import {
 import { useApp } from '../store/AppContext';
 import { getPreferredTitle, UnifiedChapter, UnifiedMedia } from '../types/media';
 import { resolveChapterPages } from '../services/sourceEngine';
+import { formatMediaDocumentTitle } from '../utils/documentTitle';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 interface ReaderLocationState {
   media?: UnifiedMedia;
@@ -95,6 +97,12 @@ export const ReaderPage: React.FC = () => {
           : 'bg-black text-white';
 
   const title = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
+  useDocumentTitle(
+    formatMediaDocumentTitle({
+      mediaTitle: title,
+      chapterNumber: currentChapter?.number,
+    }),
+  );
 
   const nextPage = () => {
     const step = mode === 'double' ? 2 : 1;

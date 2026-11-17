@@ -85,3 +85,37 @@ export function formatChapterMetaLine(ch: UnifiedChapter): string {
   }
   return parts.join(' · ') || 'Ready to read';
 }
+
+export const EPISODE_RENDER_BATCH_SIZE = 48;
+export const LARGE_EPISODE_LIST_THRESHOLD = 48;
+export const MAX_ANIMATED_EPISODE_ROWS = 12;
+
+export function computeInitialVisibleEpisodeCount(
+  totalCount: number,
+  batchSize = EPISODE_RENDER_BATCH_SIZE,
+): number {
+  if (!Number.isFinite(totalCount) || totalCount <= 0) return 0;
+  const safeBatch = Math.max(1, Math.floor(batchSize));
+  return Math.min(Math.floor(totalCount), safeBatch);
+}
+
+export function computeNextVisibleEpisodeCount(
+  currentVisible: number,
+  totalCount: number,
+  batchSize = EPISODE_RENDER_BATCH_SIZE,
+): number {
+  if (!Number.isFinite(totalCount) || totalCount <= 0) return 0;
+  const safeTotal = Math.floor(totalCount);
+  const safeCurrent = Math.max(0, Math.floor(currentVisible));
+  const safeBatch = Math.max(1, Math.floor(batchSize));
+  return Math.min(safeTotal, safeCurrent + safeBatch);
+}
+
+export function shouldUseLightweightEpisodeRow(totalCount: number): boolean {
+  return Number.isFinite(totalCount) && totalCount > LARGE_EPISODE_LIST_THRESHOLD;
+}
+
+export function shouldAnimateEpisodeRow(index: number, previewMode = false): boolean {
+  return !previewMode && index >= 0 && index < MAX_ANIMATED_EPISODE_ROWS;
+}
+

@@ -754,7 +754,7 @@ export const DiscoverPage: React.FC = () => {
         (() => {
           const modalContent = (
             <div
-              className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4 sx-backdrop-enter"
+              className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-md p-0 sm:p-4 sx-backdrop-enter"
               onClick={() => setFilterOpen(false)}
               role="dialog"
               aria-modal="true"
@@ -762,7 +762,7 @@ export const DiscoverPage: React.FC = () => {
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="w-full sm:max-w-xl max-h-[85vh] overflow-y-auto bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] rounded-t-2xl sm:rounded-2xl p-5 space-y-5 shadow-2xl sx-sheet-enter"
+                className="w-full sm:max-w-xl max-h-[85vh] overflow-y-auto bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-2xl sm:rounded-2xl p-5 space-y-5 shadow-2xl sx-sheet-enter"
               >
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-extrabold">Advanced Search Filters</h2>

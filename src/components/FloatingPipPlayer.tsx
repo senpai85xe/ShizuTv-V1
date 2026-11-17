@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
 import Hls from 'hls.js';
 import {
   Maximize2,
@@ -41,7 +40,6 @@ function getViewportDimensions() {
 }
 
 export const FloatingPipPlayer: React.FC = () => {
-  const location = useLocation();
   const { state, recordHistory } = useApp();
   const {
     pipSession,
@@ -124,8 +122,6 @@ export const FloatingPipPlayer: React.FC = () => {
     return resolveVideoStream(pipSession.media, currentEpisode, activeServer);
   }, [pipSession, currentEpisode, activeServer]);
 
-  const isPlayerRoute = location.pathname === '/player';
-
   const scheduleHideHud = (currentlyPlaying: boolean) => {
     setShowHud(true);
     if (hideHudTimerRef.current) window.clearTimeout(hideHudTimerRef.current);
@@ -142,7 +138,7 @@ export const FloatingPipPlayer: React.FC = () => {
 
   // Attach HLS/MP4 stream and restore exact timestamp
   useEffect(() => {
-    if (!pipSession || !currentEpisode || !stream || isPlayerRoute) return;
+    if (!pipSession || !currentEpisode || !stream) return;
     const video = videoRef.current;
     if (!video) return;
 
@@ -199,11 +195,11 @@ export const FloatingPipPlayer: React.FC = () => {
     };
     // Re-attach only when episode, stream url, or active session media changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pipSession?.media.id, currentEpisode?.id, stream?.url, isPlayerRoute]);
+  }, [pipSession?.media.id, currentEpisode?.id, stream?.url]);
 
   // Update MediaSession metadata & transport controls when supported
   useEffect(() => {
-    if (!pipSession || !currentEpisode || isPlayerRoute) return;
+    if (!pipSession || !currentEpisode) return;
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
     const title = getPreferredTitle(pipSession.media.title, state.contentPrefs.titlePreference);
     try {
@@ -228,12 +224,11 @@ export const FloatingPipPlayer: React.FC = () => {
   }, [
     pipSession,
     currentEpisode,
-    isPlayerRoute,
     state.contentPrefs.titlePreference,
     setPipEpisodeIndex,
   ]);
 
-  if (!pipSession || !currentEpisode || !stream || isPlayerRoute) {
+  if (!pipSession || !currentEpisode || !stream) {
     return null;
   }
 
