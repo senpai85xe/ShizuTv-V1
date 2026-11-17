@@ -131,6 +131,7 @@ export interface InlineWatchPartyMode {
   remoteSyncSignal?: { seq: number; currentTime: number; isPlaying: boolean } | null;
   onPlaybackSync?: (payload: WatchPartySyncPayload) => void;
   reactions?: FloatingEmojiItem[];
+  showReactions?: boolean;
   hideBottomControlsBar?: boolean;
 }
 
@@ -309,7 +310,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       !showCommentsModal &&
       !showSettingsMenu &&
       !showEpisodeDrawer &&
-      !showSpeedMenu
+      !showSpeedMenu &&
+      !showCreateWatchPartyModal
     ) {
       hideTimerRef.current = window.setTimeout(() => {
         setShowControls(false);
@@ -343,6 +345,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
         setShowAudioLangMenu(false);
         setShowCommentsModal(false);
         setShowSpeedMenu(false);
+        setShowCreateWatchPartyModal(false);
       }
     };
     document.addEventListener('fullscreenchange', onFsChange);
@@ -377,6 +380,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     document.body.style.overflow = 'hidden';
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !isScreenLocked) {
+        if (showCreateWatchPartyModal) {
+          setShowCreateWatchPartyModal(false);
+          return;
+        }
         if (showCommentsModal) {
           setShowCommentsModal(false);
           return;
@@ -407,7 +414,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       ro?.disconnect();
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [isFullscreen, isScreenLocked, showCommentsModal, showAudioLangMenu, showSpeedMenu]);
+  }, [
+    isFullscreen,
+    isScreenLocked,
+    showCommentsModal,
+    showAudioLangMenu,
+    showSpeedMenu,
+    showCreateWatchPartyModal,
+  ]);
 
   // Cleanup timers on unmount
   useEffect(() => {
@@ -945,6 +959,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     setShowSettingsMenu(false);
     setShowEpisodeDrawer(false);
     setShowSpeedMenu(false);
+    setShowCreateWatchPartyModal(false);
     setVolumeHudVisible(false);
     setBrightnessHudVisible(false);
     setGestureSeekState(null);
@@ -1093,7 +1108,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       showCommentsModal ||
       showSettingsMenu ||
       showEpisodeDrawer ||
-      showSpeedMenu
+      showSpeedMenu ||
+      showCreateWatchPartyModal
     ) {
       return;
     }
@@ -1261,13 +1277,15 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       showCommentsModal ||
       showSettingsMenu ||
       showEpisodeDrawer ||
-      showSpeedMenu
+      showSpeedMenu ||
+      showCreateWatchPartyModal
     ) {
       setShowAudioLangMenu(false);
       setShowCommentsModal(false);
       setShowSettingsMenu(false);
       setShowEpisodeDrawer(false);
       setShowSpeedMenu(false);
+      setShowCreateWatchPartyModal(false);
       scheduleHideControls();
       return;
     }
@@ -1337,7 +1355,12 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const backdropArtwork = currentEpisode.thumbnail || media.banner || media.cover || '';
   const animeTitle = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
   const hasActiveOverlay =
-    showAudioLangMenu || showCommentsModal || showSettingsMenu || showEpisodeDrawer || showSpeedMenu;
+    showAudioLangMenu ||
+    showCommentsModal ||
+    showSettingsMenu ||
+    showEpisodeDrawer ||
+    showSpeedMenu ||
+    showCreateWatchPartyModal;
   const overlayBarState = shouldHideBarsForOverlay({
     showCommentsModal,
     showEpisodeDrawer,
@@ -1502,7 +1525,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                 }}
               />
               <div className="sx-buffering-shimmer w-1/2 h-full bg-gradient-to-r from-transparent via-white/15 to-transparent skew-x-[-20deg]" />
-              <div className="absolute top-12 sm:top-14 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/15 text-[10px] font-bold text-white/90 shadow-lg">
+              <div className="absolute bottom-11 sm:bottom-14 left-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/15 text-[10px] font-bold text-white/90 shadow-lg">
                 <span className="w-1.5 h-1.5 rounded-full bg-[var(--sx-player-accent)] animate-ping" />
                 <span>Preparing EP {currentEpisode.number}...</span>
               </div>
@@ -1739,7 +1762,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           )}
 
           {/* Floating Watch Party Animated Emojis across the screen (compositor spring motion) */}
-          {watchPartyMode?.reactions && watchPartyMode.reactions.length > 0 && (
+          {watchPartyMode?.showReactions !== false &&
+            watchPartyMode?.reactions &&
+            watchPartyMode.reactions.length > 0 && (
             <div
               data-testid="watch-party-player-floating-emojis"
               aria-hidden="true"
@@ -1863,6 +1888,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       setShowAudioLangMenu(false);
                       setShowSettingsMenu(false);
                       setShowEpisodeDrawer(false);
+                      setShowCreateWatchPartyModal(false);
                       setShowSpeedMenu(false);
                     }}
                     className={`relative w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
@@ -1890,6 +1916,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       setShowCommentsModal(false);
                       setShowSettingsMenu(false);
                       setShowEpisodeDrawer(false);
+                      setShowCreateWatchPartyModal(false);
                       setShowSpeedMenu(false);
                     }}
                     className={`relative w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
@@ -1914,6 +1941,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       setShowSettingsMenu(false);
                       setShowAudioLangMenu(false);
                       setShowCommentsModal(false);
+                      setShowCreateWatchPartyModal(false);
                       setShowSpeedMenu(false);
                     }}
                     className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-colors shrink-0 ${
@@ -1933,14 +1961,18 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       data-testid="inline-player-watch-party-btn"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setShowCreateWatchPartyModal(true);
+                        setShowCreateWatchPartyModal((v) => !v);
                         setShowSettingsMenu(false);
                         setShowAudioLangMenu(false);
                         setShowCommentsModal(false);
                         setShowEpisodeDrawer(false);
                         setShowSpeedMenu(false);
                       }}
-                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-2xl border border-white/15 flex items-center justify-center text-white transition-colors shrink-0"
+                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-colors shrink-0 ${
+                        showCreateWatchPartyModal
+                          ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
+                          : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
+                      }`}
                     >
                       <Users className="w-4 h-4" />
                     </button>
@@ -1956,6 +1988,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       setShowAudioLangMenu(false);
                       setShowCommentsModal(false);
                       setShowEpisodeDrawer(false);
+                      setShowCreateWatchPartyModal(false);
                       setShowSpeedMenu(false);
                     }}
                     className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-transform duration-300 shrink-0 ${
@@ -2022,6 +2055,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                     data-testid="inline-player-episodes-btn"
                     onClick={() => {
                       setShowEpisodeDrawer((v) => !v);
+                      setShowCreateWatchPartyModal(false);
                       setShowSettingsMenu(false);
                     }}
                     className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full backdrop-blur-md border flex items-center justify-center transition-colors ${
@@ -2040,11 +2074,15 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       title="Watch Together"
                       data-testid="inline-player-watch-party-btn"
                       onClick={() => {
-                        setShowCreateWatchPartyModal(true);
+                        setShowCreateWatchPartyModal((v) => !v);
                         setShowSettingsMenu(false);
                         setShowEpisodeDrawer(false);
                       }}
-                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-black/45 hover:bg-black/70 backdrop-blur-md border border-white/15 flex items-center justify-center text-white transition-colors"
+                      className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full backdrop-blur-md border flex items-center justify-center transition-colors ${
+                        showCreateWatchPartyModal
+                          ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
+                          : 'bg-black/45 hover:bg-black/70 border-white/15 text-white'
+                      }`}
                     >
                       <Users className="w-4 h-4" />
                     </button>
@@ -2056,6 +2094,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                     data-testid="inline-player-settings-btn"
                     onClick={() => {
                       setShowSettingsMenu((v) => !v);
+                      setShowCreateWatchPartyModal(false);
                       setShowEpisodeDrawer(false);
                     }}
                     className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full backdrop-blur-md border flex items-center justify-center transition-transform duration-300 ${
@@ -2424,12 +2463,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             onClose={() => setShowCommentsModal(false)}
           />
 
-          {/* Quick Pre-Seeded Watch Party Modal (renders inside fullscreen stage when fullscreen) */}
+          {/* Quick Pre-Seeded Watch Party Drawer (renders inside Player Stage matching PlayerEpisodeDrawer) */}
           {!watchPartyMode && (
             <CreateWatchRoomModal
               open={showCreateWatchPartyModal}
               variant="quick-episode"
               isFullscreen={isFullscreen}
+              compact={!isFullscreen}
               initialMedia={media}
               initialEpisodes={episodes}
               initialEpisodeNumber={currentEpisode.number}

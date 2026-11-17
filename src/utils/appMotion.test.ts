@@ -6,13 +6,16 @@ import {
   getRouteTransitionKind,
   isRectInRevealViewport,
   measureRelativePillRect,
+  shouldShowOnlineHubSwitcher,
 } from './appMotion';
 
-test('getRouteTransitionKind distinguishes tab switches, deeper pushes, and back pops', () => {
+test('getRouteTransitionKind distinguishes tab switches, online switches, deeper pushes, and back pops', () => {
   assert.equal(getRouteTransitionKind(null, '/home'), 'none');
   assert.equal(getRouteTransitionKind('/home', '/home'), 'none');
   assert.equal(getRouteTransitionKind('/home', '/discover'), 'tab');
   assert.equal(getRouteTransitionKind('/home', '/watch-together'), 'tab');
+  assert.equal(getRouteTransitionKind('/watch-together', '/community'), 'online-next');
+  assert.equal(getRouteTransitionKind('/community', '/watch-together'), 'online-prev');
   assert.equal(getRouteTransitionKind('/library', '/settings'), 'tab');
   assert.equal(getRouteTransitionKind('/settings', '/settings/ui'), 'push');
   assert.equal(getRouteTransitionKind('/home', '/details/anime/21'), 'push');
@@ -24,7 +27,18 @@ test('getRouteTransitionClass maps each transition kind to its compositor CSS cl
   assert.equal(getRouteTransitionClass('tab'), 'sx-page-tab-enter');
   assert.equal(getRouteTransitionClass('push'), 'sx-page-push-enter');
   assert.equal(getRouteTransitionClass('pop'), 'sx-page-pop-enter');
+  assert.equal(getRouteTransitionClass('online-next'), 'sx-online-switch-next');
+  assert.equal(getRouteTransitionClass('online-prev'), 'sx-online-switch-prev');
   assert.equal(getRouteTransitionClass('none'), '');
+});
+
+test('shouldShowOnlineHubSwitcher shows switcher on Watch Together lobby and Community only', () => {
+  assert.equal(shouldShowOnlineHubSwitcher('/watch-together'), true);
+  assert.equal(shouldShowOnlineHubSwitcher('/watch-together/'), true);
+  assert.equal(shouldShowOnlineHubSwitcher('/community'), true);
+  assert.equal(shouldShowOnlineHubSwitcher('/watch-together/ABC123'), false);
+  assert.equal(shouldShowOnlineHubSwitcher('/home'), false);
+  assert.equal(shouldShowOnlineHubSwitcher('/discover'), false);
 });
 
 test('measureRelativePillRect computes container-relative coordinates accurately', () => {

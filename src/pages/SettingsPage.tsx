@@ -19,6 +19,7 @@ import {
   Tv,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
+import { getNavBarStyleLabel } from '../utils/navBarStyles';
 import { BUILT_IN_PRESETS, EXCLUSIVE_SCHEMES } from '../data/themePresets';
 import { ScrollReveal } from '../components/ScrollReveal';
 import { PWAInstallButton } from '../components/PWAInstallButton';
@@ -57,7 +58,7 @@ export const SettingsPage: React.FC = () => {
         {
           path: '/settings/ui',
           title: 'UI & Layout Styles',
-          subtitle: `${state.uiPrefs.cardStyle} cards · ${state.uiPrefs.episodeChapterStyle} episodes · ${state.uiPrefs.navBarStyle} nav`,
+          subtitle: `${state.uiPrefs.cardStyle} cards · ${state.uiPrefs.episodeChapterStyle} episodes · ${getNavBarStyleLabel(state.uiPrefs.navBarStyle)} nav`,
           icon: LayoutGrid,
           badge: state.uiPrefs.useNewUi ? 'TV Mode' : undefined,
         },

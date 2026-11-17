@@ -261,7 +261,7 @@ export const WatchTogetherPage: React.FC = () => {
       <li
         key={room.roomCode}
         data-testid="watch-together-room-card"
-        className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/80 backdrop-blur-xl border border-[var(--sx-outline)] p-3.5 sm:p-4 flex items-start justify-between gap-3.5 transition-colors hover:border-[var(--sx-primary)]/40"
+        className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/80 backdrop-blur-2xl border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 p-3.5 sm:p-4 flex items-start justify-between gap-3.5 transition-colors hover:border-[var(--sx-primary)]/40"
       >
         <div className="flex items-start gap-3.5 min-w-0 flex-1">
           <div className="w-16 h-24 sm:w-20 sm:h-28 rounded-xl overflow-hidden bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] shrink-0 flex items-center justify-center">
@@ -347,7 +347,7 @@ export const WatchTogetherPage: React.FC = () => {
       <li
         key={`${room.roomCode}-${room.endedAt}`}
         data-testid="watch-together-ended-card"
-        className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/80 backdrop-blur-xl border border-[var(--sx-outline)] p-3.5 sm:p-4 flex items-start gap-3.5"
+        className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/80 backdrop-blur-2xl border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 p-3.5 sm:p-4 flex items-start gap-3.5"
       >
         <div className="w-16 h-24 sm:w-20 sm:h-28 rounded-xl overflow-hidden bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] shrink-0 flex items-center justify-center">
           {thumb ? (
@@ -464,13 +464,13 @@ export const WatchTogetherPage: React.FC = () => {
               setJoinError(null);
             }}
             placeholder="Room code"
-            className="flex-1 min-w-0 min-h-[48px] px-5 py-3 rounded-full bg-[var(--sx-surface-container)]/90 border border-[var(--sx-outline)] text-sm font-semibold text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
+            className="flex-1 min-w-0 min-h-[48px] px-5 py-3 rounded-full bg-[var(--sx-surface-container)]/85 backdrop-blur-xl border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 text-sm font-semibold text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
           />
           <button
             type="submit"
             data-testid="watch-together-join-btn"
             disabled={!canJoinCode}
-            className="min-h-[48px] px-6 py-3 rounded-full bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] text-sm font-bold text-[var(--sx-on-surface)] disabled:opacity-50 whitespace-nowrap shrink-0 transition-colors"
+            className="min-h-[48px] px-6 py-3 rounded-full bg-[var(--sx-surface-container)]/85 backdrop-blur-xl border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 hover:border-[var(--sx-primary)] text-sm font-bold text-[var(--sx-on-surface)] disabled:opacity-50 whitespace-nowrap shrink-0 transition-colors"
           >
             {joining ? 'Joining...' : 'Join'}
           </button>

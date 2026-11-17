@@ -44,6 +44,7 @@ export interface UseWatchPartyOptions {
 }
 
 export interface UpdateWatchRoomInput {
+  roomName?: string;
   mediaId?: string;
   mediaTitle?: string;
   mediaCover?: string | null;

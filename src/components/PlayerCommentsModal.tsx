@@ -65,7 +65,7 @@ export const PlayerCommentsModal: React.FC<PlayerCommentsModalProps> = ({
         aria-modal="true"
         aria-label="Episode and series comments"
         onClick={(e) => e.stopPropagation()}
-        className="sx-comments-sheet-enter w-full max-w-lg max-h-[82vh] flex flex-col rounded-3xl bg-zinc-950/92 backdrop-blur-2xl border border-white/15 ring-1 ring-inset ring-white/10 text-white shadow-2xl overflow-hidden"
+        className="sx-comments-sheet-enter w-full max-w-lg max-h-[82vh] flex flex-col rounded-3xl bg-zinc-950/92 backdrop-blur-2xl backdrop-saturate-150 border border-white/15 ring-1 ring-inset ring-white/10 text-white shadow-2xl overflow-hidden"
       >
         {/* Modal Header */}
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10 shrink-0">

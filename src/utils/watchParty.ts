@@ -425,3 +425,45 @@ export function isRoomGraceExpired(
   return nowMs - emptySince >= graceMs;
 }
 
+export function sanitizeRoomNameUpdate(
+  raw: unknown,
+  fallbackHostName = 'Host',
+): string {
+  if (typeof raw === 'string') {
+    const cleaned = raw.trim().slice(0, 48);
+    if (cleaned.length > 0) return cleaned;
+  }
+  return buildDefaultRoomName(fallbackHostName);
+}
+
+export function formatWatchRoomMetaLine(params: {
+  format?: string | null;
+  year?: number | null;
+  totalEpisodes?: number | null;
+  averageScore?: number | null;
+}): string {
+  const parts: string[] = [];
+  if (typeof params.format === 'string' && params.format.trim()) {
+    parts.push(params.format.trim().toUpperCase());
+  }
+  if (typeof params.year === 'number' && Number.isFinite(params.year) && params.year > 1900) {
+    parts.push(String(Math.floor(params.year)));
+  }
+  if (
+    typeof params.totalEpisodes === 'number' &&
+    Number.isFinite(params.totalEpisodes) &&
+    params.totalEpisodes > 0
+  ) {
+    parts.push(`${Math.floor(params.totalEpisodes)} eps`);
+  }
+  if (
+    typeof params.averageScore === 'number' &&
+    Number.isFinite(params.averageScore) &&
+    params.averageScore > 0
+  ) {
+    const normalizedTen =
+      params.averageScore > 10 ? params.averageScore / 10 : params.averageScore;
+    parts.push(`★ ${normalizedTen.toFixed(1)}`);
+  }
+  return parts.join(' · ');
+}

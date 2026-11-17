@@ -1,9 +1,16 @@
-export type RouteTransitionKind = 'tab' | 'push' | 'pop' | 'none';
+export type RouteTransitionKind =
+  | 'tab'
+  | 'push'
+  | 'pop'
+  | 'online-next'
+  | 'online-prev'
+  | 'none';
 
 const TOP_LEVEL_TABS = [
   '/home',
   '/discover',
   '/watch-together',
+  '/community',
   '/library',
   '/downloads',
   '/calendar',
@@ -27,8 +34,14 @@ function isTopLevelTab(pathname: string): boolean {
   return TOP_LEVEL_TABS.includes(norm);
 }
 
+export function shouldShowOnlineHubSwitcher(pathname: string): boolean {
+  const norm = normalizePath(pathname);
+  return norm === '/watch-together' || norm === '/community';
+}
+
 /**
  * Classifies route navigation transitions so tab switches cross-scale cleanly,
+ * Online sub-tabs (Watch Together <-> Community) glide directionally left/right,
  * deeper detail/settings screens push in horizontally like iOS UINavigationController,
  * and returning up pops back smoothly.
  */
@@ -40,6 +53,13 @@ export function getRouteTransitionKind(
   if (!prevPathname) return 'none';
   const prev = normalizePath(prevPathname);
   if (prev === next) return 'none';
+
+  if (prev === '/watch-together' && next === '/community') {
+    return 'online-next';
+  }
+  if (prev === '/community' && next === '/watch-together') {
+    return 'online-prev';
+  }
 
   if (isTopLevelTab(prev) && isTopLevelTab(next)) {
     return 'tab';
@@ -65,6 +85,10 @@ export function getRouteTransitionClass(kind: RouteTransitionKind): string {
       return 'sx-page-push-enter';
     case 'pop':
       return 'sx-page-pop-enter';
+    case 'online-next':
+      return 'sx-online-switch-next';
+    case 'online-prev':
+      return 'sx-online-switch-prev';
     case 'none':
     default:
       return '';

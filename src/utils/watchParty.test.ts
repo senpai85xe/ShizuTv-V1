@@ -14,6 +14,7 @@ import {
   filterPublicRooms,
   formatRoomClosedAgo,
   formatRoomDuration,
+  formatWatchRoomMetaLine,
   getHostDisplayName,
   getParticipantInitial,
   isRoomGraceExpired,
@@ -23,6 +24,7 @@ import {
   normalizeRoomCode,
   removeParticipant,
   resolveDefaultDisplayName,
+  sanitizeRoomNameUpdate,
   shouldApplyRemoteSeek,
   shouldRestoreHostRole,
   splitCodeIntoSlots,
@@ -261,5 +263,31 @@ test('room grace period and host restoration helpers behave predictably', () => 
   assert.equal(shouldRestoreHostRole('host-1', 'viewer-2', 0), true);
   // Regular viewer joining an occupied room stays viewer
   assert.equal(shouldRestoreHostRole('host-1', 'viewer-2', 1), false);
+});
+
+test('sanitizeRoomNameUpdate and formatWatchRoomMetaLine handle valid and empty inputs', () => {
+  assert.equal(sanitizeRoomNameUpdate('  Night Marathon  ', 'Senpai'), 'Night Marathon');
+  assert.equal(sanitizeRoomNameUpdate('   ', 'Senpai'), "Senpai's room");
+  assert.equal(sanitizeRoomNameUpdate('A'.repeat(64), 'Senpai').length, 48);
+
+  assert.equal(
+    formatWatchRoomMetaLine({
+      format: 'tv',
+      year: 1999,
+      totalEpisodes: 1122,
+      averageScore: 8.8,
+    }),
+    'TV · 1999 · 1122 eps · ★ 8.8',
+  );
+  assert.equal(
+    formatWatchRoomMetaLine({
+      format: 'tv',
+      year: 2024,
+      totalEpisodes: 12,
+      averageScore: 84,
+    }),
+    'TV · 2024 · 12 eps · ★ 8.4',
+  );
+  assert.equal(formatWatchRoomMetaLine({ format: '', year: null }), '');
 });
 

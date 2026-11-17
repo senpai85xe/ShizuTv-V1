@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -89,6 +91,233 @@ const rooms = new Map<string, WatchPartyRoomState>();
 const roomExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const endedRooms: WatchPartyEndedRoomSummary[] = [];
 const socketMeta = new Map<WebSocket, ConnectionMeta>();
+
+type CommunityCategory = 'announcements' | 'general' | 'feedback' | 'features' | 'help';
+type CommunityLabel = 'resolved' | 'planned' | 'duplicate' | 'bug';
+
+interface StoredCommunityComment {
+  id: string;
+  authorName: string;
+  authorAvatar?: string | null;
+  authorIsMod?: boolean;
+  body: string;
+  createdAt: number;
+}
+
+interface StoredCommunityPost {
+  id: string;
+  clientId: string;
+  category: CommunityCategory;
+  title: string;
+  body: string;
+  authorName: string;
+  authorAvatar?: string | null;
+  authorIsMod?: boolean;
+  pinned?: boolean;
+  label?: CommunityLabel | null;
+  linkedAnime: Array<{ id: string | number; title: string; cover?: string | null }>;
+  baseScore: number;
+  votes: Record<string, -1 | 1>;
+  comments: StoredCommunityComment[];
+  views: number;
+  createdAt: number;
+}
+
+const COMMUNITY_STORE_PATH = path.join(os.tmpdir(), 'shizutv-community-posts-v1.json');
+
+function createSeedCommunityPosts(): StoredCommunityPost[] {
+  const now = Date.now();
+  return [
+    {
+      id: 'seed-welcome',
+      clientId: 'shizutv-mod',
+      category: 'announcements',
+      title: 'Welcome to the Community — please read the rules',
+      body: 'Welcome! This is the place to talk anime with **fellow fans**, share recommendations, report playback bugs, and suggest what ShizuTv should build next.\n> Keep spoilers wrapped like ||this|| and stay kind in every thread.',
+      authorName: 'ShizuTv',
+      authorIsMod: true,
+      pinned: true,
+      label: null,
+      linkedAnime: [],
+      baseScore: 16,
+      votes: {},
+      comments: [
+        {
+          id: 'seed-c1',
+          authorName: 'ShizuTv',
+          authorIsMod: true,
+          body: 'Drop your favorite currently airing shows below!',
+          createdAt: now - 2 * 86_400_000,
+        },
+        {
+          id: 'seed-c2',
+          authorName: 'Rio',
+          body: 'Super clean frosted community hub — loving the Watch Together rooms too.',
+          createdAt: now - 36 * 3600_000,
+        },
+      ],
+      views: 192,
+      createdAt: now - 3 * 86_400_000,
+    },
+    {
+      id: 'seed-seasonal',
+      clientId: 'seed-rio',
+      category: 'features',
+      title: 'Feature Suggestion: Top Seasonal Anime Showcase',
+      body: 'Similar to the Trending row, adding a dedicated Top Seasonal Anime showcase with quick Watch Party buttons would make weekend bingeing effortless.',
+      authorName: 'Rio',
+      pinned: false,
+      label: 'resolved',
+      linkedAnime: [{ id: 21, title: 'One Piece' }],
+      baseScore: 12,
+      votes: {},
+      comments: [
+        {
+          id: 'seed-c3',
+          authorName: 'ShizuTv',
+          authorIsMod: true,
+          body: 'Marked Resolved — seasonal filters and Watch Party quick drawers are live now!',
+          createdAt: now - 10 * 3600_000,
+        },
+      ],
+      views: 78,
+      createdAt: now - 16 * 3600_000,
+    },
+    {
+      id: 'seed-softsubs',
+      clientId: 'seed-apprehend',
+      category: 'features',
+      title: 'Multi-language soft-subs & custom font presets',
+      body: 'Awesome work on the inline player gestures! Would love extra **soft-sub styling** presets and quick audio/subtitle switches right from fullscreen.',
+      authorName: 'Apprehend',
+      pinned: false,
+      label: 'planned',
+      linkedAnime: [],
+      baseScore: 9,
+      votes: {},
+      comments: [
+        {
+          id: 'seed-c4',
+          authorName: 'Mina',
+          body: 'Fullscreen audio switcher already landed, waiting on font presets next!',
+          createdAt: now - 12 * 3600_000,
+        },
+      ],
+      views: 63,
+      createdAt: now - 21 * 3600_000,
+    },
+    {
+      id: 'seed-feedback-sync',
+      clientId: 'seed-midnight',
+      category: 'feedback',
+      title: 'Mobile Watch Together room layout & chat polish',
+      body: 'Tested a Watch Party on mobile portrait — the frosted glass chat overlay feels super smooth now. Would be nice to auto-remember preferred **H-Sub** or **Dub** track.',
+      authorName: 'Midnight',
+      pinned: false,
+      label: 'resolved',
+      linkedAnime: [{ id: 16498, title: 'Attack on Titan' }],
+      baseScore: 7,
+      votes: {},
+      comments: [],
+      views: 54,
+      createdAt: now - 28 * 3600_000,
+    },
+    {
+      id: 'seed-general-recs',
+      clientId: 'seed-void',
+      category: 'general',
+      title: 'Anime suggestions & testing out the new Community tab!',
+      body: 'I finished catching up on weekend episodes and need peak action/mystery recs.\n> Bonus points if there are no major ||ending spoilers|| in the replies!',
+      authorName: 'TheVOID',
+      pinned: false,
+      label: null,
+      linkedAnime: [{ id: 1535, title: 'Death Note' }],
+      baseScore: 5,
+      votes: {},
+      comments: [
+        {
+          id: 'seed-c5',
+          authorName: 'Kuro',
+          body: 'Try **Monster** or **Steins;Gate** if you loved Death Note.',
+          createdAt: now - 18 * 3600_000,
+        },
+      ],
+      views: 94,
+      createdAt: now - 2 * 86_400_000,
+    },
+    {
+      id: 'seed-help-anilist',
+      clientId: 'seed-brian',
+      category: 'help',
+      title: 'How to sync AniList watchlist progress automatically?',
+      body: 'Just started using ShizuTv — how do I make episode progress update on AniList automatically after watching?',
+      authorName: 'Brian',
+      pinned: false,
+      label: 'resolved',
+      linkedAnime: [],
+      baseScore: 4,
+      votes: {},
+      comments: [
+        {
+          id: 'seed-c6',
+          authorName: 'ShizuTv',
+          authorIsMod: true,
+          body: 'Head to **Settings → Tracking & Accounts** to link AniList, then progress syncs automatically from the inline player!',
+          createdAt: now - 20 * 3600_000,
+        },
+      ],
+      views: 42,
+      createdAt: now - 30 * 3600_000,
+    },
+  ];
+}
+
+function loadCommunityPosts(): StoredCommunityPost[] {
+  try {
+    if (fs.existsSync(COMMUNITY_STORE_PATH)) {
+      const raw = fs.readFileSync(COMMUNITY_STORE_PATH, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed as StoredCommunityPost[];
+      }
+    }
+  } catch {
+    // Fall back to seeds if temp file unreadable
+  }
+  return createSeedCommunityPosts();
+}
+
+const communityPosts: StoredCommunityPost[] = loadCommunityPosts();
+
+function persistCommunityPosts() {
+  try {
+    fs.writeFileSync(COMMUNITY_STORE_PATH, JSON.stringify(communityPosts), 'utf8');
+  } catch {
+    // Ignore disk write failure in ephemeral containers
+  }
+}
+
+function serializeCommunityPost(post: StoredCommunityPost, clientId?: string) {
+  const voteDelta = Object.values(post.votes).reduce<number>((sum, v) => sum + v, 0);
+  return {
+    id: post.id,
+    clientId: post.clientId,
+    category: post.category,
+    title: post.title,
+    body: post.body,
+    authorName: post.authorName,
+    authorAvatar: post.authorAvatar ?? null,
+    authorIsMod: Boolean(post.authorIsMod),
+    pinned: Boolean(post.pinned),
+    label: post.label ?? null,
+    linkedAnime: post.linkedAnime,
+    score: post.baseScore + voteDelta,
+    userVote: clientId ? post.votes[clientId] ?? 0 : 0,
+    comments: post.comments,
+    views: post.views,
+    createdAt: post.createdAt,
+  };
+}
 
 function clearRoomExpiryTimer(roomCode: string) {
   const existing = roomExpiryTimers.get(roomCode);
@@ -342,6 +571,155 @@ async function startServer() {
       return;
     }
     res.json({ exists: true, room: serializeRoom(room) });
+  });
+
+  app.get('/api/community/posts', (req, res) => {
+    const clientId =
+      typeof req.query.clientId === 'string' ? req.query.clientId.trim().slice(0, 64) : undefined;
+    res.json({
+      posts: communityPosts.map((p) => serializeCommunityPost(p, clientId)),
+    });
+  });
+
+  app.post('/api/community/posts', (req, res) => {
+    const bodyObj = (req.body ?? {}) as Record<string, unknown>;
+    const rawCategory = typeof bodyObj.category === 'string' ? bodyObj.category : '';
+    const allowedCategories: CommunityCategory[] = ['general', 'feedback', 'features', 'help'];
+    if (!allowedCategories.includes(rawCategory as CommunityCategory)) {
+      res.status(400).json({ message: 'Please choose a valid category.' });
+      return;
+    }
+    const title = typeof bodyObj.title === 'string' ? bodyObj.title.trim().slice(0, 120) : '';
+    const body = typeof bodyObj.body === 'string' ? bodyObj.body.trim().slice(0, 4000) : '';
+    if (title.length < 3 || body.length < 5) {
+      res.status(400).json({ message: 'Title (3+ chars) and body (5+ chars) are required.' });
+      return;
+    }
+    const clientId =
+      typeof bodyObj.clientId === 'string' && bodyObj.clientId.trim()
+        ? bodyObj.clientId.trim().slice(0, 64)
+        : crypto.randomUUID();
+    const linkedRaw = Array.isArray(bodyObj.linkedAnime) ? bodyObj.linkedAnime.slice(0, 3) : [];
+    const linkedAnime = linkedRaw
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+      .map((item) => {
+        const rawId =
+          typeof item.id === 'number'
+            ? item.id
+            : typeof item.id === 'string'
+              ? item.id.trim().slice(0, 80)
+              : '';
+        return {
+          id: rawId,
+          title: typeof item.title === 'string' ? item.title.trim().slice(0, 100) : 'Anime',
+          cover: sanitizeOptionalUrl(item.cover) ?? null,
+        };
+      })
+      .filter((item) => (typeof item.id === 'number' ? item.id > 0 : item.id.length > 0));
+
+    const newPost: StoredCommunityPost = {
+      id: `post-${crypto.randomUUID().slice(0, 8)}`,
+      clientId,
+      category: rawCategory as CommunityCategory,
+      title,
+      body,
+      authorName: sanitizeName(bodyObj.authorName),
+      authorAvatar: sanitizeOptionalUrl(bodyObj.authorAvatar) ?? null,
+      authorIsMod: false,
+      pinned: false,
+      label: null,
+      linkedAnime,
+      baseScore: 1,
+      votes: { [clientId]: 1 },
+      comments: [],
+      views: 1,
+      createdAt: Date.now(),
+    };
+    communityPosts.unshift(newPost);
+    persistCommunityPosts();
+    res.status(201).json({ post: serializeCommunityPost(newPost, clientId) });
+  });
+
+  app.post('/api/community/posts/:id/vote', (req, res) => {
+    const post = communityPosts.find((p) => p.id === req.params.id);
+    if (!post) {
+      res.status(404).json({ message: 'Post not found' });
+      return;
+    }
+    const bodyObj = (req.body ?? {}) as Record<string, unknown>;
+    const clientId =
+      typeof bodyObj.clientId === 'string' && bodyObj.clientId.trim()
+        ? bodyObj.clientId.trim().slice(0, 64)
+        : '';
+    if (!clientId) {
+      res.status(400).json({ message: 'clientId required' });
+      return;
+    }
+    const vote = bodyObj.vote;
+    if (vote === 1 || vote === -1) {
+      post.votes[clientId] = vote;
+    } else {
+      delete post.votes[clientId];
+    }
+    persistCommunityPosts();
+    res.json({ post: serializeCommunityPost(post, clientId) });
+  });
+
+  app.post('/api/community/posts/:id/view', (req, res) => {
+    const post = communityPosts.find((p) => p.id === req.params.id);
+    if (!post) {
+      res.status(404).json({ message: 'Post not found' });
+      return;
+    }
+    post.views += 1;
+    persistCommunityPosts();
+    const clientId =
+      typeof req.body?.clientId === 'string' ? req.body.clientId.trim().slice(0, 64) : undefined;
+    res.json({ post: serializeCommunityPost(post, clientId) });
+  });
+
+  app.post('/api/community/posts/:id/comments', (req, res) => {
+    const post = communityPosts.find((p) => p.id === req.params.id);
+    if (!post) {
+      res.status(404).json({ message: 'Post not found' });
+      return;
+    }
+    const bodyObj = (req.body ?? {}) as Record<string, unknown>;
+    const text = typeof bodyObj.body === 'string' ? bodyObj.body.trim().slice(0, 1200) : '';
+    if (!text) {
+      res.status(400).json({ message: 'Comment text required' });
+      return;
+    }
+    const comment: StoredCommunityComment = {
+      id: `cmt-${crypto.randomUUID().slice(0, 8)}`,
+      authorName: sanitizeName(bodyObj.authorName),
+      authorAvatar: sanitizeOptionalUrl(bodyObj.authorAvatar) ?? null,
+      authorIsMod: false,
+      body: text,
+      createdAt: Date.now(),
+    };
+    post.comments.push(comment);
+    persistCommunityPosts();
+    const clientId =
+      typeof bodyObj.clientId === 'string' ? bodyObj.clientId.trim().slice(0, 64) : undefined;
+    res.status(201).json({ post: serializeCommunityPost(post, clientId), comment });
+  });
+
+  app.delete('/api/community/posts/:id', (req, res) => {
+    const idx = communityPosts.findIndex((p) => p.id === req.params.id);
+    if (idx === -1) {
+      res.status(404).json({ message: 'Post not found' });
+      return;
+    }
+    const clientId =
+      typeof req.query.clientId === 'string' ? req.query.clientId.trim().slice(0, 64) : '';
+    if (communityPosts[idx].clientId !== clientId) {
+      res.status(403).json({ message: 'Not allowed to delete this post' });
+      return;
+    }
+    communityPosts.splice(idx, 1);
+    persistCommunityPosts();
+    res.json({ deleted: true });
   });
 
   const server = http.createServer(app);
@@ -690,6 +1068,11 @@ async function startServer() {
         const room = rooms.get(roomCode);
         if (!room || room.hostId !== meta.participantId) return;
 
+        if (typeof msg.roomName === 'string' && msg.roomName.trim()) {
+          const hostDisplay =
+            room.participants.find((p) => p.id === room.hostId || p.isHost)?.name || 'Host';
+          room.roomName = sanitizeRoomName(msg.roomName, hostDisplay);
+        }
         if (typeof msg.mediaId === 'string' && msg.mediaId.trim()) {
           room.mediaId = msg.mediaId.trim().slice(0, 64);
           room.currentTime = 0;

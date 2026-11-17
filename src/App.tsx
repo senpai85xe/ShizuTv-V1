@@ -14,6 +14,7 @@ import { LibraryPage } from './pages/LibraryPage';
 import { ReaderPage } from './pages/ReaderPage';
 import { WatchTogetherPage } from './pages/WatchTogetherPage';
 import { WatchTogetherRoomPage } from './pages/WatchTogetherRoomPage';
+import { CommunityPage } from './pages/CommunityPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { DownloadsPage } from './pages/DownloadsPage';
 import { ContinueHistoryPage } from './pages/ContinueHistoryPage';
@@ -71,6 +72,7 @@ export const App: React.FC = () => {
                   <Route path="/discover" element={<DiscoverPage />} />
                   <Route path="/watch-together" element={<WatchTogetherPage />} />
                   <Route path="/watch-together/:roomCode" element={<WatchTogetherRoomPage />} />
+                  <Route path="/community" element={<CommunityPage />} />
                   <Route path="/library" element={<LibraryPage />} />
                   <Route path="/downloads" element={<DownloadsPage />} />
                   <Route path="/calendar" element={<CalendarPage />} />

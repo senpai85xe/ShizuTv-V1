@@ -14,7 +14,14 @@ export type MediaCardStyle =
   | 'trendingRank'
   | 'shizutv';
 
-export type NavBarStyle = 'classic' | 'minimal' | 'frosted' | 'material' | 'docked';
+export type NavBarStyle =
+  | 'classic'
+  | 'minimal'
+  | 'frosted'
+  | 'material'
+  | 'docked'
+  | 'glassIcons'
+  | 'glassLabeled';
 export type HeroBannerStyle = 'classic' | 'coverflow' | 'cinematic' | 'splitPoster' | 'minimal';
 export type EpisodeChapterStyle = 'classic' | 'grid' | 'box' | 'compact' | 'cover';
 export type HomeHeaderStyle =

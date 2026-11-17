@@ -17,6 +17,7 @@ const STATIC_ROUTE_LABELS: Array<{ match: (path: string) => boolean; label: stri
   { match: (p) => p.startsWith('/continue/novel'), label: 'Continue Reading' },
   { match: (p) => p.startsWith('/continue'), label: 'Continue Watching' },
   { match: (p) => p.startsWith('/watch-together'), label: 'Watch Together' },
+  { match: (p) => p.startsWith('/community'), label: 'Community' },
   { match: (p) => p === '/settings', label: 'Settings' },
   { match: (p) => p === '/settings/theme', label: 'Theme Settings' },
   { match: (p) => p === '/settings/ui', label: 'UI Settings' },

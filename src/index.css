@@ -278,6 +278,51 @@ button:not([role="switch"]):not([data-no-press]):active:not(:disabled) {
   animation: sxPagePopEnter 400ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
+@keyframes sxOnlineSwitchNext {
+  0% {
+    opacity: 0;
+    transform: translate3d(42px, 0, 0) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxOnlineSwitchPrev {
+  0% {
+    opacity: 0;
+    transform: translate3d(-42px, 0, 0) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sxOnlineDockEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.sx-online-switch-next {
+  animation: sxOnlineSwitchNext 380ms var(--sx-ease-spring) backwards;
+}
+
+.sx-online-switch-prev {
+  animation: sxOnlineSwitchPrev 380ms var(--sx-ease-spring) backwards;
+}
+
+.sx-online-dock-enter {
+  animation: sxOnlineDockEnter 360ms var(--sx-ease-spring) backwards;
+}
+
 /* iOS Sheet & Backdrop Transitions */
 @keyframes sxBackdropEnter {
   0% {

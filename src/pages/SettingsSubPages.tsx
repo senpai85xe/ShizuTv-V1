@@ -43,7 +43,6 @@ import {
   HomeHeaderStyle,
   MEDIA_CARD_STYLES,
   MediaCardStyle,
-  NavBarStyle,
   ThemeMode,
 } from '../data/themePresets';
 import {
@@ -62,6 +61,7 @@ import {
   EpisodeChapterListItem,
 } from '../components/EpisodeChapterList';
 import { resolveEpisodeChapterStyle } from '../utils/episodeChapterStyle';
+import { NAV_BAR_STYLE_OPTIONS } from '../utils/navBarStyles';
 import { ShonenXLogo } from '../components/ShonenXLogo';
 import { ScrollReveal } from '../components/ScrollReveal';
 import { PWAInstallButton } from '../components/PWAInstallButton';
@@ -536,13 +536,7 @@ export const UiSettingsPage: React.FC = () => {
     cover: RectangleHorizontal,
   };
 
-  const navStyles: { id: NavBarStyle; label: string; desc: string }[] = [
-    { id: 'classic', label: 'Classic', desc: 'Floating side rail & pill mobile bar' },
-    { id: 'frosted', label: 'Frosted', desc: 'Translucent backdrop-blur glass rail' },
-    { id: 'docked', label: 'Docked', desc: 'Full-height anchored edge rail' },
-    { id: 'material', label: 'Material', desc: 'Tonal pill indicators' },
-    { id: 'minimal', label: 'Minimal', desc: 'Low-profile clean navigation' },
-  ];
+  const navStyles = NAV_BAR_STYLE_OPTIONS;
 
   const headerStyles: { id: HomeHeaderStyle; label: string }[] = [
     { id: 'prominent', label: 'Prominent' },
@@ -875,21 +869,36 @@ export const UiSettingsPage: React.FC = () => {
           >
             <div className="p-4 space-y-3">
               <div className="text-sm font-bold">Navigation Rail Style</div>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                {navStyles.map((n) => (
-                  <button
-                    key={n.id}
-                    type="button"
-                    onClick={() => updateUiPrefs({ navBarStyle: n.id })}
-                    className={`sx-card-spring p-2.5 rounded-xl border text-left ${
-                      uiPrefs.navBarStyle === n.id
-                        ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)]'
-                        : 'bg-[var(--sx-surface-high)] border-[var(--sx-outline)]'
-                    }`}
-                  >
-                    <div className="text-xs font-bold">{n.label}</div>
-                  </button>
-                ))}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                {navStyles.map((n) => {
+                  const active = uiPrefs.navBarStyle === n.id;
+                  return (
+                    <button
+                      key={n.id}
+                      type="button"
+                      data-testid={`nav-style-option-${n.id}`}
+                      aria-pressed={active}
+                      onClick={() => updateUiPrefs({ navBarStyle: n.id })}
+                      className={`sx-card-spring p-3 rounded-xl border text-left transition-colors ${
+                        active
+                          ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)] shadow-sm'
+                          : 'bg-[var(--sx-surface-high)] border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="text-xs font-extrabold">{n.label}</span>
+                        {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                      </div>
+                      <p
+                        className={`text-[10px] mt-1 line-clamp-2 ${
+                          active ? 'opacity-90' : 'text-[var(--sx-on-surface-muted)]'
+                        }`}
+                      >
+                        {n.desc}
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
