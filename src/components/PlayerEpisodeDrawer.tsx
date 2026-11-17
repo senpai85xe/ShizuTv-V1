@@ -85,7 +85,7 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
         aria-label="Episode List"
         data-testid="player-episode-drawer"
         onClick={(e) => e.stopPropagation()}
-        className={`sx-player-popover relative z-10 flex flex-col overflow-hidden bg-zinc-950/65 backdrop-blur-2xl backdrop-saturate-150 border border-white/20 ring-1 ring-inset ring-white/10 shadow-[0_24px_60px_rgba(0,0,0,0.65)] text-white ${
+        className={`sx-player-drawer-enter relative z-10 flex flex-col overflow-hidden bg-zinc-950/75 backdrop-blur-2xl backdrop-saturate-150 border border-white/20 ring-1 ring-inset ring-white/10 shadow-[0_24px_60px_rgba(0,0,0,0.65)] text-white ${
           compact
             ? 'w-full h-full rounded-2xl'
             : 'w-full max-w-[360px] max-h-[min(78%,520px)] sm:mt-10 sm:mb-12 rounded-3xl'

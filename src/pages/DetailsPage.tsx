@@ -88,6 +88,9 @@ import {
   getDetailsTabTransitionClass,
   shouldShowDetailsStickyHeader,
 } from '../utils/detailsMotion';
+import { getRouteTransitionClass, getRouteTransitionKind } from '../utils/appMotion';
+import { getPreviousVisitedRoute } from '../utils/scrollPersistence';
+import { useScrollPersistence } from '../hooks/useScrollPersistence';
 
 type DetailsTab = 'info' | 'watch' | 'comments';
 
@@ -131,6 +134,20 @@ export const DetailsPage: React.FC = () => {
       : paramType?.toUpperCase() === 'NOVEL'
         ? 'NOVEL'
         : 'ANIME';
+
+  const detailsRouteKey = `/details/${resolvedType.toLowerCase()}/${id || ''}`;
+  const prevVisitedRouteRef = React.useRef<string | null>(getPreviousVisitedRoute());
+  const detailsTransitionKind =
+    prevVisitedRouteRef.current === '/player' || prevVisitedRouteRef.current === '/reader'
+      ? 'pop'
+      : getRouteTransitionKind(prevVisitedRouteRef.current, detailsRouteKey);
+  const detailsTransitionClass =
+    getRouteTransitionClass(detailsTransitionKind) || 'sx-page-push-enter';
+
+  const { isRestoring: isRestoringScroll } = useScrollPersistence({
+    routeKey: detailsRouteKey,
+    enabled: Boolean(id),
+  });
 
   const [media, setMedia] = useState<UnifiedMedia>(
     initialMedia ?? {
@@ -448,7 +465,11 @@ export const DetailsPage: React.FC = () => {
     'bg-[var(--sx-surface-container)]/34 dark:bg-[var(--sx-surface-container)]/38 backdrop-blur-lg backdrop-saturate-150 border border-white/45 dark:border-white/12 text-[var(--sx-on-surface)] shadow-lg ring-1 ring-inset ring-white/25 dark:ring-white/5 hover:border-[var(--sx-primary)]/50 transition-all';
 
   return (
-    <div className="relative min-h-screen text-[var(--sx-on-surface)] overflow-x-hidden">
+    <div
+      data-testid="details-page"
+      data-restoring-scroll={isRestoringScroll ? 'true' : 'false'}
+      className="relative min-h-screen text-[var(--sx-on-surface)] overflow-x-hidden"
+    >
       {/* Full-bleed Ambient Blurred Poster Backdrop */}
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-[var(--sx-surface)]">
         {(media.cover || media.banner) && (
@@ -466,7 +487,7 @@ export const DetailsPage: React.FC = () => {
       {/* Main Content Container */}
       <div
         key={`details-stage-${id}`}
-        className={`sx-page-push-enter max-w-5xl mx-auto px-4 sm:px-6 pt-4 ${
+        className={`${detailsTransitionClass} max-w-5xl mx-auto px-4 sm:px-6 pt-4 ${
           activeTab === 'watch' && (episodes.length > 0 || chapters.length > 0)
             ? 'pb-48'
             : 'pb-32'

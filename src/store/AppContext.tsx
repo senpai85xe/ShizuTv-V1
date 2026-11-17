@@ -520,7 +520,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const updatePlayerPrefs = useCallback((patch: Partial<PlayerPrefs>) => {
-    setState((prev) => ({ ...prev, playerPrefs: { ...prev.playerPrefs, ...patch } }));
+    setState((prev) => {
+      const next = { ...prev, playerPrefs: { ...prev.playerPrefs, ...patch } };
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage quota errors
+      }
+      return next;
+    });
   }, []);
 
   const updateReaderPrefs = useCallback((patch: Partial<ReaderPrefs>) => {

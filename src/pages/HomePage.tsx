@@ -43,6 +43,7 @@ import {
   startHomeModeTransition,
 } from '../utils/homeModeTransition';
 import { shouldOpenProfileSheet } from '../utils/themeDefaults';
+import { useScrollPersistence } from '../hooks/useScrollPersistence';
 
 const HOME_MEDIA_MODE_KEY = 'shonenx_home_media_mode';
 
@@ -61,6 +62,8 @@ interface FeedState {
   error: string | null;
 }
 
+const homeFeedsCache = new Map<string, Record<string, FeedState>>();
+
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const {
@@ -73,7 +76,16 @@ export const HomePage: React.FC = () => {
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileSheetOpen, setProfileSheetOpen] = useState(false);
   const [discoveryModalOpen, setDiscoveryModalOpen] = useState(false);
-  const [feeds, setFeeds] = useState<Record<string, FeedState>>({});
+
+  const activeSections = state.homeSections.filter((s) => !s.disabled);
+  const loadResetKey = getObserverLoadResetKey(
+    effectiveMetadataTracker,
+    state.contentPrefs.adultContentMode,
+  );
+
+  const [feeds, setFeeds] = useState<Record<string, FeedState>>(
+    () => homeFeedsCache.get(loadResetKey) ?? {},
+  );
   const [cloudContinueFeeds, setCloudContinueFeeds] = useState<
     Record<string, { items: LibraryEntry[]; loading: boolean; error: string | null }>
   >({});
@@ -87,15 +99,34 @@ export const HomePage: React.FC = () => {
     createInitialHomeModeTransition(readInitialHomeMediaMode()),
   );
   const homeMediaMode = modeTransition.activeMode;
-  const triggeredKeysRef = useRef<Set<string>>(new Set());
+  const triggeredKeysRef = useRef<Set<string>>(
+    (() => {
+      const initial = new Set<string>();
+      const cached = homeFeedsCache.get(loadResetKey);
+      if (cached) {
+        for (const [sectionId, feed] of Object.entries(cached)) {
+          if (!feed.loading && feed.items.length > 0) {
+            initial.add(
+              getSectionFetchKey(
+                sectionId,
+                effectiveMetadataTracker,
+                state.contentPrefs.adultContentMode,
+              ),
+            );
+          }
+        }
+      }
+      return initial;
+    })(),
+  );
 
-  const activeSections = state.homeSections.filter((s) => !s.disabled);
   const visibleSections = filterHomeSectionsByMediaMode(activeSections, homeMediaMode);
   const firstDiscoverySection = visibleSections.find((s) => s.type === 'discovery');
-  const loadResetKey = getObserverLoadResetKey(
-    effectiveMetadataTracker,
-    state.contentPrefs.adultContentMode,
-  );
+
+  const { isRestoring: isRestoringScroll } = useScrollPersistence({
+    routeKey: '/home',
+    enabled: true,
+  });
 
   const handleSelectMediaMode = (mode: HomeMediaMode) => {
     const prefersReducedMotion =
@@ -147,10 +178,14 @@ export const HomePage: React.FC = () => {
           1,
         );
         if (activeResetKeyRef.current !== requestResetKey) return;
-        setFeeds((prev) => ({
-          ...prev,
-          [section.id]: { items: res.items, loading: false, error: null },
-        }));
+        setFeeds((prev) => {
+          const next = {
+            ...prev,
+            [section.id]: { items: res.items, loading: false, error: null },
+          };
+          homeFeedsCache.set(requestResetKey, next);
+          return next;
+        });
         setOutageTracker(null);
       } catch (err) {
         if (activeResetKeyRef.current !== requestResetKey) return;
@@ -184,7 +219,8 @@ export const HomePage: React.FC = () => {
   );
 
   useEffect(() => {
-    setFeeds({});
+    const cached = homeFeedsCache.get(loadResetKey);
+    setFeeds(cached ?? {});
     setOutageTracker(null);
   }, [loadResetKey]);
 
@@ -523,7 +559,11 @@ export const HomePage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen space-y-7 pb-10">
+    <div
+      data-testid="home-page"
+      data-restoring-scroll={isRestoringScroll ? 'true' : 'false'}
+      className="min-h-screen space-y-7 pb-10"
+    >
       <HomeHeader
         onOpenProfile={() =>
           shouldOpenProfileSheet(state.uiPrefs.homeHeaderStyle)

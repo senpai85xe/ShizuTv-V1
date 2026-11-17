@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { AppProvider } from './store/AppContext';
 import { PipProvider } from './store/PipContext';
 import { GlobalBackground } from './components/GlobalBackground';
@@ -32,6 +32,13 @@ import {
   TrackingSettingsPage,
   UiSettingsPage,
 } from './pages/SettingsSubPages';
+import { recordVisitedRoute } from './utils/scrollPersistence';
+
+const RouteScrollCoordinator: React.FC = () => {
+  const location = useLocation();
+  recordVisitedRoute(location.pathname);
+  return null;
+};
 
 const ShellLayout: React.FC = () => (
   <NavShell>
@@ -45,6 +52,7 @@ export const App: React.FC = () => {
       <GlobalBackground>
         <SecurityGate>
           <BrowserRouter>
+            <RouteScrollCoordinator />
             <PipProvider>
               <Routes>
                 {/* Fullscreen Player, Reader & Details Sheet (No NavShell) */}

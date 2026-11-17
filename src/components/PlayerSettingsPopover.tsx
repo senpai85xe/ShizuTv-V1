@@ -3,12 +3,14 @@ import {
   Check,
   ExternalLink,
   Keyboard,
+  ListVideo,
   PictureInPicture2,
   Plus,
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
   Subtitles,
+  Trash2,
   Tv,
   Upload,
   Volume2,
@@ -64,6 +66,8 @@ interface PlayerSettingsPopoverProps {
   ambientEnabled?: boolean;
   onToggleAmbient?: () => void;
   onToggleNativePip?: () => void;
+  onOpenEpisodes?: () => void;
+  episodeCount?: number;
   onOpenFullPlayer?: () => void;
   onOpenShortcuts?: () => void;
   compact?: boolean;
@@ -104,6 +108,8 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
   ambientEnabled,
   onToggleAmbient,
   onToggleNativePip,
+  onOpenEpisodes,
+  episodeCount,
   onOpenFullPlayer,
   onOpenShortcuts,
   compact = false,
@@ -122,6 +128,10 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
   const handleCueTextChange = (idx: number, nextText: string) => {
     const updated = cues.map((cue, i) => (i === idx ? { ...cue, text: nextText } : cue));
     onUpdateCues(updated);
+  };
+
+  const handleDeleteCue = (idx: number) => {
+    onUpdateCues(cues.filter((_, i) => i !== idx));
   };
 
   const handleAddCueAtCurrentTime = () => {
@@ -210,13 +220,15 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
               >
                 <span className="text-[11px] font-bold">Auto Play on Open</span>
                 <span
-                  className={`w-8 h-4.5 rounded-full p-0.5 transition-colors flex items-center ${
-                    playerPrefs.autoPlay
-                      ? 'bg-[var(--sx-player-accent)] justify-end'
-                      : 'bg-white/20 justify-start'
+                  className={`relative w-8 h-4.5 rounded-full p-0.5 transition-colors duration-200 flex items-center ${
+                    playerPrefs.autoPlay ? 'bg-[var(--sx-player-accent)]' : 'bg-white/20'
                   }`}
                 >
-                  <span className="w-3.5 h-3.5 rounded-full bg-zinc-950 shadow" />
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full bg-zinc-950 shadow transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                      playerPrefs.autoPlay ? 'translate-x-3.5' : 'translate-x-0'
+                    }`}
+                  />
                 </span>
               </button>
 
@@ -229,13 +241,15 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
               >
                 <span className="text-[11px] font-bold">Auto Next Episode</span>
                 <span
-                  className={`w-8 h-4.5 rounded-full p-0.5 transition-colors flex items-center ${
-                    playerPrefs.autoNextEpisode
-                      ? 'bg-[var(--sx-player-accent)] justify-end'
-                      : 'bg-white/20 justify-start'
+                  className={`relative w-8 h-4.5 rounded-full p-0.5 transition-colors duration-200 flex items-center ${
+                    playerPrefs.autoNextEpisode ? 'bg-[var(--sx-player-accent)]' : 'bg-white/20'
                   }`}
                 >
-                  <span className="w-3.5 h-3.5 rounded-full bg-zinc-950 shadow" />
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full bg-zinc-950 shadow transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                      playerPrefs.autoNextEpisode ? 'translate-x-3.5' : 'translate-x-0'
+                    }`}
+                  />
                 </span>
               </button>
 
@@ -251,13 +265,19 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
               >
                 <span className="text-[11px] font-bold">Auto Skip OP / ED</span>
                 <span
-                  className={`w-8 h-4.5 rounded-full p-0.5 transition-colors flex items-center ${
+                  className={`relative w-8 h-4.5 rounded-full p-0.5 transition-colors duration-200 flex items-center ${
                     playerPrefs.autoSkipOp || playerPrefs.autoSkipEd
-                      ? 'bg-[var(--sx-player-accent)] justify-end'
-                      : 'bg-white/20 justify-start'
+                      ? 'bg-[var(--sx-player-accent)]'
+                      : 'bg-white/20'
                   }`}
                 >
-                  <span className="w-3.5 h-3.5 rounded-full bg-zinc-950 shadow" />
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full bg-zinc-950 shadow transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                      playerPrefs.autoSkipOp || playerPrefs.autoSkipEd
+                        ? 'translate-x-3.5'
+                        : 'translate-x-0'
+                    }`}
+                  />
                 </span>
               </button>
 
@@ -270,13 +290,15 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
               >
                 <span className="text-[11px] font-bold">Auto PiP on Leave</span>
                 <span
-                  className={`w-8 h-4.5 rounded-full p-0.5 transition-colors flex items-center ${
-                    playerPrefs.autoPip
-                      ? 'bg-[var(--sx-player-accent)] justify-end'
-                      : 'bg-white/20 justify-start'
+                  className={`relative w-8 h-4.5 rounded-full p-0.5 transition-colors duration-200 flex items-center ${
+                    playerPrefs.autoPip ? 'bg-[var(--sx-player-accent)]' : 'bg-white/20'
                   }`}
                 >
-                  <span className="w-3.5 h-3.5 rounded-full bg-zinc-950 shadow" />
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full bg-zinc-950 shadow transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                      playerPrefs.autoPip ? 'translate-x-3.5' : 'translate-x-0'
+                    }`}
+                  />
                 </span>
               </button>
             </div>
@@ -374,6 +396,23 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                 >
                   <Keyboard className="w-3.5 h-3.5" />
                   <span>Shortcuts</span>
+                </button>
+              )}
+
+              {onOpenEpisodes && (
+                <button
+                  type="button"
+                  data-testid="settings-open-episodes-btn"
+                  onClick={() => {
+                    onClose();
+                    onOpenEpisodes();
+                  }}
+                  className="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl bg-white/10 hover:bg-white/20 text-[11px] font-bold transition-colors"
+                >
+                  <ListVideo className="w-3.5 h-3.5" />
+                  <span>
+                    Episodes{typeof episodeCount === 'number' ? ` (${episodeCount})` : ''}
+                  </span>
                 </button>
               )}
 
@@ -747,15 +786,27 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                           : 'bg-white/5 border-white/10'
                       }`}
                     >
-                      <div className="flex items-center justify-between text-[10px] font-mono-tabular text-white/60">
+                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono-tabular text-white/60">
                         <span>
                           {formatPlayerTime(cue.start)} → {formatPlayerTime(cue.end)}
                         </span>
-                        {isLive && (
-                          <span className="text-[9px] font-extrabold uppercase text-[var(--sx-player-accent)]">
-                            Active
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {isLive && (
+                            <span className="text-[9px] font-extrabold uppercase text-[var(--sx-player-accent)]">
+                              Active
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            aria-label={`Delete subtitle line ${idx + 1}`}
+                            data-testid={`sub-cue-delete-${idx}`}
+                            onClick={() => handleDeleteCue(idx)}
+                            className="p-0.5 rounded hover:bg-white/15 text-white/50 hover:text-red-300 transition-colors"
+                            title="Delete subtitle line"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
                       <input
                         type="text"

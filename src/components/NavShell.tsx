@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { Home, Search, BookMarked, Download, Settings, Calendar, Tv } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { ShonenXLogo } from './ShonenXLogo';
@@ -9,6 +9,10 @@ import {
   getRouteTransitionKind,
   RouteTransitionKind,
 } from '../utils/appMotion';
+import {
+  getPreviousVisitedRoute,
+  shouldNavShellResetScroll,
+} from '../utils/scrollPersistence';
 
 interface NavShellProps {
   children: React.ReactNode;
@@ -17,6 +21,7 @@ interface NavShellProps {
 export const NavShell: React.FC<NavShellProps> = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const navigationType = useNavigationType();
   const { state, updateUiPrefs } = useApp();
 
   const navStyle = state.uiPrefs.navBarStyle;
@@ -37,24 +42,38 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
   const isActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(`${path}/`);
 
-  const prevPathRef = useRef<string | null>(null);
-  const transitionRef = useRef<{ path: string; kind: RouteTransitionKind }>({
+  const initialPrevPath = getPreviousVisitedRoute();
+  const prevPathRef = useRef<string | null>(location.pathname);
+  const transitionRef = useRef<{
+    path: string;
+    prevPath: string | null;
+    kind: RouteTransitionKind;
+  }>({
     path: location.pathname,
-    kind: 'none',
+    prevPath: initialPrevPath,
+    kind: getRouteTransitionKind(initialPrevPath, location.pathname),
   });
   if (transitionRef.current.path !== location.pathname) {
+    const prevPath = prevPathRef.current;
     transitionRef.current = {
       path: location.pathname,
-      kind: getRouteTransitionKind(prevPathRef.current, location.pathname),
+      prevPath,
+      kind: getRouteTransitionKind(prevPath, location.pathname),
     };
-    prevPathRef.current = location.pathname;
-  } else if (prevPathRef.current === null) {
     prevPathRef.current = location.pathname;
   }
 
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'auto' });
-  }, [location.pathname]);
+    if (
+      shouldNavShellResetScroll(
+        location.pathname,
+        transitionRef.current.prevPath,
+        navigationType,
+      )
+    ) {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+  }, [location.pathname, navigationType]);
 
   const transitionKind = transitionRef.current.kind;
   const transitionClass = getRouteTransitionClass(transitionKind);

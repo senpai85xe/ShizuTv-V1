@@ -198,6 +198,7 @@ export const PlayerPage: React.FC = () => {
     const video = videoRef.current;
     if (!video) return;
 
+    let cancelled = false;
     const resumeAt = pendingStartTimeRef.current;
     const resumePlay = pendingResumePlayRef.current;
     pendingStartTimeRef.current = null;
@@ -211,8 +212,10 @@ export const PlayerPage: React.FC = () => {
     setSelectedHlsLevel(-1);
 
     const shouldStart = shouldAutoStartPlayback(autoPlay, resumePlay);
+    video.autoplay = false;
 
     const applyInitialStreamState = () => {
+      if (cancelled) return;
       if (resumeAt && resumeAt > 0.5) {
         try {
           video.currentTime = resumeAt;
@@ -223,6 +226,8 @@ export const PlayerPage: React.FC = () => {
       video.playbackRate = speed;
       if (shouldStart) {
         video.play().catch(() => {});
+      } else if (!video.paused) {
+        video.pause();
       }
     };
 
@@ -253,6 +258,8 @@ export const PlayerPage: React.FC = () => {
     }
 
     return () => {
+      cancelled = true;
+      video.removeEventListener('loadedmetadata', applyInitialStreamState);
       if (hls) hls.destroy();
       if (hlsRef.current === hls) hlsRef.current = null;
     };
@@ -789,6 +796,7 @@ export const PlayerPage: React.FC = () => {
       )}
       <video
         ref={videoRef}
+        autoPlay={false}
         playsInline
         style={brightness < 1 ? { filter: `brightness(${brightness})` } : undefined}
         onClick={() => {
@@ -1319,12 +1327,13 @@ export const PlayerPage: React.FC = () => {
 
                 <button
                   type="button"
+                  data-testid="player-fit-btn"
                   onClick={() => {
                     const modes: VideoFitMode[] = ['contain', 'cover', 'fill'];
                     const next = modes[(modes.indexOf(fitMode) + 1) % modes.length];
                     updatePlayerPrefs({ videoFit: next });
                   }}
-                  className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 text-[11px] font-bold transition-colors"
+                  className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 text-[10px] sm:text-[11px] font-bold transition-colors"
                   title={`Aspect Fit: ${fitMode}`}
                 >
                   <RectangleHorizontal className="w-3.5 h-3.5" />
@@ -1449,6 +1458,11 @@ export const PlayerPage: React.FC = () => {
             ? () => void toggleNativePiP()
             : undefined
         }
+        onOpenEpisodes={() => {
+          setShowSettingsMenu(false);
+          setShowEpisodeDrawer(true);
+        }}
+        episodeCount={episodes.length}
         onOpenShortcuts={() => setShowShortcuts(true)}
       />
 

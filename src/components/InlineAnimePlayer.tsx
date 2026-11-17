@@ -223,6 +223,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     prevPlaySignalRef.current = playSignal;
     const shouldStart =
       !isPipActive() && shouldAutoStartPlayback(autoPlay, isNewExplicitTrigger || resumePlay);
+    video.autoplay = false;
 
     const applyInitialStreamState = () => {
       if (cancelled) return;
@@ -240,6 +241,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       video.playbackRate = speed;
       if (shouldStart) {
         video.play().catch(() => {});
+      } else if (!video.paused) {
+        video.pause();
       }
     };
 
@@ -676,15 +679,25 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           style={{ borderRadius: isFullscreen ? '0px' : `${state.themePrefs.uiRoundness}px` }}
           className="absolute inset-0 overflow-hidden flex items-center justify-center bg-black"
         >
-          {/* Artwork Preview + Shimmer ONLY before first video frame loads — never bleeds behind letterbox bars */}
+          {/* Uncropped Artwork Preview + Blurred Ambient Fill ONLY before first video frame loads */}
           {backdropArtwork && (
-            <img
-              src={backdropArtwork}
-              alt={currentEpisode.title}
-              className={`pointer-events-none absolute inset-0 w-full h-full object-cover transition-opacity duration-500 ${
-                hasVideoFrame || isFullscreen ? 'opacity-0' : 'opacity-65'
-              }`}
-            />
+            <>
+              <img
+                src={backdropArtwork}
+                alt=""
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-0 w-full h-full object-cover blur-2xl scale-110 transition-opacity duration-500 ${
+                  hasVideoFrame || isFullscreen ? 'opacity-0' : 'opacity-45'
+                }`}
+              />
+              <img
+                src={backdropArtwork}
+                alt={currentEpisode.title}
+                className={`pointer-events-none absolute inset-0 w-full h-full object-contain transition-opacity duration-500 ${
+                  hasVideoFrame || isFullscreen ? 'opacity-0' : 'opacity-80'
+                }`}
+              />
+            </>
           )}
           {!hasVideoFrame && !isFullscreen && (
             <div
@@ -708,6 +721,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
 
           <video
             ref={videoRef}
+            autoPlay={false}
             playsInline
             onClick={() => {
               if (showServerMenu || showSettingsMenu || showEpisodeDrawer) {
@@ -779,16 +793,17 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             </>
           )}
 
-          {/* Active Subtitle Cue (positioned cleanly so it never collides with center controls) */}
+          {/* Active Subtitle Cue (positioned cleanly so it never collides with center controls on mobile) */}
           {activeCue && (
             <div
+              data-testid="inline-player-subtitle-overlay"
               className={`pointer-events-none absolute inset-x-3 sm:inset-x-5 flex justify-center z-20 transition-all duration-200 ${
                 state.playerPrefs.subtitlePosition === 'top'
                   ? 'top-12 sm:top-14'
                   : controlsVisible
                     ? isFullscreen
                       ? 'bottom-16'
-                      : 'bottom-[46px] sm:bottom-14'
+                      : 'bottom-[44px] sm:bottom-14'
                     : 'bottom-3 sm:bottom-6'
               }`}
             >
@@ -798,11 +813,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                   fontSize: `${
                     isFullscreen
                       ? state.playerPrefs.subtitleSize
-                      : Math.min(state.playerPrefs.subtitleSize, 11)
+                      : Math.min(state.playerPrefs.subtitleSize, 10)
                   }px`,
                   color: state.playerPrefs.subtitleColor || '#ffffff',
                 }}
-                className={`sx-player-subtitle-enter px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-xl text-center font-bold max-w-[94%] sm:max-w-lg leading-tight sm:leading-snug line-clamp-2 transition-all duration-200 ${
+                className={`sx-player-subtitle-enter px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-xl text-center font-bold max-w-[94%] sm:max-w-lg leading-tight sm:leading-snug ${
+                  !isFullscreen && controlsVisible ? 'line-clamp-1 sm:line-clamp-2' : 'line-clamp-2'
+                } transition-all duration-200 ${
                   state.playerPrefs.subtitleBackground
                     ? 'bg-black/75 backdrop-blur-md border border-white/10'
                     : 'drop-shadow-[0_2px_6px_rgba(0,0,0,0.95)]'
@@ -896,14 +913,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               </div>
             </div>
 
-            {/* Center Playback Cluster (-10s · Play/Pause · +10s) — hidden while popovers/drawer are open */}
+            {/* Center Playback Cluster (-10s · Play/Pause · +10s) — lifted slightly on mobile when controls & subtitles show */}
             <div
               className={`flex items-center justify-center gap-6 sm:gap-10 transition-all duration-300 ${
                 showSettingsMenu || showServerMenu || showEpisodeDrawer
                   ? 'opacity-0 scale-90 pointer-events-none'
                   : 'pointer-events-auto'
               } ${
-                !isFullscreen && controlsVisible ? '-translate-y-2 sm:translate-y-0' : ''
+                !isFullscreen && controlsVisible ? '-translate-y-3.5 sm:translate-y-0' : ''
               } ${controlsVisible ? 'scale-100' : 'scale-95'}`}
             >
               <button
@@ -1120,6 +1137,11 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               ? () => void toggleNativePiP()
               : undefined
           }
+          onOpenEpisodes={() => {
+            setShowSettingsMenu(false);
+            setShowEpisodeDrawer(true);
+          }}
+          episodeCount={episodes.length}
           onOpenFullPlayer={
             onOpenFullPlayer
               ? () => {
