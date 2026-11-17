@@ -31,6 +31,7 @@ const STATIC_ROUTE_LABELS: Array<{ match: (path: string) => boolean; label: stri
   { match: (p) => p === '/settings/backup', label: 'Backup & Restore' },
   { match: (p) => p === '/settings/discord', label: 'Discord RPC' },
   { match: (p) => p === '/settings/logs', label: 'System Logs' },
+  { match: (p) => p === '/settings/diagnostics', label: 'Episode Diagnostics' },
   { match: (p) => p === '/settings/about', label: 'About ShizuTv' },
   { match: (p) => p.startsWith('/settings'), label: 'Settings' },
 ];

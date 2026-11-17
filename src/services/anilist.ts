@@ -185,6 +185,16 @@ export function mapAniListMedia(m: any): UnifiedMedia {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           .map((n: any) => mapAniListMedia(n.mediaRecommendation))
       : [],
+    streamingEpisodes: Array.isArray(m.streamingEpisodes)
+      ? m.streamingEpisodes.map(
+          (ep: { title?: string; thumbnail?: string; url?: string; site?: string }) => ({
+            title: ep.title ?? '',
+            thumbnail: ep.thumbnail ?? null,
+            url: ep.url ?? null,
+            site: ep.site ?? null,
+          }),
+        )
+      : [],
   };
 }
 
@@ -378,6 +388,7 @@ export async function fetchAniListDetails(id: string, type: MediaType): Promise<
         tags { id name category rank }
         studios(isMain: true) { nodes { id name } }
         externalLinks { id url site icon }
+        streamingEpisodes { title thumbnail url site }
         characters(perPage: 16, sort: [ROLE, RELEVANCE]) {
           edges {
             role

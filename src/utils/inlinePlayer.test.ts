@@ -20,6 +20,8 @@ import {
   parseSubtitleText,
   PLAYBACK_SPEED_OPTIONS,
   resolveAudioLanguageOption,
+  resolveBatterySaverHlsLevel,
+  resolveEffectiveStreamQuality,
   resolvePreferredHlsLevel,
   shouldAutoStartPlayback,
   shouldHideBarsForOverlay,
@@ -226,4 +228,31 @@ test('fullscreen helpers resolve audio languages, comment scope keys, lock visib
     { cssRotated: false },
   );
 });
+
+test('Battery Saver caps stream quality and selects <=480p HLS levels', () => {
+  assert.equal(resolveEffectiveStreamQuality('1080p', false), '1080p');
+  assert.equal(resolveEffectiveStreamQuality('auto', false), 'auto');
+  assert.equal(resolveEffectiveStreamQuality('1080p', true), '480p');
+  assert.equal(resolveEffectiveStreamQuality('720p', true), '480p');
+  assert.equal(resolveEffectiveStreamQuality('auto', true), '480p');
+  assert.equal(resolveEffectiveStreamQuality('360p', true), '360p');
+
+  const levels = [
+    { height: 360, bitrate: 700_000 },
+    { height: 480, bitrate: 1_200_000 },
+    { height: 720, bitrate: 2_600_000 },
+    { height: 1080, bitrate: 5_000_000 },
+  ];
+  assert.equal(resolveBatterySaverHlsLevel(levels, '1080p', false), 3);
+  assert.equal(resolveBatterySaverHlsLevel(levels, '1080p', true), 1);
+  assert.equal(resolveBatterySaverHlsLevel(levels, 'auto', true), 1);
+  assert.equal(resolveBatterySaverHlsLevel(levels, '360p', true), 0);
+
+  const highOnlyLevels = [
+    { height: 720, bitrate: 2_600_000 },
+    { height: 1080, bitrate: 5_000_000 },
+  ];
+  assert.equal(resolveBatterySaverHlsLevel(highOnlyLevels, '1080p', true), 0);
+});
+
 

@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
-import { AppProvider } from './store/AppContext';
+import { AppProvider, useApp } from './store/AppContext';
 import { PipProvider } from './store/PipContext';
 import { GlobalBackground } from './components/GlobalBackground';
 import { SecurityGate } from './components/SecurityGate';
@@ -19,6 +19,7 @@ import { CalendarPage } from './pages/CalendarPage';
 import { DownloadsPage } from './pages/DownloadsPage';
 import { ContinueHistoryPage } from './pages/ContinueHistoryPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { EpisodeDiagnosticsPage } from './pages/EpisodeDiagnosticsPage';
 import {
   AboutSettingsPage,
   BackupSettingsPage,
@@ -46,6 +47,16 @@ const RouteScrollCoordinator: React.FC = () => {
   return null;
 };
 
+const BatterySaverCoordinator: React.FC = () => {
+  const { state } = useApp();
+  useEffect(() => {
+    document.documentElement.dataset.batterySaver = state.playerPrefs.batterySaver
+      ? 'true'
+      : 'false';
+  }, [state.playerPrefs.batterySaver]);
+  return null;
+};
+
 const ShellLayout: React.FC = () => (
   <NavShell>
     <Outlet />
@@ -55,6 +66,7 @@ const ShellLayout: React.FC = () => (
 export const App: React.FC = () => {
   return (
     <AppProvider>
+      <BatterySaverCoordinator />
       <GlobalBackground>
         <SecurityGate>
           <BrowserRouter>
@@ -92,6 +104,7 @@ export const App: React.FC = () => {
                   <Route path="/settings/backup" element={<BackupSettingsPage />} />
                   <Route path="/settings/discord" element={<DiscordSettingsPage />} />
                   <Route path="/settings/logs" element={<LogsSettingsPage />} />
+                  <Route path="/settings/diagnostics" element={<EpisodeDiagnosticsPage />} />
                   <Route path="/settings/about" element={<AboutSettingsPage />} />
                 </Route>
 

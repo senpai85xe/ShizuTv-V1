@@ -141,6 +141,30 @@ export function buildHlsQualityOptions(
   return options;
 }
 
+export const BATTERY_SAVER_MAX_HEIGHT = 480;
+
+export function resolveEffectiveStreamQuality(
+  preferredQuality: string,
+  batterySaver: boolean,
+): 'auto' | '1080p' | '720p' | '480p' | '360p' {
+  const normalized =
+    preferredQuality === '1080p' ||
+    preferredQuality === '720p' ||
+    preferredQuality === '480p' ||
+    preferredQuality === '360p'
+      ? preferredQuality
+      : 'auto';
+
+  if (!batterySaver) {
+    return normalized;
+  }
+
+  if (normalized === '360p') {
+    return '360p';
+  }
+  return '480p';
+}
+
 export function resolvePreferredHlsLevel(
   levels: Array<{ height?: number; bitrate?: number }>,
   qualityPref: string,
@@ -164,6 +188,54 @@ export function resolvePreferredHlsLevel(
     }
   });
   return bestIdx;
+}
+
+export function resolveBatterySaverHlsLevel(
+  levels: Array<{ height?: number; bitrate?: number }>,
+  qualityPref: string,
+  batterySaver: boolean,
+): number {
+  if (!Array.isArray(levels) || levels.length === 0) {
+    return -1;
+  }
+  if (!batterySaver) {
+    return resolvePreferredHlsLevel(levels, qualityPref);
+  }
+  const effectiveQual = resolveEffectiveStreamQuality(qualityPref, true);
+  const targetHeight =
+    Number.parseInt(effectiveQual.replace(/\D/g, ''), 10) || BATTERY_SAVER_MAX_HEIGHT;
+
+  // Prefer the highest available level at or below targetHeight (480p cap)
+  let cappedIdx = -1;
+  let cappedHeight = -1;
+  levels.forEach((lvl, idx) => {
+    if (typeof lvl.height === 'number' && lvl.height > 0 && lvl.height <= targetHeight) {
+      if (lvl.height > cappedHeight) {
+        cappedHeight = lvl.height;
+        cappedIdx = idx;
+      }
+    }
+  });
+  if (cappedIdx >= 0) {
+    return cappedIdx;
+  }
+
+  // Fallback to lowest available resolution/bitrate level if all exceed 480p
+  let lowestIdx = 0;
+  let lowestMetric = Number.POSITIVE_INFINITY;
+  levels.forEach((lvl, idx) => {
+    const metric =
+      typeof lvl.height === 'number' && lvl.height > 0
+        ? lvl.height
+        : typeof lvl.bitrate === 'number' && lvl.bitrate > 0
+          ? lvl.bitrate
+          : Number.POSITIVE_INFINITY;
+    if (metric < lowestMetric) {
+      lowestMetric = metric;
+      lowestIdx = idx;
+    }
+  });
+  return lowestIdx;
 }
 
 export function findActiveSubtitleCue(

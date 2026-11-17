@@ -17,12 +17,14 @@ import {
   ChevronRight,
   Sparkles,
   Tv,
+  Activity,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { getNavBarStyleLabel } from '../utils/navBarStyles';
 import { BUILT_IN_PRESETS, EXCLUSIVE_SCHEMES } from '../data/themePresets';
 import { ScrollReveal } from '../components/ScrollReveal';
 import { PWAInstallButton } from '../components/PWAInstallButton';
+import { AniListAccountCard } from '../components/AniListLoginButton';
 import { getBoundedStaggerDelay } from '../utils/appMotion';
 
 interface SettingItem {
@@ -139,6 +141,13 @@ export const SettingsPage: React.FC = () => {
           icon: Terminal,
         },
         {
+          path: '/settings/diagnostics',
+          title: 'Episode Fetch Diagnostics',
+          subtitle: 'Probe extension episode waterfalls, ID mappings & title fallbacks',
+          icon: Activity,
+          badge: 'Debugger',
+        },
+        {
           path: '/settings/about',
           title: 'About ShizuTv',
           subtitle: 'v2.1.5 · Smooth anime & manga streaming client',
@@ -178,6 +187,14 @@ export const SettingsPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      <ScrollReveal index={0}>
+        <AniListAccountCard
+          roundness={roundness}
+          showManageLink
+          onManageClick={() => navigate('/settings/tracking')}
+        />
+      </ScrollReveal>
 
       <div className="space-y-6">
         {groups.map((group, groupIdx) => (

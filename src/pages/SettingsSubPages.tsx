@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -6,6 +6,8 @@ import {
   ArrowDown,
   Check,
   Download,
+  Loader2,
+  LogIn,
   Upload,
   RotateCcw,
   Trash2,
@@ -27,6 +29,10 @@ import {
   Hash,
   AlignJustify,
   RectangleHorizontal,
+  Globe,
+  RefreshCw,
+  Search,
+  Activity,
 } from 'lucide-react';
 import {
   BackupManifest,
@@ -67,6 +73,11 @@ import { ScrollReveal } from '../components/ScrollReveal';
 import { PWAInstallButton } from '../components/PWAInstallButton';
 import { getBoundedStaggerDelay } from '../utils/appMotion';
 import { clearOfflineCaches } from '../utils/recentContentCache';
+import { resolveEffectiveStreamQuality } from '../utils/inlinePlayer';
+import {
+  buildAniListTokenAuthorizeUrl,
+  fetchAniListOAuthStatus,
+} from '../services/anilistAuth';
 
 const PREVIEW_SAMPLE_MEDIA: UnifiedMedia = {
   id: '21',
@@ -229,9 +240,12 @@ const ToggleRow: React.FC<{
   description?: string;
   checked: boolean;
   onChange: (val: boolean) => void;
-}> = ({ label, description, checked, onChange }) => (
+  testId?: string;
+}> = ({ label, description, checked, onChange, testId }) => (
   <button
     type="button"
+    data-testid={testId}
+    aria-pressed={checked}
     onClick={() => onChange(!checked)}
     className="w-full flex items-center justify-between gap-4 px-4 py-3.5 text-left hover:bg-[var(--sx-surface-high)] transition-colors"
   >
@@ -1111,15 +1125,47 @@ export const TrackingSettingsPage: React.FC = () => {
     state,
     setPrimaryTracker,
     connectAniListToken,
-    disconnectTracker,
+    loginWithAniList,
+    logoutAniList,
     updateDiscoveryPrefs,
   } = useApp();
   const [tokenInput, setTokenInput] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState(false);
+  const [configuredClientId, setConfiguredClientId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const roundness = `${state.themePrefs.uiRoundness}px`;
 
   const anilistProfile = state.profiles.anilist;
+
+  useEffect(() => {
+    if (anilistProfile) return;
+    let active = true;
+    void fetchAniListOAuthStatus()
+      .then((status) => {
+        if (active && status.clientId) {
+          setConfiguredClientId(status.clientId);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [anilistProfile]);
+
+  const tokenAuthorizeUrl = buildAniListTokenAuthorizeUrl(configuredClientId);
+
+  const handleOAuthLogin = async () => {
+    setOauthBusy(true);
+    setError(null);
+    try {
+      await loginWithAniList();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'AniList OAuth2 login failed');
+    } finally {
+      setOauthBusy(false);
+    }
+  };
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1163,14 +1209,15 @@ export const TrackingSettingsPage: React.FC = () => {
               <p className="text-xs text-[var(--sx-on-surface-muted)]">
                 {anilistProfile
                   ? `Connected as @${anilistProfile.username}`
-                  : 'Connect an AniList Personal Access Token to sync your library'}
+                  : 'Sign in via AniList OAuth2 or paste a Personal Access Token'}
               </p>
             </div>
           </div>
-          {anilistProfile && (
+          {state.anilistToken && (
             <button
               type="button"
-              onClick={() => disconnectTracker('anilist')}
+              data-testid="tracking-anilist-logout-btn"
+              onClick={() => void logoutAniList()}
               className="px-3 py-1.5 rounded-xl bg-red-500/12 text-red-400 text-xs font-bold hover:bg-red-500/20"
             >
               Disconnect
@@ -1200,34 +1247,55 @@ export const TrackingSettingsPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          <form onSubmit={handleConnect} className="space-y-3">
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="password"
-                value={tokenInput}
-                onChange={(e) => setTokenInput(e.target.value)}
-                placeholder="Paste AniList OAuth Bearer Token..."
-                className="flex-1 px-3.5 py-2.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
-              />
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2.5">
               <button
-                type="submit"
-                disabled={connecting || !tokenInput.trim()}
-                className="px-4 py-2.5 rounded-xl bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-bold disabled:opacity-50"
+                type="button"
+                data-testid="tracking-anilist-login-btn"
+                disabled={oauthBusy}
+                onClick={handleOAuthLogin}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#02A9FF] text-white text-xs font-extrabold shadow-sm hover:opacity-92 transition-opacity disabled:opacity-60"
               >
-                {connecting ? 'Verifying...' : 'Connect AniList'}
+                {oauthBusy ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <LogIn className="w-3.5 h-3.5" />
+                )}
+                <span>{oauthBusy ? 'Authorizing...' : 'Login with AniList (OAuth2)'}</span>
               </button>
+              <a
+                href={tokenAuthorizeUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[var(--sx-primary)] hover:underline"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>Open AniList Token Authorization</span>
+              </a>
             </div>
-            {error && <p className="text-xs font-semibold text-red-400">{error}</p>}
-            <a
-              href="https://anilist.co/api/v2/oauth/authorize?client_id=26630&response_type=token"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[var(--sx-primary)] hover:underline"
-            >
-              <ExternalLink className="w-3 h-3" />
-              <span>Generate AniList Implicit OAuth Token</span>
-            </a>
-          </form>
+
+            <form onSubmit={handleConnect} className="space-y-2 pt-2 border-t border-[var(--sx-outline)]">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                  placeholder="Paste Bearer token or full redirect URL (#access_token=... / ?code=...)"
+                  className="flex-1 px-3.5 py-2.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
+                />
+                <button
+                  type="submit"
+                  disabled={connecting || !tokenInput.trim()}
+                  className="px-4 py-2.5 rounded-xl bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-bold disabled:opacity-50"
+                >
+                  {connecting ? 'Verifying...' : 'Save Token'}
+                </button>
+              </div>
+              {error && <p className="text-xs font-semibold text-red-400">{error}</p>}
+            </form>
+          </div>
         )}
       </div>
 
@@ -1291,76 +1359,133 @@ export const TrackingSettingsPage: React.FC = () => {
   );
 };
 
+const RECOMMENDED_EXTENSION_REPOS: Array<{
+  id: string;
+  label: string;
+  name: string;
+  manager: ExtensionRepo['manager'];
+  url: string;
+}> = [
+  {
+    id: 'yuzono-aniyomi',
+    label: 'Yuzono Anime (Aniyomi)',
+    name: 'Yuzono Anime Repo',
+    manager: 'aniyomi',
+    url: 'https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json',
+  },
+  {
+    id: 'kodjodevf-mangayomi',
+    label: 'Mangayomi Extensions',
+    name: 'Mangayomi Official Extensions',
+    manager: 'mangayomi',
+    url: 'https://raw.githubusercontent.com/kodjodevf/mangayomi-extensions/main/index.json',
+  },
+];
+
 export const ExtensionsSettingsPage: React.FC = () => {
+  const navigate = useNavigate();
   const {
     state,
     allSources,
     toggleSourceActive,
     addExtensionRepo,
+    refreshExtensionRepo,
     removeExtensionRepo,
   } = useApp();
   const [repoName, setRepoName] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
   const [manager, setManager] = useState<ExtensionRepo['manager']>('aniyomi');
+  const [adding, setAdding] = useState(false);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [repoError, setRepoError] = useState<string | null>(null);
+  const [repoNotice, setRepoNotice] = useState<string | null>(null);
+  const [sourceQuery, setSourceQuery] = useState('');
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<'ALL' | 'ANIME' | 'MANGA'>('ALL');
   const roundness = `${state.themePrefs.uiRoundness}px`;
 
-  const handleAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!repoUrl.trim()) return;
-    addExtensionRepo(repoUrl, manager, repoName || undefined);
-    setRepoName('');
-    setRepoUrl('');
+  const installRepo = async (
+    targetUrl: string,
+    targetManager: ExtensionRepo['manager'],
+    targetName?: string,
+  ) => {
+    setAdding(true);
+    setRepoError(null);
+    setRepoNotice(null);
+    try {
+      const result = await addExtensionRepo(targetUrl, targetManager, targetName);
+      setRepoNotice(
+        `Imported ${result.addedCount} extension source${result.addedCount === 1 ? '' : 's'} from "${result.repo.name}".`,
+      );
+      setRepoName('');
+      setRepoUrl('');
+    } catch (err) {
+      setRepoError(
+        err instanceof Error ? err.message : 'Failed to install extension repository.',
+      );
+    } finally {
+      setAdding(false);
+    }
   };
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!repoUrl.trim() || adding) return;
+    await installRepo(repoUrl, manager, repoName || undefined);
+  };
+
+  const handleRefresh = async (repo: ExtensionRepo) => {
+    if (refreshingId) return;
+    setRefreshingId(repo.id);
+    setRepoError(null);
+    setRepoNotice(null);
+    try {
+      const result = await refreshExtensionRepo(repo.id);
+      setRepoNotice(`Refreshed "${repo.name}" (${result.addedCount} sources).`);
+    } catch (err) {
+      setRepoError(err instanceof Error ? err.message : 'Failed to refresh repository.');
+    } finally {
+      setRefreshingId(null);
+    }
+  };
+
+  const filteredSources = allSources.filter((src) => {
+    if (
+      sourceTypeFilter === 'ANIME' &&
+      !src.mediaTypes.some((m) => m === 'ANIME' || m === 'TV' || m === 'MOVIE')
+    ) {
+      return false;
+    }
+    if (
+      sourceTypeFilter === 'MANGA' &&
+      !src.mediaTypes.some((m) => m === 'MANGA' || m === 'NOVEL')
+    ) {
+      return false;
+    }
+    const q = sourceQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      src.name.toLowerCase().includes(q) ||
+      src.lang.toLowerCase().includes(q) ||
+      (src.baseUrl && src.baseUrl.toLowerCase().includes(q)) ||
+      (src.description && src.description.toLowerCase().includes(q))
+    );
+  });
 
   return (
     <SettingsShell
       title="Extensions & Repositories"
-      subtitle="Manage inbuilt sources and external Aniyomi / Mangayomi / CloudStream repos"
-    >
-      {/* Active Sources */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-bold uppercase tracking-wider text-[var(--sx-on-surface-muted)]">
-          Installed Sources ({allSources.length})
-        </h2>
-        <div
-          style={{ borderRadius: roundness }}
-          className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+      subtitle="Install real Aniyomi / Mangayomi / CloudStream JSON repos and manage active sources"
+      action={
+        <button
+          type="button"
+          onClick={() => navigate('/settings/diagnostics')}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
         >
-          {allSources.map((src) => {
-            const active = state.discoveryPrefs.activeSources.includes(src.id);
-            return (
-              <div key={src.id} className="flex items-center justify-between gap-4 px-4 py-3.5">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-bold">{src.name}</span>
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)] uppercase">
-                      {src.type} · {src.lang}
-                    </span>
-                    <span className="text-[10px] font-mono-tabular text-[var(--sx-on-surface-muted)]">
-                      v{src.version}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[var(--sx-on-surface-muted)] mt-0.5 truncate">
-                    {src.description || src.mediaTypes.join(', ')}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => toggleSourceActive(src.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-colors ${
-                    active
-                      ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
-                      : 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)]'
-                  }`}
-                >
-                  {active ? 'Enabled' : 'Disabled'}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
+          <Activity className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
+          <span>Episode Diagnostics</span>
+        </button>
+      }
+    >
       {/* Extension Repositories */}
       <section className="space-y-3">
         <h2 className="text-xs font-bold uppercase tracking-wider text-[var(--sx-on-surface-muted)]">
@@ -1371,7 +1496,37 @@ export const ExtensionsSettingsPage: React.FC = () => {
           style={{ borderRadius: roundness }}
           className="p-4 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-3"
         >
-          <div className="text-xs font-bold">Add Repository Manifest URL</div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-bold">Add Repository Manifest URL</div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {RECOMMENDED_EXTENSION_REPOS.map((rec) => {
+                const alreadyAdded = state.repos.some((r) => r.url === rec.url);
+                return (
+                  <button
+                    key={rec.id}
+                    type="button"
+                    data-testid={`recommended-repo-${rec.id}`}
+                    disabled={adding}
+                    onClick={() => {
+                      setRepoName(rec.name);
+                      setRepoUrl(rec.url);
+                      setManager(rec.manager);
+                      void installRepo(rec.url, rec.manager, rec.name);
+                    }}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors disabled:opacity-50 ${
+                      alreadyAdded
+                        ? 'bg-[var(--sx-primary)]/12 border-[var(--sx-primary)]/40 text-[var(--sx-primary)]'
+                        : 'bg-[var(--sx-surface-high)] border-[var(--sx-outline)] hover:border-[var(--sx-primary)]'
+                    }`}
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{rec.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <input
               type="text"
@@ -1392,51 +1547,200 @@ export const ExtensionsSettingsPage: React.FC = () => {
             </select>
             <button
               type="submit"
-              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-bold"
+              data-testid="extensions-add-repo-btn"
+              disabled={adding || !repoUrl.trim()}
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-bold disabled:opacity-55"
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add Repository</span>
+              {adding ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Plus className="w-3.5 h-3.5" />
+              )}
+              <span>{adding ? 'Fetching Manifest...' : 'Add Repository'}</span>
             </button>
           </div>
           <input
             type="url"
+            data-testid="extensions-repo-url-input"
             value={repoUrl}
             onChange={(e) => setRepoUrl(e.target.value)}
             placeholder="https://raw.githubusercontent.com/.../index.min.json"
             className="w-full px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs outline-none focus:border-[var(--sx-primary)]"
           />
+
+          {repoError && (
+            <div
+              data-testid="extensions-repo-error"
+              className="px-3 py-2 rounded-xl bg-red-500/12 border border-red-500/30 text-xs font-semibold text-red-400"
+            >
+              {repoError}
+            </div>
+          )}
+          {repoNotice && (
+            <div
+              data-testid="extensions-repo-notice"
+              className="px-3 py-2 rounded-xl bg-emerald-500/12 border border-emerald-500/30 text-xs font-semibold text-emerald-400"
+            >
+              {repoNotice}
+            </div>
+          )}
+
           <p className="text-[11px] text-[var(--sx-on-surface-muted)]">
-            Note: In the web browser runtime, native Android APK/Dart bytecode extensions are adapted to web-safe stream/chapter sources.
+            Supports Aniyomi <code className="font-mono-tabular">index.min.json</code>, Mangayomi{' '}
+            <code className="font-mono-tabular">index.json</code>, and CloudStream{' '}
+            <code className="font-mono-tabular">repo.json</code> manifests. Installed sources pair
+            with AniZip, AniList, and Jikan for real episode lists and browser playback.
           </p>
         </form>
 
+        {state.repos.length > 0 && (
+          <div
+            style={{ borderRadius: roundness }}
+            className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+          >
+            {state.repos.map((repo) => {
+              const isRefreshing = refreshingId === repo.id;
+              const repoSourceCount = allSources.filter((s) => s.repoUrl === repo.url).length;
+              return (
+                <div key={repo.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-bold">{repo.name}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[var(--sx-primary)]/15 text-[var(--sx-primary)] uppercase">
+                        {repo.manager}
+                      </span>
+                      <span className="text-[10px] font-mono-tabular text-[var(--sx-on-surface-muted)]">
+                        {repoSourceCount} {repoSourceCount === 1 ? 'source' : 'sources'}
+                      </span>
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-[var(--sx-on-surface-muted)] truncate mt-0.5">
+                      {repo.url}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      disabled={isRefreshing}
+                      onClick={() => void handleRefresh(repo)}
+                      className="p-2 rounded-lg text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-primary)] hover:bg-[var(--sx-surface-high)] disabled:opacity-50"
+                      aria-label={`Refresh ${repo.name}`}
+                      title="Refresh repository manifest"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeExtensionRepo(repo.id)}
+                      className="p-2 rounded-lg text-red-400 hover:bg-red-500/12"
+                      aria-label={`Remove ${repo.name}`}
+                      title="Remove repository"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* Active Sources */}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-[var(--sx-on-surface-muted)]">
+            Installed Sources ({filteredSources.length}
+            {filteredSources.length !== allSources.length ? ` of ${allSources.length}` : ''})
+          </h2>
+
+          <div className="flex items-center gap-1.5 bg-[var(--sx-surface-container)] p-1 rounded-xl border border-[var(--sx-outline)]">
+            {(['ALL', 'ANIME', 'MANGA'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setSourceTypeFilter(tab)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                  sourceTypeFilter === tab
+                    ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                    : 'text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+                }`}
+              >
+                {tab === 'ALL' ? 'All' : tab === 'ANIME' ? 'Anime' : 'Manga'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="relative">
+          <Search className="w-3.5 h-3.5 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={sourceQuery}
+            onChange={(e) => setSourceQuery(e.target.value)}
+            placeholder="Filter installed extensions by name, language, or domain..."
+            className="w-full pl-9 pr-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs outline-none focus:border-[var(--sx-primary)]"
+          />
+        </div>
+
         <div
+          data-testid="extensions-installed-list"
           style={{ borderRadius: roundness }}
           className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
         >
-          {state.repos.map((repo) => (
-            <div key={repo.id} className="flex items-center justify-between gap-3 px-4 py-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold">{repo.name}</span>
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[var(--sx-primary)]/15 text-[var(--sx-primary)] uppercase">
-                    {repo.manager}
-                  </span>
-                </div>
-                <div className="text-[11px] font-mono-tabular text-[var(--sx-on-surface-muted)] truncate mt-0.5">
-                  {repo.url}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => removeExtensionRepo(repo.id)}
-                className="p-2 rounded-lg text-red-400 hover:bg-red-500/12 shrink-0"
-                aria-label="Remove repository"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+          {filteredSources.length === 0 ? (
+            <div className="p-6 text-center text-xs text-[var(--sx-on-surface-muted)]">
+              No installed sources match your current filter.
             </div>
-          ))}
+          ) : (
+            filteredSources.map((src) => {
+              const active = state.discoveryPrefs.activeSources.includes(src.id);
+              const domainLabel = src.baseUrl
+                ? src.baseUrl.replace(/^https?:\/\//, '').split('/')[0]
+                : null;
+              return (
+                <div
+                  key={src.id}
+                  data-testid={`extension-source-${src.id}`}
+                  className="flex items-center justify-between gap-3 px-4 py-3.5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-bold truncate">{src.name}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)] uppercase">
+                        {src.type} · {src.lang}
+                      </span>
+                      <span className="text-[10px] font-mono-tabular text-[var(--sx-on-surface-muted)]">
+                        v{src.version}
+                      </span>
+                      {src.isNsfw && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-500/15 text-rose-400 uppercase">
+                          18+
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-[var(--sx-on-surface-muted)] mt-0.5 truncate flex items-center gap-1.5">
+                      {domainLabel && <Globe className="w-3 h-3 shrink-0 opacity-75" />}
+                      <span className="truncate">
+                        {src.description || domainLabel || src.mediaTypes.join(', ')}
+                      </span>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid={`toggle-source-${src.id}`}
+                    onClick={() => toggleSourceActive(src.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-colors ${
+                      active
+                        ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                        : 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)]'
+                    }`}
+                  >
+                    {active ? 'Enabled' : 'Disabled'}
+                  </button>
+                </div>
+              );
+            })
+          )}
         </div>
       </section>
     </SettingsShell>
@@ -1447,11 +1751,15 @@ export const PlayerSettingsPage: React.FC = () => {
   const { state, updatePlayerPrefs } = useApp();
   const { playerPrefs } = state;
   const roundness = `${state.themePrefs.uiRoundness}px`;
+  const effectiveQuality = resolveEffectiveStreamQuality(
+    playerPrefs.defaultQuality,
+    playerPrefs.batterySaver,
+  );
 
   return (
     <SettingsShell
       title="Video Player Settings"
-      subtitle="Auto-play, video fit, default quality, AniSkip & subtitle styling"
+      subtitle="Auto-play, video fit, default quality, Battery Saver, AniSkip & subtitles"
     >
       <div
         style={{ borderRadius: roundness }}
@@ -1463,25 +1771,31 @@ export const PlayerSettingsPage: React.FC = () => {
             <div>
               <div className="text-sm font-bold">Preferred Stream Quality</div>
               <p className="text-xs text-[var(--sx-on-surface-muted)]">
-                Initial resolution selected on stream load
+                {playerPrefs.batterySaver
+                  ? `Battery Saver active — stream capped at ${effectiveQuality.toUpperCase()}`
+                  : 'Initial resolution selected on stream load'}
               </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
-            {(['auto', '1080p', '720p', '480p', '360p'] as const).map((q) => (
-              <button
-                key={q}
-                type="button"
-                onClick={() => updatePlayerPrefs({ defaultQuality: q })}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase ${
-                  playerPrefs.defaultQuality === q
-                    ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
-                    : 'text-[var(--sx-on-surface-muted)]'
-                }`}
-              >
-                {q}
-              </button>
-            ))}
+            {(['auto', '1080p', '720p', '480p', '360p'] as const).map((q) => {
+              const capped = playerPrefs.batterySaver && q !== '480p' && q !== '360p';
+              return (
+                <button
+                  key={q}
+                  type="button"
+                  disabled={capped}
+                  onClick={() => updatePlayerPrefs({ defaultQuality: q })}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase disabled:opacity-45 disabled:cursor-not-allowed ${
+                    effectiveQuality === q
+                      ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                      : 'text-[var(--sx-on-surface-muted)]'
+                  }`}
+                >
+                  {q}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1516,6 +1830,13 @@ export const PlayerSettingsPage: React.FC = () => {
           </div>
         </div>
 
+        <ToggleRow
+          testId="settings-toggle-batterysaver"
+          label="Battery Saver"
+          description="Caps video stream quality to 480p max and disables non-essential UI & player animations"
+          checked={playerPrefs.batterySaver}
+          onChange={(batterySaver) => updatePlayerPrefs({ batterySaver })}
+        />
         <ToggleRow
           label="Auto-Play Video on Open"
           description="Automatically start playback when opening an episode or player"
@@ -2213,6 +2534,7 @@ export const DiscordSettingsPage: React.FC = () => {
 };
 
 export const LogsSettingsPage: React.FC = () => {
+  const navigate = useNavigate();
   const { logs, clearLogs, state } = useApp();
   const [filter, setFilter] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR'>('ALL');
   const roundness = `${state.themePrefs.uiRoundness}px`;
@@ -2224,14 +2546,24 @@ export const LogsSettingsPage: React.FC = () => {
       title="System Logs"
       subtitle="Runtime telemetry for trackers, streams & local persistence"
       action={
-        <button
-          type="button"
-          onClick={clearLogs}
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)]"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-          <span>Clear</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => navigate('/settings/diagnostics')}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
+          >
+            <Activity className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
+            <span>Episode Diagnostics</span>
+          </button>
+          <button
+            type="button"
+            onClick={clearLogs}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)]"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Clear</span>
+          </button>
+        </div>
       }
     >
       <div className="flex items-center gap-2">

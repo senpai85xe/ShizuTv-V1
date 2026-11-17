@@ -45,6 +45,16 @@ import {
 } from '../data/themePresets';
 import { INBUILT_SOURCES } from '../services/sourceEngine';
 import { fetchAniListViewer, saveAniListMediaEntry } from '../services/anilist';
+import {
+  clearAniListServerCookieSession,
+  getStoredAniListToken,
+  loginWithAniListOAuth,
+  persistAniListServerCookieSession,
+  persistAniListSession,
+  resolveAniListInputToToken,
+  restoreAniListSessionFromServer,
+  type AniListAuthUrlResponse,
+} from '../services/anilistAuth';
 
 export type { ThemePrefs };
 
@@ -85,6 +95,7 @@ export interface PlayerPrefs {
   autoNextEpisode: boolean;
   autoPip: boolean;
   ambientGlow: boolean;
+  batterySaver: boolean;
   audioLanguage: AudioLanguageCode;
   defaultSpeed: number;
   videoFit: VideoFitMode;
@@ -236,6 +247,7 @@ const DEFAULT_STATE: PersistedState = {
     autoNextEpisode: true,
     autoPip: DEFAULT_AUTO_PIP_ENABLED,
     ambientGlow: DEFAULT_AMBIENT_ENABLED,
+    batterySaver: false,
     audioLanguage: 'ja',
     defaultSpeed: 1.0,
     videoFit: 'contain',
@@ -274,29 +286,42 @@ const DEFAULT_STATE: PersistedState = {
   library: [],
   history: [],
   downloads: [],
-  repos: [
-    {
-      id: 'repo-shizutv-official',
-      name: 'ShizuTv Inbuilt Core',
-      url: 'https://raw.githubusercontent.com/roshancodespace/ShonenX/main/scripts/source.dart',
-      manager: 'shonenx',
-      addedAt: '2026-01-01T00:00:00.000Z',
-    },
-  ],
+  repos: [],
   customSources: [],
   comments: {},
   onboardingDone: true,
 };
 
 function loadInitialState(): PersistedState {
+  const storedOAuthToken = getStoredAniListToken();
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!raw) return DEFAULT_STATE;
+    if (!raw) {
+      return {
+        ...DEFAULT_STATE,
+        anilistToken: storedOAuthToken,
+      };
+    }
     const parsed = JSON.parse(raw);
+    const resolvedAnilistToken =
+      typeof parsed.anilistToken === 'string' && parsed.anilistToken.trim()
+        ? parsed.anilistToken.trim()
+        : storedOAuthToken;
+    const parsedRepos = Array.isArray(parsed.repos)
+      ? (parsed.repos as ExtensionRepo[]).filter(
+          (r) => r && r.id !== 'repo-shizutv-official' && !String(r.url || '').endsWith('.dart'),
+        )
+      : DEFAULT_STATE.repos;
+    const parsedCustomSources = Array.isArray(parsed.customSources)
+      ? (parsed.customSources as SourceInfo[])
+      : DEFAULT_STATE.customSources;
     return {
       ...DEFAULT_STATE,
       ...parsed,
+      repos: parsedRepos,
+      customSources: parsedCustomSources,
+      anilistToken: resolvedAnilistToken ?? null,
       themePrefs: { ...DEFAULT_STATE.themePrefs, ...(parsed.themePrefs || {}) },
       uiPrefs: {
         ...DEFAULT_STATE.uiPrefs,
@@ -311,7 +336,10 @@ function loadInitialState(): PersistedState {
       securityPrefs: { ...DEFAULT_STATE.securityPrefs, ...(parsed.securityPrefs || {}) },
     };
   } catch {
-    return DEFAULT_STATE;
+    return {
+      ...DEFAULT_STATE,
+      anilistToken: getStoredAniListToken(),
+    };
   }
 }
 
@@ -345,7 +373,9 @@ interface AppContextValue {
 
   // Trackers & Library
   setPrimaryTracker: (tracker: TrackerType) => void;
-  connectAniListToken: (token: string) => Promise<TrackerProfile>;
+  connectAniListToken: (token: string, expiresIn?: number | null) => Promise<TrackerProfile>;
+  loginWithAniList: (preloadedAuth?: AniListAuthUrlResponse | null) => Promise<TrackerProfile>;
+  logoutAniList: () => Promise<void>;
   disconnectTracker: (tracker: TrackerType) => void;
   upsertLibraryEntry: (
     media: UnifiedMedia,
@@ -376,7 +406,12 @@ interface AppContextValue {
   // Extensions & Sources
   allSources: SourceInfo[];
   toggleSourceActive: (sourceId: string) => void;
-  addExtensionRepo: (url: string, manager: ExtensionRepo['manager'], name?: string) => void;
+  addExtensionRepo: (
+    url: string,
+    manager: ExtensionRepo['manager'],
+    name?: string,
+  ) => Promise<{ repo: ExtensionRepo; addedCount: number }>;
+  refreshExtensionRepo: (repoId: string) => Promise<{ addedCount: number }>;
   removeExtensionRepo: (id: string) => void;
 
   // Comments
@@ -433,6 +468,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Ignore storage quota errors
     }
   }, [state]);
+
+  // Restore AniList session from server HTTP-only cookie if local token is absent, or refresh viewer profile
+  useEffect(() => {
+    let active = true;
+    const syncSession = async () => {
+      let token = state.anilistToken || getStoredAniListToken();
+      if (!token) {
+        const restored = await restoreAniListSessionFromServer();
+        token = restored?.accessToken ?? null;
+      }
+      if (!active || !token) return;
+      if (!state.profiles.anilist || !state.anilistToken) {
+        try {
+          const profile = await fetchAniListViewer(token);
+          if (!active) return;
+          persistAniListSession({ accessToken: token });
+          setState((prev) => ({
+            ...prev,
+            anilistToken: token,
+            primaryTracker: prev.primaryTracker === 'local' ? 'anilist' : prev.primaryTracker,
+            profiles: { ...prev.profiles, anilist: profile },
+          }));
+        } catch {
+          // Ignore transient offline errors on startup
+        }
+      }
+    };
+    void syncSession();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Apply active theme scheme & dark/AMOLED CSS variables to document root
   useEffect(() => {
@@ -578,11 +645,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const connectAniListToken = useCallback(
-    async (token: string) => {
-      const profile = await fetchAniListViewer(token.trim());
+    async (rawInput: string, expiresIn?: number | null) => {
+      const resolved = await resolveAniListInputToToken(rawInput, expiresIn);
+      const profile = await fetchAniListViewer(resolved.accessToken);
+      persistAniListSession({
+        accessToken: resolved.accessToken,
+        expiresIn: resolved.expiresIn,
+      });
+      void persistAniListServerCookieSession(resolved.accessToken, resolved.expiresIn);
       setState((prev) => ({
         ...prev,
-        anilistToken: token.trim(),
+        anilistToken: resolved.accessToken,
         primaryTracker: 'anilist',
         profiles: { ...prev.profiles, anilist: profile },
       }));
@@ -592,8 +665,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [addLog],
   );
 
+  const loginWithAniList = useCallback(
+    async (preloadedAuth?: AniListAuthUrlResponse | null) => {
+      const session = await loginWithAniListOAuth(preloadedAuth);
+      const profile = await fetchAniListViewer(session.accessToken);
+      setState((prev) => ({
+        ...prev,
+        anilistToken: session.accessToken,
+        primaryTracker: 'anilist',
+        profiles: { ...prev.profiles, anilist: profile },
+      }));
+      addLog('INFO', 'AniList', `Signed in via AniList OAuth2 as @${profile.username}`);
+      return profile;
+    },
+    [addLog],
+  );
+
   const disconnectTracker = useCallback(
     (tracker: TrackerType) => {
+      if (tracker === 'anilist') {
+        void clearAniListServerCookieSession();
+      }
       setState((prev) => {
         const nextProfiles = { ...prev.profiles };
         delete nextProfiles[tracker];
@@ -608,6 +700,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     },
     [addLog],
   );
+
+  const logoutAniList = useCallback(async () => {
+    await clearAniListServerCookieSession();
+    setState((prev) => {
+      const nextProfiles = { ...prev.profiles };
+      delete nextProfiles.anilist;
+      return {
+        ...prev,
+        anilistToken: null,
+        primaryTracker: prev.primaryTracker === 'anilist' ? 'local' : prev.primaryTracker,
+        profiles: nextProfiles,
+      };
+    });
+    addLog('INFO', 'AniList', 'Logged out of AniList session');
+  }, [addLog]);
 
   const upsertLibraryEntry = useCallback(
     async (
@@ -771,53 +878,139 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const addExtensionRepo = useCallback(
-    (url: string, manager: ExtensionRepo['manager'], name?: string) => {
+    async (
+      url: string,
+      manager: ExtensionRepo['manager'],
+      name?: string,
+    ): Promise<{ repo: ExtensionRepo; addedCount: number }> => {
       const cleanUrl = url.trim();
-      if (!cleanUrl) return;
-      const repoId = `repo-${Date.now()}`;
-      const derivedName = name?.trim() || cleanUrl.split('/').pop() || 'Custom Repo';
-      const newSource: SourceInfo = {
-        id: `ext-${Date.now()}`,
-        name: `${derivedName} Source`,
-        type: 'extension',
-        mediaTypes: manager === 'mangayomi' ? ['MANGA', 'ANIME'] : ['ANIME', 'MANGA'],
-        lang: 'en',
-        version: '1.0.0',
-        repoUrl: cleanUrl,
-        description: `Imported from ${manager} repository`,
+      if (!cleanUrl) {
+        throw new Error('Please enter a repository manifest URL.');
+      }
+
+      const response = await fetch('/api/extensions/fetch-repo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: cleanUrl,
+          manager,
+          name: name?.trim() || undefined,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as {
+        repoName?: string;
+        format?: string;
+        sources?: SourceInfo[];
+        message?: string;
       };
-      setState((prev) => ({
-        ...prev,
-        repos: [
-          {
-            id: repoId,
-            name: derivedName,
-            url: cleanUrl,
-            manager,
-            addedAt: new Date().toISOString(),
+
+      if (!response.ok || !Array.isArray(payload.sources) || payload.sources.length === 0) {
+        throw new Error(payload.message || 'Failed to fetch extension repository manifest.');
+      }
+
+      const resolvedName =
+        name?.trim() || payload.repoName?.trim() || cleanUrl.split('/').pop() || 'Extension Repo';
+      const resolvedManager: ExtensionRepo['manager'] =
+        payload.format === 'aniyomi' ||
+        payload.format === 'mangayomi' ||
+        payload.format === 'cloudstream'
+          ? payload.format
+          : manager;
+
+      const importedSources = payload.sources;
+      const allowNsfw = state.contentPrefs.adultContentMode !== 'safe';
+      const newRepo: ExtensionRepo = {
+        id: `repo-${Date.now()}`,
+        name: resolvedName,
+        url: cleanUrl,
+        manager: resolvedManager,
+        addedAt: new Date().toISOString(),
+      };
+
+      setState((prev) => {
+        const existingRepo = prev.repos.find((r) => r.url === cleanUrl);
+        const upsertedRepo: ExtensionRepo = existingRepo
+          ? {
+              ...existingRepo,
+              name: resolvedName,
+              manager: resolvedManager,
+            }
+          : newRepo;
+
+        const removedSourceIds = new Set(
+          prev.customSources.filter((s) => s.repoUrl === cleanUrl).map((s) => s.id),
+        );
+        const remainingSources = prev.customSources.filter((s) => s.repoUrl !== cleanUrl);
+        const existingSourceIds = new Set([
+          ...INBUILT_SOURCES.map((s) => s.id),
+          ...remainingSources.map((s) => s.id),
+        ]);
+        const uniqueImported = importedSources.filter((s) => !existingSourceIds.has(s.id));
+
+        const autoEnabledIds = uniqueImported
+          .filter((s) => allowNsfw || !s.isNsfw)
+          .map((s) => s.id);
+        const nextActiveSources = Array.from(
+          new Set([
+            ...prev.discoveryPrefs.activeSources.filter((id) => !removedSourceIds.has(id)),
+            ...autoEnabledIds,
+          ]),
+        );
+
+        return {
+          ...prev,
+          repos: existingRepo
+            ? prev.repos.map((r) => (r.url === cleanUrl ? upsertedRepo : r))
+            : [upsertedRepo, ...prev.repos],
+          customSources: [...remainingSources, ...uniqueImported],
+          discoveryPrefs: {
+            ...prev.discoveryPrefs,
+            activeSources: nextActiveSources,
           },
-          ...prev.repos,
-        ],
-        customSources: [...prev.customSources, newSource],
-        discoveryPrefs: {
-          ...prev.discoveryPrefs,
-          activeSources: [...prev.discoveryPrefs.activeSources, newSource.id],
-        },
-      }));
-      addLog('INFO', 'Extensions', `Added ${manager} repository: ${derivedName}`);
+        };
+      });
+
+      addLog(
+        'INFO',
+        'Extensions',
+        `Imported ${importedSources.length} real sources from ${resolvedName} (${resolvedManager})`,
+      );
+      return { repo: newRepo, addedCount: importedSources.length };
     },
-    [addLog],
+    [addLog, state.contentPrefs.adultContentMode],
+  );
+
+  const refreshExtensionRepo = useCallback(
+    async (repoId: string): Promise<{ addedCount: number }> => {
+      const target = state.repos.find((r) => r.id === repoId);
+      if (!target) {
+        throw new Error('Repository not found.');
+      }
+      const result = await addExtensionRepo(target.url, target.manager, target.name);
+      return { addedCount: result.addedCount };
+    },
+    [addExtensionRepo, state.repos],
   );
 
   const removeExtensionRepo = useCallback((id: string) => {
     setState((prev) => {
       const target = prev.repos.find((r) => r.id === id);
+      const removedSourceIds = target
+        ? new Set(prev.customSources.filter((s) => s.repoUrl === target.url).map((s) => s.id))
+        : new Set<string>();
       return {
         ...prev,
         repos: prev.repos.filter((r) => r.id !== id),
         customSources: target
           ? prev.customSources.filter((s) => s.repoUrl !== target.url)
           : prev.customSources,
+        discoveryPrefs: {
+          ...prev.discoveryPrefs,
+          activeSources: prev.discoveryPrefs.activeSources.filter(
+            (srcId) => !removedSourceIds.has(srcId),
+          ),
+        },
       };
     });
   }, []);
@@ -932,6 +1125,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     updateSecurityPrefs,
     setPrimaryTracker,
     connectAniListToken,
+    loginWithAniList,
+    logoutAniList,
     disconnectTracker,
     upsertLibraryEntry,
     removeLibraryEntry,
@@ -946,6 +1141,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     allSources,
     toggleSourceActive,
     addExtensionRepo,
+    refreshExtensionRepo,
     removeExtensionRepo,
     addComment,
     likeComment,

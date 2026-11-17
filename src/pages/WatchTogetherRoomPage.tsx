@@ -633,7 +633,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
         data-testid="watch-room-error-state"
         className="px-4 sm:px-6 lg:px-8 pt-10 pb-16 max-w-2xl mx-auto"
       >
-        <div className="rounded-3xl bg-[var(--sx-surface-container)]/80 dark:bg-[var(--sx-surface-container)]/78 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-[0_20px_50px_rgba(15,23,42,0.12)] dark:shadow-[0_24px_60px_rgba(0,0,0,0.65)] p-6 sm:p-8 text-center space-y-4">
+        <div className="rounded-3xl bg-white/34 dark:bg-white/[0.06] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/8 shadow-[0_20px_50px_rgba(15,23,42,0.12)] dark:shadow-[0_24px_60px_rgba(0,0,0,0.5)] p-6 sm:p-8 text-center space-y-4">
           <div className="w-12 h-12 rounded-2xl bg-red-500/15 text-red-400 flex items-center justify-center mx-auto">
             <AlertCircle className="w-6 h-6" />
           </div>
@@ -708,7 +708,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                 remoteSyncSignal,
                 onPlaybackSync: handlePlaybackSync,
                 reactions,
-                showReactions: reactionsEnabled,
+                showReactions: reactionsEnabled && !state.playerPrefs.batterySaver,
                 hideBottomControlsBar: true,
               }}
             />
@@ -727,7 +727,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                 aria-label="Previous episode"
                 disabled={!isHost || safeEpisodeIndex <= 0}
                 onClick={() => handleEpisodeIndexChange(safeEpisodeIndex - 1)}
-                className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-[var(--sx-surface-container)]/74 dark:bg-white/[0.08] backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm flex items-center justify-center text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/50 disabled:opacity-40 transition-colors shrink-0"
+                className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-white/34 dark:bg-white/[0.07] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm flex items-center justify-center text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/50 disabled:opacity-40 transition-colors shrink-0"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
@@ -742,7 +742,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                     setEpisodeMenuOpen((v) => !v);
                     setSettingsMenuOpen(false);
                   }}
-                  className="h-7 sm:h-8 px-2 sm:px-3 rounded-full bg-[var(--sx-surface-container)]/74 dark:bg-white/[0.08] backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm hover:border-[var(--sx-primary)]/50 text-[11px] sm:text-xs font-bold text-[var(--sx-on-surface)] inline-flex items-center gap-0.5 sm:gap-1 whitespace-nowrap disabled:opacity-75 transition-colors tabular-nums"
+                  className="h-7 sm:h-8 px-2 sm:px-3 rounded-full bg-white/34 dark:bg-white/[0.07] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm hover:border-[var(--sx-primary)]/50 text-[11px] sm:text-xs font-bold text-[var(--sx-on-surface)] inline-flex items-center gap-0.5 sm:gap-1 whitespace-nowrap disabled:opacity-75 transition-colors tabular-nums"
                 >
                   <span>Ep {currentEpisode?.number ?? 1}</span>
                   <ChevronDown
@@ -755,7 +755,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                 {episodeMenuOpen && (
                   <div
                     data-testid="watch-room-ep-menu"
-                    className="sx-sheet-enter absolute left-0 top-10 sm:top-auto sm:bottom-10 z-40 w-60 max-h-[min(52dvh,280px)] overflow-y-auto rounded-2xl bg-[var(--sx-surface-container)]/88 dark:bg-zinc-950/90 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/20 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-[0_24px_60px_rgba(15,23,42,0.18)] dark:shadow-[0_24px_64px_rgba(0,0,0,0.75)] p-1.5 space-y-1"
+                    className="sx-sheet-enter absolute left-0 top-10 sm:top-auto sm:bottom-10 z-40 w-60 max-h-[min(52dvh,280px)] overflow-y-auto rounded-2xl bg-white/62 dark:bg-zinc-950/68 backdrop-blur-2xl backdrop-saturate-150 border border-white/55 dark:border-white/18 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-[0_24px_60px_rgba(15,23,42,0.18)] dark:shadow-[0_24px_64px_rgba(0,0,0,0.65)] p-1.5 space-y-1"
                   >
                     {effectiveEpisodes.map((ep, idx) => {
                       const active = idx === safeEpisodeIndex;
@@ -788,7 +788,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                 aria-label="Next episode"
                 disabled={!isHost || safeEpisodeIndex >= effectiveEpisodes.length - 1}
                 onClick={() => handleEpisodeIndexChange(safeEpisodeIndex + 1)}
-                className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-[var(--sx-surface-container)]/74 dark:bg-white/[0.08] backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm flex items-center justify-center text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/50 disabled:opacity-40 transition-colors shrink-0"
+                className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-white/34 dark:bg-white/[0.07] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm flex items-center justify-center text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/50 disabled:opacity-40 transition-colors shrink-0"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
@@ -801,7 +801,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                   type="button"
                   data-testid="watch-room-change-anime-btn"
                   onClick={() => setChangeAnimeOpen(true)}
-                  className="h-7 sm:h-8 px-2 sm:px-3 rounded-full bg-[var(--sx-surface-container)]/74 dark:bg-white/[0.08] backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm hover:border-[var(--sx-primary)]/50 text-[11px] sm:text-xs font-bold text-[var(--sx-on-surface)] inline-flex items-center gap-1 sm:gap-1.5 whitespace-nowrap transition-colors shrink-0"
+                  className="h-7 sm:h-8 px-2 sm:px-3 rounded-full bg-white/34 dark:bg-white/[0.07] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm hover:border-[var(--sx-primary)]/50 text-[11px] sm:text-xs font-bold text-[var(--sx-on-surface)] inline-flex items-center gap-1 sm:gap-1.5 whitespace-nowrap transition-colors shrink-0"
                 >
                   <Search className="w-3 h-3 shrink-0" />
                   <span className="sm:hidden">Change</span>
@@ -815,7 +815,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                 onClick={handleOpenViewersList}
                 title="View watching users"
                 aria-label={`${room?.participants.length ?? 1} watching users`}
-                className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-full bg-[var(--sx-surface-container)]/74 dark:bg-white/[0.08] backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm hover:border-[var(--sx-primary)]/50 text-[11px] sm:text-xs font-bold text-[var(--sx-on-surface)] inline-flex items-center gap-1 whitespace-nowrap tabular-nums transition-colors shrink-0"
+                className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-full bg-white/34 dark:bg-white/[0.07] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm hover:border-[var(--sx-primary)]/50 text-[11px] sm:text-xs font-bold text-[var(--sx-on-surface)] inline-flex items-center gap-1 whitespace-nowrap tabular-nums transition-colors shrink-0"
               >
                 <Users className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[var(--sx-primary)] shrink-0" />
                 <span>{room?.participants.length ?? 1}</span>
@@ -834,7 +834,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                   className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full backdrop-blur-2xl backdrop-saturate-150 border ring-1 ring-inset flex items-center justify-center shadow-sm transition-colors shrink-0 ${
                     settingsMenuOpen
                       ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)] ring-white/25'
-                      : 'bg-[var(--sx-surface-container)]/74 dark:bg-white/[0.08] border-white/45 dark:border-white/15 ring-white/25 dark:ring-white/10 hover:border-[var(--sx-primary)]/50 text-[var(--sx-on-surface)]'
+                      : 'bg-white/34 dark:bg-white/[0.07] border-white/50 dark:border-white/14 ring-white/25 dark:ring-white/10 hover:border-[var(--sx-primary)]/50 text-[var(--sx-on-surface)]'
                   }`}
                 >
                   <Settings className="w-3.5 h-3.5" />
@@ -843,7 +843,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                 {settingsMenuOpen && room && (
                   <div
                     data-testid="watch-room-settings-menu"
-                    className="sx-sheet-enter absolute right-0 top-9 sm:top-auto sm:bottom-10 z-50 w-76 max-w-[calc(100vw-24px)] max-h-[min(60dvh,430px)] overflow-y-auto no-scrollbar rounded-2xl bg-[var(--sx-surface-container)]/88 dark:bg-zinc-950/90 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/20 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-[0_24px_64px_rgba(15,23,42,0.18)] dark:shadow-[0_24px_64px_rgba(0,0,0,0.75)] p-3 space-y-2.5"
+                    className="sx-sheet-enter absolute right-0 top-9 sm:top-auto sm:bottom-10 z-50 w-76 max-w-[calc(100vw-24px)] max-h-[min(60dvh,430px)] overflow-y-auto no-scrollbar rounded-2xl bg-white/62 dark:bg-zinc-950/68 backdrop-blur-2xl backdrop-saturate-150 border border-white/55 dark:border-white/18 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-[0_24px_64px_rgba(15,23,42,0.18)] dark:shadow-[0_24px_64px_rgba(0,0,0,0.65)] p-3 space-y-2.5"
                   >
                     {/* Room Code + Quick Copy & Invite */}
                     <div className="flex items-center justify-between gap-2 px-1">
@@ -1111,12 +1111,12 @@ export const WatchTogetherRoomPage: React.FC = () => {
               showInviteStrip={false}
               subTab={chatSubTab}
               onSubTabChange={setChatSubTab}
-              showFloatingReactions={reactionsEnabled}
+              showFloatingReactions={reactionsEnabled && !state.playerPrefs.batterySaver}
             />
           ) : (
             <div
               data-testid="watch-room-connecting-card"
-              className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/78 dark:bg-[var(--sx-surface-container)]/76 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-[0_20px_50px_rgba(15,23,42,0.12)] dark:shadow-[0_24px_60px_rgba(0,0,0,0.65)] p-6 text-center space-y-2"
+              className="rounded-[var(--sx-radius)] bg-white/32 dark:bg-white/[0.06] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/8 shadow-[0_18px_46px_-14px_rgba(0,0,0,0.2)] p-6 text-center space-y-2"
             >
               <p className="text-xs font-bold text-[var(--sx-on-surface)]">
                 Connecting live room...
@@ -1131,7 +1131,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
         {/* Compact Anime Detail Card (Below Live Comments on Mobile) */}
         <section
           data-testid="watch-room-media-info"
-          className="lg:col-start-1 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/78 dark:bg-[var(--sx-surface-container)]/76 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 p-3 sm:p-3.5 flex items-center gap-3 shadow-[0_14px_38px_rgba(15,23,42,0.08)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.55)]"
+          className="lg:col-start-1 rounded-[var(--sx-radius)] bg-white/32 dark:bg-white/[0.06] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/8 p-3 sm:p-3.5 flex items-center gap-3 shadow-[0_14px_38px_-12px_rgba(0,0,0,0.16)]"
         >
           <button
             type="button"
@@ -1215,7 +1215,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
         {room && (
           <section
             data-testid="watch-room-invite-card"
-            className="lg:col-start-1 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/78 dark:bg-[var(--sx-surface-container)]/76 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 p-3.5 sm:p-4 space-y-2.5 shadow-[0_14px_38px_rgba(15,23,42,0.08)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.55)]"
+            className="lg:col-start-1 rounded-[var(--sx-radius)] bg-white/32 dark:bg-white/[0.06] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/8 p-3.5 sm:p-4 space-y-2.5 shadow-[0_14px_38px_-12px_rgba(0,0,0,0.16)]"
           >
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-xs sm:text-sm font-extrabold text-[var(--sx-on-surface)] flex items-center gap-2">
@@ -1230,7 +1230,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
             <div className="flex items-center gap-2">
               <div
                 data-testid="watch-room-invite-url"
-                className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-[var(--sx-surface-high)]/60 dark:bg-white/[0.06] backdrop-blur-md border border-white/40 dark:border-white/12 font-mono text-[11px] sm:text-xs text-[var(--sx-on-surface)]/85 truncate select-all"
+                className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-white/26 dark:bg-white/[0.05] backdrop-blur-md border border-white/45 dark:border-white/12 font-mono text-[11px] sm:text-xs text-[var(--sx-on-surface)]/85 truncate select-all"
               >
                 {inviteUrl}
               </div>

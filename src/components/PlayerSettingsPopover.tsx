@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  BatteryCharging,
   Check,
   Keyboard,
   ListVideo,
@@ -26,6 +27,7 @@ import {
 import {
   HlsQualityOption,
   parseSubtitleText,
+  resolveEffectiveStreamQuality,
   SubtitleCue,
 } from '../utils/inlinePlayer';
 import { formatPlayerTime } from '../utils/detailsLayout';
@@ -115,6 +117,11 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
     const shifted = currentTime - (playerPrefs.subtitleOffsetSeconds || 0);
     return cues.findIndex((c) => shifted >= c.start && shifted <= c.end);
   }, [cues, currentTime, playerPrefs.subtitleOffsetSeconds]);
+
+  const effectiveQuality = resolveEffectiveStreamQuality(
+    playerPrefs.defaultQuality,
+    playerPrefs.batterySaver,
+  );
 
   if (!open) return null;
 
@@ -299,6 +306,39 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                   />
                 </span>
               </button>
+
+              <button
+                type="button"
+                data-testid="settings-toggle-batterysaver"
+                aria-pressed={playerPrefs.batterySaver}
+                onClick={() => onUpdatePrefs({ batterySaver: !playerPrefs.batterySaver })}
+                className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-white/5 transition-colors"
+              >
+                <span className="flex items-center gap-2 text-left min-w-0">
+                  <BatteryCharging
+                    className={`w-3.5 h-3.5 shrink-0 ${
+                      playerPrefs.batterySaver ? 'text-emerald-400' : 'text-white/65'
+                    }`}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-bold leading-tight">Battery Saver</span>
+                    <span className="block text-[9.5px] font-medium text-white/55 leading-tight">
+                      480p stream cap &amp; reduced motion
+                    </span>
+                  </span>
+                </span>
+                <span
+                  className={`relative w-8 h-4.5 rounded-full p-0.5 transition-colors duration-200 flex items-center shrink-0 ${
+                    playerPrefs.batterySaver ? 'bg-emerald-400' : 'bg-white/20'
+                  }`}
+                >
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full bg-zinc-950 shadow transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                      playerPrefs.batterySaver ? 'translate-x-3.5' : 'translate-x-0'
+                    }`}
+                  />
+                </span>
+              </button>
             </div>
 
             {/* Video Fit Mode */}
@@ -434,6 +474,17 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
         {/* ==================== TAB 2: QUALITY & STREAM ==================== */}
         {activeTab === 'quality' && (
           <div className="space-y-3">
+            {playerPrefs.batterySaver && (
+              <div
+                data-testid="quality-battery-saver-note"
+                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-400/35 text-[11px] font-bold text-emerald-200"
+              >
+                <BatteryCharging className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>
+                  Battery Saver active — capped at {effectiveQuality.toUpperCase()} max quality
+                </span>
+              </div>
+            )}
             <div>
               <p className="text-[10px] font-extrabold uppercase tracking-wider text-white/55 mb-1.5">
                 Video Quality {hlsQualityOptions.length > 1 ? '(Live HLS)' : '(Preferred)'}
@@ -442,6 +493,10 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                 {hlsQualityOptions.length > 1
                   ? hlsQualityOptions.map((opt) => {
                       const active = selectedHlsLevel === opt.index;
+                      const parsedHeight = Number.parseInt(opt.label.replace(/\D/g, ''), 10);
+                      const cappedByBattery =
+                        playerPrefs.batterySaver &&
+                        (opt.index === -1 || (Number.isFinite(parsedHeight) && parsedHeight > 480));
                       const prefMatch = (
                         opt.index === -1 ? 'auto' : opt.label.toLowerCase()
                       ) as VideoQualityPref;
@@ -449,6 +504,7 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                         <button
                           key={`${opt.index}-${opt.label}`}
                           type="button"
+                          disabled={cappedByBattery}
                           data-testid={`quality-option-${opt.label.toLowerCase()}`}
                           onClick={() => {
                             const normalizedPref: VideoQualityPref = STANDARD_QUALITIES.includes(
@@ -459,7 +515,7 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                             onSelectHlsLevel(opt.index, normalizedPref);
                             onUpdatePrefs({ defaultQuality: normalizedPref });
                           }}
-                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-bold transition-colors ${
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-bold transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
                             active
                               ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)]'
                               : 'bg-white/8 text-white hover:bg-white/15'
@@ -469,29 +525,46 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                             {opt.label}
                             {opt.index === -1 ? ' (Adaptive)' : ''}
                           </span>
-                          {active && <Check className="w-3.5 h-3.5" />}
+                          <span className="flex items-center gap-1.5">
+                            {cappedByBattery && (
+                              <span className="text-[9.5px] font-semibold uppercase text-white/60">
+                                Capped
+                              </span>
+                            )}
+                            {active && <Check className="w-3.5 h-3.5" />}
+                          </span>
                         </button>
                       );
                     })
                   : STANDARD_QUALITIES.map((q) => {
-                      const active = playerPrefs.defaultQuality === q;
+                      const active = effectiveQuality === q;
+                      const cappedByBattery =
+                        playerPrefs.batterySaver && q !== '480p' && q !== '360p';
                       return (
                         <button
                           key={q}
                           type="button"
+                          disabled={cappedByBattery}
                           data-testid={`quality-option-${q}`}
                           onClick={() => {
                             onSelectHlsLevel(-1, q);
                             onUpdatePrefs({ defaultQuality: q });
                           }}
-                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-bold uppercase transition-colors ${
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-bold uppercase transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
                             active
                               ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)]'
                               : 'bg-white/8 text-white hover:bg-white/15'
                           }`}
                         >
                           <span>{q === 'auto' ? 'Auto (Adaptive)' : q}</span>
-                          {active && <Check className="w-3.5 h-3.5" />}
+                          <span className="flex items-center gap-1.5">
+                            {cappedByBattery && (
+                              <span className="text-[9.5px] font-semibold text-white/60">
+                                Capped
+                              </span>
+                            )}
+                            {active && <Check className="w-3.5 h-3.5" />}
+                          </span>
                         </button>
                       );
                     })}

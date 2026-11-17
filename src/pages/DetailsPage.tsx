@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
+  Activity,
   AlignJustify,
   ArrowDownUp,
   ArrowLeft,
@@ -28,6 +29,7 @@ import {
   Plus,
   Radio,
   RectangleHorizontal,
+  RefreshCw,
   Search,
   Send,
   Share2,
@@ -190,6 +192,8 @@ export const DetailsPage: React.FC = () => {
 
   const [episodes, setEpisodes] = useState<UnifiedEpisode[]>([]);
   const [chapters, setChapters] = useState<UnifiedChapter[]>([]);
+  const [resolvingEpisodes, setResolvingEpisodes] = useState(false);
+  const [episodeRefreshNonce, setEpisodeRefreshNonce] = useState(0);
   const [epFilter, setEpFilter] = useState('');
   const [epOrderAsc, setEpOrderAsc] = useState(true);
   const [selectedRangeId, setSelectedRangeId] = useState<string>('all');
@@ -198,12 +202,16 @@ export const DetailsPage: React.FC = () => {
   const isManga = media.type === 'MANGA' || media.type === 'NOVEL';
   const availableSources = useMemo(() => {
     const combined = [...INBUILT_SOURCES, ...state.customSources];
-    return combined.filter((s) =>
+    const typeMatched = combined.filter((s) =>
       isManga
         ? s.mediaTypes.includes('MANGA') || s.mediaTypes.includes('NOVEL')
         : s.mediaTypes.includes('ANIME') || s.mediaTypes.includes('MOVIE') || s.mediaTypes.includes('TV'),
     );
-  }, [isManga, state.customSources]);
+    const activeMatched = typeMatched.filter((s) =>
+      state.discoveryPrefs.activeSources.includes(s.id),
+    );
+    return activeMatched.length > 0 ? activeMatched : typeMatched;
+  }, [isManga, state.customSources, state.discoveryPrefs.activeSources]);
 
   const [selectedSourceId, setSelectedSourceId] = useState<string>(
     availableSources[0]?.id || 'shonenx-hls-inbuilt',
@@ -316,14 +324,11 @@ export const DetailsPage: React.FC = () => {
       setInlinePlaySignal(0);
     }
     fetchMediaDetails(id, resolvedType, initialMedia?.providerId)
-      .then(async (full) => {
+      .then((full) => {
         const merged = { ...initialMedia, ...full };
         setMedia(merged);
         if (merged.type === 'MANGA' || merged.type === 'NOVEL') {
           setChapters(resolveChaptersForMedia(merged));
-        } else {
-          const eps = await resolveEpisodesForMedia(merged);
-          setEpisodes(eps);
         }
       })
       .catch(() => {
@@ -331,6 +336,43 @@ export const DetailsPage: React.FC = () => {
       })
       .finally(() => setLoadingDetails(false));
   }, [id, resolvedType]);
+
+  useEffect(() => {
+    if (!id || isManga || loadingDetails || !media.id) return;
+    let cancelled = false;
+    setResolvingEpisodes(true);
+    const sourceMeta = availableSources.find((s) => s.id === selectedSourceId);
+    resolveEpisodesForMedia(media, {
+      sourceId: selectedSourceId,
+      sourceName: sourceMeta?.name,
+      overrideTitle: matchedTitleOverride.trim() || undefined,
+    })
+      .then((eps) => {
+        if (cancelled) return;
+        setEpisodes(eps);
+        setSelectedRangeId('all');
+      })
+      .catch(() => {
+        // Keep previously loaded episodes on transient failure
+      })
+      .finally(() => {
+        if (!cancelled) setResolvingEpisodes(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    id,
+    isManga,
+    loadingDetails,
+    media.id,
+    media.idMal,
+    media.episodes,
+    media.streamingEpisodes?.length,
+    selectedSourceId,
+    matchedTitleOverride,
+    episodeRefreshNonce,
+  ]);
 
   const title = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
   useDocumentTitle(
@@ -579,6 +621,7 @@ export const DetailsPage: React.FC = () => {
               episodes={episodes}
               episodeIndex={activeInlineEpisodeIndex}
               sourceId={selectedSourceId}
+              sourceName={activeSource?.name}
               playSignal={inlinePlaySignal}
               initialTime={navMediaState?.startTime ?? null}
               initialResumePlaying={Boolean(navMediaState?.resumePlaying)}
@@ -1307,6 +1350,12 @@ export const DetailsPage: React.FC = () => {
                     </div>
                     <p className="text-[11px] text-[var(--sx-on-surface-muted)] truncate">
                       Found: {effectiveSourceTitle}
+                      {!isManga &&
+                        (resolvingEpisodes
+                          ? ' · Fetching real episodes...'
+                          : episodes.length > 0
+                            ? ` · ${episodes.length} episodes`
+                            : '')}
                     </p>
                   </div>
                 </div>
@@ -1314,6 +1363,7 @@ export const DetailsPage: React.FC = () => {
                 <div className="flex flex-wrap items-center gap-2 min-w-0 w-full sm:w-auto">
                   <select
                     aria-label="Select stream source"
+                    data-testid="details-source-select"
                     value={selectedSourceId}
                     onChange={(e) => setSelectedSourceId(e.target.value)}
                     className="min-w-0 flex-1 sm:flex-initial max-w-full px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold focus:outline-none focus:border-[var(--sx-primary)] truncate"
@@ -1324,6 +1374,41 @@ export const DetailsPage: React.FC = () => {
                       </option>
                     ))}
                   </select>
+                  {!isManga && (
+                    <button
+                      type="button"
+                      data-testid="refresh-episodes-btn"
+                      disabled={resolvingEpisodes}
+                      onClick={() => setEpisodeRefreshNonce((n) => n + 1)}
+                      title="Refresh episode list"
+                      aria-label="Refresh episode list"
+                      className="shrink-0 w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${resolvingEpisodes ? 'animate-spin' : ''}`} />
+                    </button>
+                  )}
+                  {!isManga && (
+                    <button
+                      type="button"
+                      data-testid="diagnose-episodes-btn"
+                      onClick={() =>
+                        navigate('/settings/diagnostics', {
+                          state: {
+                            media,
+                            sourceId: selectedSourceId,
+                            sourceName: activeSource?.name,
+                            overrideTitle: matchedTitleOverride.trim() || undefined,
+                          },
+                        })
+                      }
+                      title="Open Episode Fetch Diagnostics"
+                      aria-label="Diagnose episode fetch"
+                      className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold hover:border-[var(--sx-primary)] transition-colors"
+                    >
+                      <Activity className="w-3 h-3 text-[var(--sx-primary)]" />
+                      <span>Diagnose</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     data-testid="wrong-title-btn"
@@ -1471,7 +1556,7 @@ export const DetailsPage: React.FC = () => {
                     </div>
                   )}
 
-                  {loadingDetails && rawItemsCount === 0 ? (
+                  {(loadingDetails || resolvingEpisodes) && rawItemsCount === 0 ? (
                     <EpisodeListSkeleton style={activeEpStyle} />
                   ) : listItems.length === 0 ? (
                     <div className={`${frostedCardClass} p-8 text-center space-y-2`}>

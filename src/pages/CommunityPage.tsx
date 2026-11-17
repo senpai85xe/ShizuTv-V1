@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowBigDown,
@@ -6,7 +7,6 @@ import {
   ArrowLeft,
   Bold,
   ChevronDown,
-  ChevronRight,
   Eye,
   EyeOff,
   Loader2,
@@ -55,13 +55,13 @@ import {
 import { UnifiedMedia } from '../types/media';
 import { SmartImage } from '../components/SmartImage';
 
-type CommunityViewMode = 'feed' | 'new' | 'detail';
+type CommunityViewMode = 'feed' | 'detail';
 
 const glassCardClass =
-  'bg-[var(--sx-surface-container)]/68 dark:bg-[var(--sx-surface-container)]/62 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/12 ring-1 ring-inset ring-white/25 dark:ring-white/6 shadow-[0_12px_32px_-12px_rgba(0,0,0,0.22)]';
+  'bg-white/32 dark:bg-white/[0.06] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/8 shadow-[0_12px_32px_-12px_rgba(0,0,0,0.16)]';
 
 const glassControlClass =
-  'bg-[var(--sx-surface-high)]/62 dark:bg-[var(--sx-surface-high)]/55 backdrop-blur-xl border border-white/40 dark:border-white/10 ring-1 ring-inset ring-white/20 dark:ring-white/5';
+  'bg-white/24 dark:bg-white/[0.05] backdrop-blur-xl border border-white/45 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/6';
 
 function getLabelPillClasses(label?: CommunityLabel | null): string {
   switch (label) {
@@ -166,6 +166,7 @@ export const CommunityPage: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [viewMode, setViewMode] = useState<CommunityViewMode>('feed');
+  const [newPostModalOpen, setNewPostModalOpen] = useState(false);
   const [activePostId, setActivePostId] = useState<string | null>(null);
   const [openMenuPostId, setOpenMenuPostId] = useState<string | null>(null);
 
@@ -210,10 +211,27 @@ export const CommunityPage: React.FC = () => {
     void loadPosts();
   }, [loadPosts]);
 
+  // Lock background scroll & close New Post popup on Escape
+  useEffect(() => {
+    if (!newPostModalOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setNewPostModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [newPostModalOpen]);
+
   // Debounced anime search inside New Post composer
   useEffect(() => {
     const q = animeQuery.trim();
-    if (!q || viewMode !== 'new') {
+    if (!q || !newPostModalOpen) {
       setAnimeResults([]);
       setSearchingAnime(false);
       return;
@@ -240,7 +258,7 @@ export const CommunityPage: React.FC = () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [animeQuery, viewMode, effectiveMetadataTracker, state.contentPrefs.adultContentMode]);
+  }, [animeQuery, newPostModalOpen, effectiveMetadataTracker, state.contentPrefs.adultContentMode]);
 
   const filteredPosts = useMemo(
     () =>
@@ -291,8 +309,7 @@ export const CommunityPage: React.FC = () => {
   const handleOpenNewPost = () => {
     setDraftError(null);
     setDraftPreview(false);
-    setViewMode('new');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setNewPostModalOpen(true);
   };
 
   const handleInsertFormatting = (prefix: string, suffix: string, placeholder: string) => {
@@ -357,6 +374,7 @@ export const CommunityPage: React.FC = () => {
       setDraftAnime([]);
       setDraftPreview(false);
       setActivePostId(created.id);
+      setNewPostModalOpen(false);
       setViewMode('feed');
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : 'Failed to publish post');
@@ -397,321 +415,345 @@ export const CommunityPage: React.FC = () => {
     }
   };
 
-  // ==================== VIEW: NEW POST COMPOSER ====================
-  if (viewMode === 'new') {
-    return (
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-5 pb-12 space-y-5">
-        {/* Breadcrumb + Heading */}
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--sx-on-surface-muted)]">
-            <button
-              type="button"
-              onClick={() => setViewMode('feed')}
-              className="hover:text-[var(--sx-on-surface)] transition-colors"
+  const newPostModalNode =
+    newPostModalOpen && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            data-testid="community-new-post-backdrop"
+            onClick={() => setNewPostModalOpen(false)}
+            className="sx-backdrop-enter fixed inset-0 z-[120] flex items-center justify-center bg-black/30 backdrop-blur-md p-3 sm:p-5"
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="community-new-post-title"
+              data-testid="community-new-post-modal"
+              onClick={(e) => e.stopPropagation()}
+              style={{ borderRadius: roundness }}
+              className="sx-sheet-enter relative w-full max-w-2xl max-h-[90dvh] overflow-y-auto no-scrollbar bg-white/74 dark:bg-zinc-950/76 backdrop-blur-2xl backdrop-saturate-150 border border-white/65 dark:border-white/16 ring-1 ring-inset ring-white/35 dark:ring-white/10 shadow-[0_24px_64px_rgba(0,0,0,0.35)] p-4 sm:p-6 space-y-3.5 sm:space-y-4"
             >
-              Community
-            </button>
-            <ChevronRight className="w-3.5 h-3.5 opacity-60" />
-            <span className="text-[var(--sx-on-surface)]">New post</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-[var(--sx-on-surface)]">
-            New post
-          </h1>
-        </div>
-
-        {/* Frosted Blurred Composer Card */}
-        <form
-          onSubmit={handleSubmitNewPost}
-          data-testid="community-new-post-form"
-          style={{ borderRadius: roundness }}
-          className={`p-4 sm:p-6 space-y-5 ${glassCardClass}`}
-        >
-          {draftError && (
-            <div className="px-3.5 py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/35 text-xs font-bold text-rose-600 dark:text-rose-300">
-              {draftError}
-            </div>
-          )}
-
-          {/* Category */}
-          <div className="space-y-1.5">
-            <label
-              htmlFor="community-category-select"
-              className="block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[var(--sx-on-surface-muted)]"
-            >
-              Category
-            </label>
-            <div className="relative">
-              <select
-                id="community-category-select"
-                data-testid="community-category-select"
-                value={draftCategory}
-                onChange={(e) => setDraftCategory(e.target.value as CommunityCategory | '')}
-                className={`w-full appearance-none px-4 py-3 pr-10 rounded-xl text-sm font-semibold text-[var(--sx-on-surface)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors ${glassControlClass}`}
-              >
-                <option value="">Choose a category</option>
-                {COMMUNITY_CATEGORIES.filter((c) => c.userSelectable).map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="w-4 h-4 text-[var(--sx-on-surface-muted)] pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2" />
-            </div>
-          </div>
-
-          {/* Title */}
-          <div className="space-y-1.5">
-            <label
-              htmlFor="community-title-input"
-              className="block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[var(--sx-on-surface-muted)]"
-            >
-              Title
-            </label>
-            <input
-              id="community-title-input"
-              data-testid="community-title-input"
-              type="text"
-              maxLength={120}
-              value={draftTitle}
-              onChange={(e) => setDraftTitle(e.target.value)}
-              placeholder="What's it about?"
-              className={`w-full px-4 py-3 rounded-xl text-sm font-semibold text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)]/70 focus:outline-none focus:border-[var(--sx-primary)] transition-colors ${glassControlClass}`}
-            />
-            <div className="text-right text-[11px] font-mono-tabular text-[var(--sx-on-surface-muted)]">
-              {draftTitle.length}/120
-            </div>
-          </div>
-
-          {/* Anime (Optional) */}
-          <div className="space-y-2">
-            <label
-              htmlFor="community-anime-search"
-              className="block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[var(--sx-on-surface-muted)]"
-            >
-              Anime (optional)
-            </label>
-
-            {draftAnime.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {draftAnime.map((anime) => (
-                  <span
-                    key={anime.id}
-                    className={`inline-flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full text-xs font-bold text-[var(--sx-on-surface)] ${glassControlClass}`}
+              {/* Modal Header */}
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-0.5">
+                  <h2
+                    id="community-new-post-title"
+                    className="text-xl sm:text-2xl font-black tracking-tight text-[var(--sx-on-surface)]"
                   >
-                    {anime.cover && (
-                      <img
-                        src={anime.cover}
-                        alt=""
-                        className="w-5 h-5 rounded-full object-cover shrink-0"
-                      />
-                    )}
-                    <span className="truncate max-w-[180px]">{anime.title}</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDraftAnime((curr) => curr.filter((a) => a.id !== anime.id))
-                      }
-                      aria-label={`Remove ${anime.title}`}
-                      className="p-0.5 rounded-full hover:bg-[var(--sx-on-surface)]/10"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            <div className="relative">
-              <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2 z-10 pointer-events-none" />
-              <input
-                id="community-anime-search"
-                type="text"
-                disabled={draftAnime.length >= 3}
-                value={animeQuery}
-                onChange={(e) => setAnimeQuery(e.target.value)}
-                placeholder={
-                  draftAnime.length >= 3 ? 'Maximum 3 anime linked' : 'Link an anime'
-                }
-                className={`w-full pl-10 pr-9 py-3 rounded-xl text-sm font-semibold text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)]/70 focus:outline-none focus:border-[var(--sx-primary)] transition-colors disabled:opacity-60 ${glassControlClass}`}
-              />
-              {searchingAnime && (
-                <Loader2 className="w-4 h-4 animate-spin text-[var(--sx-primary)] absolute right-3.5 top-1/2 -translate-y-1/2 z-10 pointer-events-none" />
-              )}
-
-              {animeResults.length > 0 && (
-                <div
-                  className={`absolute left-0 right-0 top-[calc(100%+6px)] z-30 rounded-2xl p-1.5 space-y-1 max-h-60 overflow-y-auto ${glassCardClass}`}
-                >
-                  {animeResults.map((item) => {
-                    const title =
-                      item.title.english || item.title.romaji || item.title.native || 'Anime';
-                    const alreadyAdded = draftAnime.some((a) => String(a.id) === String(item.id));
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        disabled={alreadyAdded}
-                        onClick={() => handleAddLinkedAnime(item)}
-                        className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[var(--sx-on-surface)]/8 text-left transition-colors disabled:opacity-45"
-                      >
-                        <div className="w-8 h-10 rounded-lg overflow-hidden bg-[var(--sx-surface-high)] shrink-0">
-                          <SmartImage
-                            src={item.cover}
-                            alt={title}
-                            fallbackTitle={title}
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-bold text-[var(--sx-on-surface)] truncate">
-                            {title}
-                          </p>
-                          <p className="text-[10px] text-[var(--sx-on-surface-muted)]">
-                            {[item.format, item.year].filter(Boolean).join(' · ')}
-                          </p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            <p className="text-xs text-[var(--sx-on-surface-muted)]">
-              Up to 3. They show as chips on your post.
-            </p>
-          </div>
-
-          {/* Body */}
-          <div className="space-y-2">
-            <label
-              htmlFor="community-body-input"
-              className="block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[var(--sx-on-surface-muted)]"
-            >
-              Body
-            </label>
-
-            {draftPreview ? (
-              <div
-                className={`min-h-[168px] p-4 rounded-xl ${glassControlClass}`}
-              >
-                {draftBody.trim() ? (
-                  <CommunityBodyRenderer body={draftBody} />
-                ) : (
-                  <p className="text-sm text-[var(--sx-on-surface-muted)] italic">
-                    Nothing to preview yet...
+                    New post
+                  </h2>
+                  <p className="text-xs text-[var(--sx-on-surface-muted)]">
+                    Share anime discussions, bug reports, or ideas with the community.
                   </p>
+                </div>
+                <button
+                  type="button"
+                  data-testid="community-new-post-close-btn"
+                  aria-label="Close New post"
+                  onClick={() => setNewPostModalOpen(false)}
+                  className={`w-9 h-9 rounded-full flex items-center justify-center text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors shrink-0 ${glassControlClass}`}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Frosted Blurred Composer Form */}
+              <form
+                onSubmit={handleSubmitNewPost}
+                data-testid="community-new-post-form"
+                className="space-y-3"
+              >
+                {draftError && (
+                  <div className="px-3.5 py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/35 text-xs font-bold text-rose-600 dark:text-rose-300">
+                    {draftError}
+                  </div>
                 )}
-              </div>
-            ) : (
-              <textarea
-                ref={bodyInputRef}
-                id="community-body-input"
-                data-testid="community-body-input"
-                rows={6}
-                maxLength={4000}
-                value={draftBody}
-                onChange={(e) => setDraftBody(e.target.value)}
-                placeholder="Share the details. **bold**, ||spoiler|| and > quote work here."
-                className={`w-full px-4 py-3 rounded-xl text-sm font-medium text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)]/70 focus:outline-none focus:border-[var(--sx-primary)] transition-colors resize-y ${glassControlClass}`}
-              />
-            )}
 
-            {/* Formatting Toolbar + Actions */}
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-              <div className="flex items-center gap-1.5 text-[var(--sx-on-surface-muted)]">
-                <button
-                  type="button"
-                  onClick={() => handleInsertFormatting('**', '**', 'bold text')}
-                  title="Bold"
-                  aria-label="Insert bold text"
-                  className="p-2 rounded-lg hover:bg-[var(--sx-on-surface)]/10 hover:text-[var(--sx-on-surface)] transition-colors"
-                >
-                  <Bold className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertFormatting('\n> ', '', 'quote')}
-                  title="Quote"
-                  aria-label="Insert quote"
-                  className="p-2 rounded-lg hover:bg-[var(--sx-on-surface)]/10 hover:text-[var(--sx-on-surface)] transition-colors"
-                >
-                  <Quote className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertFormatting('||', '||', 'spoiler')}
-                  title="Spoiler"
-                  aria-label="Insert spoiler"
-                  className="p-2 rounded-lg hover:bg-[var(--sx-on-surface)]/10 hover:text-[var(--sx-on-surface)] transition-colors"
-                >
-                  <EyeOff className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDraftPreview((v) => !v)}
-                  title="Preview"
-                  aria-label="Toggle preview"
-                  aria-pressed={draftPreview}
-                  className={`p-2 rounded-lg transition-colors ${
-                    draftPreview
-                      ? 'bg-[var(--sx-primary)]/18 text-[var(--sx-primary)]'
-                      : 'hover:bg-[var(--sx-on-surface)]/10 hover:text-[var(--sx-on-surface)]'
-                  }`}
-                >
-                  <Eye className="w-4 h-4" />
-                </button>
-                <span className="hidden sm:inline text-[11px] ml-2 opacity-80">
-                  Eye shows a preview
-                </span>
-              </div>
+                {/* Category */}
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="community-category-select"
+                    className="block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[var(--sx-on-surface-muted)]"
+                  >
+                    Category
+                  </label>
+                  <div className="relative">
+                    <select
+                      id="community-category-select"
+                      data-testid="community-category-select"
+                      value={draftCategory}
+                      onChange={(e) => setDraftCategory(e.target.value as CommunityCategory | '')}
+                      className={`w-full appearance-none px-4 py-3 pr-10 rounded-xl text-sm font-semibold text-[var(--sx-on-surface)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors ${glassControlClass}`}
+                    >
+                      <option
+                        value=""
+                        className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                      >
+                        Choose a category
+                      </option>
+                      {COMMUNITY_CATEGORIES.filter((c) => c.userSelectable).map((cat) => (
+                        <option
+                          key={cat.id}
+                          value={cat.id}
+                          className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                        >
+                          {cat.label}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="w-4 h-4 text-[var(--sx-on-surface-muted)] pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2" />
+                  </div>
+                </div>
 
-              <div className="flex items-center gap-2 ml-auto">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('feed')}
-                  className={`px-4 py-2 rounded-xl text-xs font-extrabold text-[var(--sx-on-surface)] hover:bg-[var(--sx-on-surface)]/10 transition-colors ${glassControlClass}`}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  data-testid="community-publish-btn"
-                  disabled={submittingPost}
-                  className="px-5 py-2 rounded-xl bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-extrabold shadow-md hover:opacity-92 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-                >
-                  {submittingPost && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>Post</span>
-                </button>
-              </div>
+                {/* Title */}
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="community-title-input"
+                    className="block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[var(--sx-on-surface-muted)]"
+                  >
+                    Title
+                  </label>
+                  <input
+                    id="community-title-input"
+                    data-testid="community-title-input"
+                    type="text"
+                    maxLength={120}
+                    value={draftTitle}
+                    onChange={(e) => setDraftTitle(e.target.value)}
+                    placeholder="What's it about?"
+                    className={`w-full px-4 py-3 rounded-xl text-sm font-semibold text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)]/70 focus:outline-none focus:border-[var(--sx-primary)] transition-colors ${glassControlClass}`}
+                  />
+                  <div className="text-right text-[11px] font-mono-tabular text-[var(--sx-on-surface-muted)]">
+                    {draftTitle.length}/120
+                  </div>
+                </div>
+
+                {/* Anime (Optional) */}
+                <div className="space-y-2">
+                  <label
+                    htmlFor="community-anime-search"
+                    className="block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[var(--sx-on-surface-muted)]"
+                  >
+                    Anime (optional)
+                  </label>
+
+                  {draftAnime.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {draftAnime.map((anime) => (
+                        <span
+                          key={anime.id}
+                          className={`inline-flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full text-xs font-bold text-[var(--sx-on-surface)] ${glassControlClass}`}
+                        >
+                          {anime.cover && (
+                            <img
+                              src={anime.cover}
+                              alt=""
+                              className="w-5 h-5 rounded-full object-cover shrink-0"
+                            />
+                          )}
+                          <span className="truncate max-w-[180px]">{anime.title}</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDraftAnime((curr) => curr.filter((a) => a.id !== anime.id))
+                            }
+                            aria-label={`Remove ${anime.title}`}
+                            className="p-0.5 rounded-full hover:bg-[var(--sx-on-surface)]/10"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2 z-10 pointer-events-none" />
+                    <input
+                      id="community-anime-search"
+                      type="text"
+                      disabled={draftAnime.length >= 3}
+                      value={animeQuery}
+                      onChange={(e) => setAnimeQuery(e.target.value)}
+                      placeholder={
+                        draftAnime.length >= 3 ? 'Maximum 3 anime linked' : 'Link an anime'
+                      }
+                      className={`w-full pl-10 pr-9 py-3 rounded-xl text-sm font-semibold text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)]/70 focus:outline-none focus:border-[var(--sx-primary)] transition-colors disabled:opacity-60 ${glassControlClass}`}
+                    />
+                    {searchingAnime && (
+                      <Loader2 className="w-4 h-4 animate-spin text-[var(--sx-primary)] absolute right-3.5 top-1/2 -translate-y-1/2 z-10 pointer-events-none" />
+                    )}
+
+                    {animeResults.length > 0 && (
+                      <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 rounded-2xl p-1.5 space-y-1 max-h-60 overflow-y-auto bg-white/75 dark:bg-zinc-900/82 backdrop-blur-2xl backdrop-saturate-150 border border-white/55 dark:border-white/15 shadow-2xl">
+                        {animeResults.map((item) => {
+                          const title =
+                            item.title.english || item.title.romaji || item.title.native || 'Anime';
+                          const alreadyAdded = draftAnime.some(
+                            (a) => String(a.id) === String(item.id),
+                          );
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              disabled={alreadyAdded}
+                              onClick={() => handleAddLinkedAnime(item)}
+                              className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[var(--sx-on-surface)]/8 text-left transition-colors disabled:opacity-45"
+                            >
+                              <div className="w-8 h-10 rounded-lg overflow-hidden bg-[var(--sx-surface-high)] shrink-0">
+                                <SmartImage
+                                  src={item.cover}
+                                  alt={title}
+                                  fallbackTitle={title}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-bold text-[var(--sx-on-surface)] truncate">
+                                  {title}
+                                </p>
+                                <p className="text-[10px] text-[var(--sx-on-surface-muted)]">
+                                  {[item.format, item.year].filter(Boolean).join(' · ')}
+                                </p>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-[var(--sx-on-surface-muted)]">
+                    Up to 3. They show as chips on your post.
+                  </p>
+                </div>
+
+                {/* Body */}
+                <div className="space-y-2">
+                  <label
+                    htmlFor="community-body-input"
+                    className="block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[var(--sx-on-surface-muted)]"
+                  >
+                    Body
+                  </label>
+
+                  {draftPreview ? (
+                    <div className={`min-h-[152px] p-4 rounded-xl ${glassControlClass}`}>
+                      {draftBody.trim() ? (
+                        <CommunityBodyRenderer body={draftBody} />
+                      ) : (
+                        <p className="text-sm text-[var(--sx-on-surface-muted)] italic">
+                          Nothing to preview yet...
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <textarea
+                      ref={bodyInputRef}
+                      id="community-body-input"
+                      data-testid="community-body-input"
+                      rows={3}
+                      maxLength={4000}
+                      value={draftBody}
+                      onChange={(e) => setDraftBody(e.target.value)}
+                      placeholder="Share the details. **bold**, ||spoiler|| and > quote work here."
+                      className={`w-full px-4 py-3 rounded-xl text-sm font-medium text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)]/70 focus:outline-none focus:border-[var(--sx-primary)] transition-colors resize-y ${glassControlClass}`}
+                    />
+                  )}
+
+                  {/* Formatting Toolbar + Actions */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    <div className="flex items-center gap-1.5 text-[var(--sx-on-surface-muted)]">
+                      <button
+                        type="button"
+                        onClick={() => handleInsertFormatting('**', '**', 'bold text')}
+                        title="Bold"
+                        aria-label="Insert bold text"
+                        className="p-2 rounded-lg hover:bg-[var(--sx-on-surface)]/10 hover:text-[var(--sx-on-surface)] transition-colors"
+                      >
+                        <Bold className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleInsertFormatting('\n> ', '', 'quote')}
+                        title="Quote"
+                        aria-label="Insert quote"
+                        className="p-2 rounded-lg hover:bg-[var(--sx-on-surface)]/10 hover:text-[var(--sx-on-surface)] transition-colors"
+                      >
+                        <Quote className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleInsertFormatting('||', '||', 'spoiler')}
+                        title="Spoiler"
+                        aria-label="Insert spoiler"
+                        className="p-2 rounded-lg hover:bg-[var(--sx-on-surface)]/10 hover:text-[var(--sx-on-surface)] transition-colors"
+                      >
+                        <EyeOff className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDraftPreview((v) => !v)}
+                        title="Preview"
+                        aria-label="Toggle preview"
+                        aria-pressed={draftPreview}
+                        className={`p-2 rounded-lg transition-colors ${
+                          draftPreview
+                            ? 'bg-[var(--sx-primary)]/18 text-[var(--sx-primary)]'
+                            : 'hover:bg-[var(--sx-on-surface)]/10 hover:text-[var(--sx-on-surface)]'
+                        }`}
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+                      <span className="hidden sm:inline text-[11px] ml-2 opacity-80">
+                        Eye shows a preview
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 ml-auto">
+                      <button
+                        type="button"
+                        onClick={() => setNewPostModalOpen(false)}
+                        className={`px-4 py-2 rounded-xl text-xs font-extrabold text-[var(--sx-on-surface)] hover:bg-[var(--sx-on-surface)]/10 transition-colors ${glassControlClass}`}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        data-testid="community-publish-btn"
+                        disabled={submittingPost}
+                        className="px-5 py-2 rounded-xl bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-extrabold shadow-md hover:opacity-92 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                      >
+                        {submittingPost && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                        <span>Post</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+
+              {/* Compact Community Rules footer */}
+              <section className={`p-3.5 sm:p-4 rounded-2xl space-y-2 ${glassControlClass}`}>
+                <h3 className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[var(--sx-on-surface-muted)]">
+                  Rules
+                </h3>
+                <ol className="space-y-1.5 text-xs text-[var(--sx-on-surface-muted)]">
+                  {COMMUNITY_RULES.map((rule, idx) => (
+                    <li key={rule.title} className="leading-relaxed">
+                      <span className="font-mono-tabular text-[var(--sx-on-surface-muted)] mr-1.5">
+                        {idx + 1}.
+                      </span>
+                      <strong className="font-extrabold text-[var(--sx-on-surface)] mr-1">
+                        {rule.title}
+                      </strong>
+                      <span>{rule.description}</span>
+                    </li>
+                  ))}
+                </ol>
+              </section>
             </div>
-          </div>
-        </form>
-
-        {/* Rules Card matching screenshot 3 */}
-        <section
-          style={{ borderRadius: roundness }}
-          className={`p-4 sm:p-6 space-y-3 ${glassCardClass}`}
-        >
-          <h2 className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-[var(--sx-on-surface-muted)]">
-            Rules
-          </h2>
-          <ol className="space-y-2 text-xs sm:text-sm text-[var(--sx-on-surface-muted)]">
-            {COMMUNITY_RULES.map((rule, idx) => (
-              <li key={rule.title} className="leading-relaxed">
-                <span className="font-mono-tabular text-[var(--sx-on-surface-muted)] mr-1.5">
-                  {idx + 1}.
-                </span>
-                <strong className="font-extrabold text-[var(--sx-on-surface)] mr-1">
-                  {rule.title}
-                </strong>
-                <span>{rule.description}</span>
-              </li>
-            ))}
-          </ol>
-        </section>
-      </div>
-    );
-  }
+          </div>,
+          document.body,
+        )
+      : null;
 
   // ==================== VIEW: POST DETAIL ====================
   if (viewMode === 'detail' && activePost) {
@@ -938,6 +980,7 @@ export const CommunityPage: React.FC = () => {
             </div>
           )}
         </section>
+        {newPostModalNode}
       </div>
     );
   }
@@ -1031,40 +1074,64 @@ export const CommunityPage: React.FC = () => {
             className={`flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-full text-xs font-bold ${glassCardClass}`}
           >
             <span className="text-[var(--sx-on-surface-muted)] font-semibold">Label</span>
-            <select
-              aria-label="Filter by label"
-              data-testid="community-label-select"
-              value={labelFilter}
-              onChange={(e) => setLabelFilter(e.target.value as CommunityLabel | 'any')}
-              className="bg-transparent font-extrabold text-[var(--sx-on-surface)] focus:outline-none cursor-pointer"
-            >
-              <option value="any">Any</option>
-              {COMMUNITY_LABELS.map((lbl) => (
-                <option key={lbl.id} value={lbl.id}>
-                  {lbl.label}
+              <select
+                aria-label="Filter by label"
+                data-testid="community-label-select"
+                value={labelFilter}
+                onChange={(e) => setLabelFilter(e.target.value as CommunityLabel | 'any')}
+                className="bg-transparent font-extrabold text-[var(--sx-on-surface)] focus:outline-none cursor-pointer"
+              >
+                <option
+                  value="any"
+                  className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                >
+                  Any
                 </option>
-              ))}
-            </select>
-          </label>
+                {COMMUNITY_LABELS.map((lbl) => (
+                  <option
+                    key={lbl.id}
+                    value={lbl.id}
+                    className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                  >
+                    {lbl.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <label
-            className={`flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-full text-xs font-bold ${glassCardClass}`}
-          >
-            <span className="text-[var(--sx-on-surface-muted)] font-semibold">Sort</span>
-            <select
-              aria-label="Sort posts"
-              data-testid="community-sort-select"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as CommunitySort)}
-              className="bg-transparent font-extrabold text-[var(--sx-on-surface)] focus:outline-none cursor-pointer"
+            <label
+              className={`flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-full text-xs font-bold ${glassCardClass}`}
             >
-              <option value="hot">Hot</option>
-              <option value="new">New</option>
-              <option value="top">Top</option>
-            </select>
-          </label>
+              <span className="text-[var(--sx-on-surface-muted)] font-semibold">Sort</span>
+              <select
+                aria-label="Sort posts"
+                data-testid="community-sort-select"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as CommunitySort)}
+                className="bg-transparent font-extrabold text-[var(--sx-on-surface)] focus:outline-none cursor-pointer"
+              >
+                <option
+                  value="hot"
+                  className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                >
+                  Hot
+                </option>
+                <option
+                  value="new"
+                  className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                >
+                  New
+                </option>
+                <option
+                  value="top"
+                  className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                >
+                  Top
+                </option>
+              </select>
+            </label>
+          </div>
         </div>
-      </div>
 
       {/* Feed Content */}
       {loading ? (
@@ -1330,6 +1397,7 @@ export const CommunityPage: React.FC = () => {
           })}
         </div>
       )}
+      {newPostModalNode}
     </div>
   );
 };

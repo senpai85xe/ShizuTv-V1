@@ -496,7 +496,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
       }}
       className={`sx-backdrop-enter ${
         isFullscreen ? 'absolute inset-0 z-[120]' : 'fixed inset-0 z-[120]'
-      } flex items-center justify-center bg-black/60 backdrop-blur-md p-3 sm:p-4`}
+      } flex items-center justify-center bg-black/50 backdrop-blur-md p-3 sm:p-4`}
     >
       <div
         role="dialog"
@@ -504,7 +504,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
         aria-labelledby="create-room-title"
         data-testid="create-watch-room-modal"
         onClick={(e) => e.stopPropagation()}
-        className={`sx-sheet-enter w-full max-w-md rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/88 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/15 p-5 sm:p-6 shadow-2xl space-y-5 ${
+        className={`sx-sheet-enter w-full max-w-md rounded-[var(--sx-radius)] bg-white/58 dark:bg-zinc-950/68 backdrop-blur-2xl backdrop-saturate-150 border border-white/55 dark:border-white/16 ring-1 ring-inset ring-white/25 dark:ring-white/10 p-5 sm:p-6 shadow-[0_24px_64px_rgba(0,0,0,0.45)] space-y-5 ${
           isFullscreen ? 'max-h-[84%]' : 'max-h-[88dvh]'
         } overflow-y-auto no-scrollbar`}
       >
@@ -540,7 +540,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
             data-testid="create-room-close-btn"
             onClick={onClose}
             aria-label="Close Create a room"
-            className="w-9 h-9 rounded-full bg-[var(--sx-surface-high)]/80 hover:bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] flex items-center justify-center text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors shrink-0"
+            className="w-9 h-9 rounded-full bg-white/34 dark:bg-white/[0.08] hover:bg-white/50 dark:hover:bg-white/14 border border-white/45 dark:border-white/14 flex items-center justify-center text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
@@ -552,7 +552,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
               {/* Pre-seeded Locked Episode Summary Card */}
               <div
                 data-testid="create-room-quick-episode-card"
-                className="flex items-center gap-3 p-3 rounded-2xl bg-[var(--sx-surface-high)]/60 backdrop-blur-md border border-[var(--sx-outline)]"
+                className="flex items-center gap-3 p-3 rounded-2xl bg-white/30 dark:bg-white/[0.06] backdrop-blur-md border border-white/45 dark:border-white/12"
               >
                 <div className="w-11 h-14 rounded-xl overflow-hidden bg-[var(--sx-surface-container)] shrink-0 border border-[var(--sx-outline)]">
                   {selectedAnime.cover || selectedAnime.banner ? (
@@ -586,7 +586,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                 <span className="block text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--sx-on-surface-muted)]">
                   Track
                 </span>
-                <div className="grid grid-cols-2 p-1 rounded-full bg-[var(--sx-surface-high)]/60 border border-[var(--sx-outline)] min-h-[42px]">
+                <div className="grid grid-cols-2 p-1 rounded-full bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12 min-h-[42px]">
                   {(['H-Sub', 'Dub'] as WatchPartyTrack[]).map((opt) => {
                     const active = track === opt;
                     return (
@@ -619,7 +619,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                 {selectedAnime ? (
                   <div
                     data-testid="create-room-selected-anime"
-                    className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-2xl bg-[var(--sx-surface-high)]/55 border border-[var(--sx-outline)]"
+                    className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-2xl bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div className="w-7 h-9 rounded-lg overflow-hidden bg-[var(--sx-surface-container)] shrink-0 border border-[var(--sx-outline)]">
@@ -672,14 +672,14 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                           setValidationError(null);
                         }}
                         placeholder="Search anime"
-                        className="w-full min-h-[46px] pl-10 pr-4 py-2.5 rounded-2xl bg-[var(--sx-surface-high)]/55 border border-[var(--sx-outline)] text-sm font-medium text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
+                        className="w-full min-h-[46px] pl-10 pr-4 py-2.5 rounded-2xl bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12 text-sm font-medium text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
                       />
                     </div>
 
                     {(searchOpen || searchQuery.trim().length > 0) && (
                       <div
                         data-testid="create-room-anime-results"
-                        className="mt-2 rounded-2xl bg-[var(--sx-surface)]/92 backdrop-blur-2xl border border-[var(--sx-outline)] shadow-xl max-h-52 overflow-y-auto divide-y divide-[var(--sx-outline)]"
+                        className="mt-2 rounded-2xl bg-white/68 dark:bg-zinc-900/78 backdrop-blur-2xl border border-white/55 dark:border-white/15 shadow-xl max-h-52 overflow-y-auto divide-y divide-white/25 dark:divide-white/10"
                       >
                         {searching && searchResults.length === 0 ? (
                           <p className="px-4 py-3 text-xs font-medium text-[var(--sx-on-surface-muted)]">
@@ -756,10 +756,14 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                         data-testid="create-room-episode-select"
                         value={episodeNumber}
                         onChange={(e) => setEpisodeNumber(Number(e.target.value) || 1)}
-                        className="w-full min-h-[44px] appearance-none pl-3.5 pr-9 py-2 rounded-2xl bg-[var(--sx-surface-high)]/55 border border-[var(--sx-outline)] text-sm font-semibold text-[var(--sx-on-surface)] focus:outline-none focus:border-[var(--sx-primary)] cursor-pointer"
+                        className="w-full min-h-[44px] appearance-none pl-3.5 pr-9 py-2 rounded-2xl bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12 text-sm font-semibold text-[var(--sx-on-surface)] focus:outline-none focus:border-[var(--sx-primary)] cursor-pointer"
                       >
                         {episodes.map((ep) => (
-                          <option key={ep.id} value={ep.number}>
+                          <option
+                            key={ep.id}
+                            value={ep.number}
+                            className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                          >
                             Episode {ep.number}
                           </option>
                         ))}
@@ -772,7 +776,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                     <span className="block text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--sx-on-surface-muted)]">
                       Track
                     </span>
-                    <div className="grid grid-cols-2 p-1 rounded-full bg-[var(--sx-surface-high)]/60 border border-[var(--sx-outline)] min-h-[44px]">
+                    <div className="grid grid-cols-2 p-1 rounded-full bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12 min-h-[44px]">
                       {(['H-Sub', 'Dub'] as WatchPartyTrack[]).map((opt) => {
                         const active = track === opt;
                         return (
@@ -816,7 +820,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                   value={roomNameDraft}
                   onChange={(e) => setRoomNameDraft(e.target.value)}
                   placeholder={defaultRoomName}
-                  className="w-full min-h-[46px] px-4 py-2.5 rounded-2xl bg-[var(--sx-surface-high)]/55 border border-[var(--sx-outline)] text-sm font-medium text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
+                  className="w-full min-h-[46px] px-4 py-2.5 rounded-2xl bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12 text-sm font-medium text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
                 />
               </div>
 
@@ -825,7 +829,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                 <span className="block text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--sx-on-surface-muted)]">
                   Who can join
                 </span>
-                <div className="inline-flex p-1 rounded-full bg-[var(--sx-surface-high)]/60 border border-[var(--sx-outline)]">
+                <div className="inline-flex p-1 rounded-full bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12">
                   <button
                     type="button"
                     data-testid="create-room-public-btn"

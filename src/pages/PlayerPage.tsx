@@ -40,7 +40,8 @@ import {
   findActiveSubtitleCue,
   getVideoFitClass,
   HlsQualityOption,
-  resolvePreferredHlsLevel,
+  resolveBatterySaverHlsLevel,
+  resolveEffectiveStreamQuality,
   shouldAutoStartPlayback,
   SubtitleCue,
 } from '../utils/inlinePlayer';
@@ -240,9 +241,10 @@ export const PlayerPage: React.FC = () => {
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (!hls) return;
         setHlsQualityOptions(buildHlsQualityOptions(hls.levels));
-        const preferredLevel = resolvePreferredHlsLevel(
+        const preferredLevel = resolveBatterySaverHlsLevel(
           hls.levels,
           state.playerPrefs.defaultQuality,
+          state.playerPrefs.batterySaver,
         );
         hls.currentLevel = preferredLevel;
         setSelectedHlsLevel(preferredLevel);
@@ -265,6 +267,21 @@ export const PlayerPage: React.FC = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream.url, stream.isHls, currentEpisode.id]);
+
+  // Dynamically apply Battery Saver 480p cap on active HLS streams
+  useEffect(() => {
+    const hls = hlsRef.current;
+    if (!hls || !hls.levels || hls.levels.length === 0) return;
+    const nextLevel = resolveBatterySaverHlsLevel(
+      hls.levels,
+      state.playerPrefs.defaultQuality,
+      state.playerPrefs.batterySaver,
+    );
+    if (hls.currentLevel !== nextLevel) {
+      hls.currentLevel = nextLevel;
+    }
+    setSelectedHlsLevel(nextLevel);
+  }, [state.playerPrefs.batterySaver, state.playerPrefs.defaultQuality]);
 
   // Fetch AniSkip intervals for current episode
   useEffect(() => {
@@ -505,11 +522,16 @@ export const PlayerPage: React.FC = () => {
   }, []);
 
   const handleSelectHlsLevel = (levelIndex: number, qualityPref?: VideoQualityPref) => {
-    if (hlsRef.current) {
-      hlsRef.current.currentLevel = levelIndex;
+    const hls = hlsRef.current;
+    const effectiveLevel =
+      state.playerPrefs.batterySaver && hls?.levels?.length
+        ? resolveBatterySaverHlsLevel(hls.levels, qualityPref || state.playerPrefs.defaultQuality, true)
+        : levelIndex;
+    if (hls) {
+      hls.currentLevel = effectiveLevel;
     }
-    setSelectedHlsLevel(levelIndex);
-    if (qualityPref) {
+    setSelectedHlsLevel(effectiveLevel);
+    if (qualityPref && !state.playerPrefs.batterySaver) {
       updatePlayerPrefs({ defaultQuality: qualityPref });
     }
   };
@@ -745,12 +767,26 @@ export const PlayerPage: React.FC = () => {
     showControls || !playing || showServerMenu || showSettingsMenu || showEpisodeDrawer;
 
   const activeQualityLabel = useMemo(() => {
+    const effectivePref = resolveEffectiveStreamQuality(
+      state.playerPrefs.defaultQuality,
+      state.playerPrefs.batterySaver,
+    );
     if (hlsQualityOptions.length > 1) {
       const found = hlsQualityOptions.find((o) => o.index === selectedHlsLevel);
-      if (found) return found.label;
+      if (found) {
+        if (state.playerPrefs.batterySaver && found.index === -1) {
+          return effectivePref.toUpperCase();
+        }
+        return found.label;
+      }
     }
-    return state.playerPrefs.defaultQuality.toUpperCase();
-  }, [hlsQualityOptions, selectedHlsLevel, state.playerPrefs.defaultQuality]);
+    return effectivePref.toUpperCase();
+  }, [
+    hlsQualityOptions,
+    selectedHlsLevel,
+    state.playerPrefs.defaultQuality,
+    state.playerPrefs.batterySaver,
+  ]);
 
   return (
     <div

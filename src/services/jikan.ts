@@ -9,13 +9,13 @@ import {
 const JIKAN_BASE = 'https://api.jikan.moe/v4';
 const cache = new Map<string, { expires: number; data: unknown }>();
 
-async function jikanGet<T>(path: string, ttlMin = 15): Promise<T> {
+async function jikanGet<T>(path: string, ttlMin = 15, bypassCache = false): Promise<T> {
   const now = Date.now();
-  const hit = cache.get(path);
+  const hit = !bypassCache ? cache.get(path) : undefined;
   if (hit && hit.expires > now) return hit.data as T;
 
   const res = await fetch(`${JIKAN_BASE}${path}`, {
-    signal: AbortSignal.timeout(4500),
+    signal: AbortSignal.timeout(8500),
   });
   if (!res.ok) throw new Error(`Jikan API ${res.status}: ${res.statusText}`);
   const json = await res.json();
@@ -107,52 +107,51 @@ export async function fetchJikanDetails(malId: string, type: MediaType): Promise
   return mapJikanMedia(json.data, type);
 }
 
-export async function fetchJikanEpisodes(malId: string): Promise<UnifiedEpisode[]> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const first = await jikanGet<any>(`/anime/${malId}/episodes?page=1`, 30);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const allItems: any[] = [...(first.data ?? [])];
-    const lastPage = Math.min(Number(first.pagination?.last_visible_page) || 1, 15);
+export async function fetchJikanEpisodes(
+  malId: string,
+  bypassCache = false,
+): Promise<UnifiedEpisode[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const first = await jikanGet<any>(`/anime/${malId}/episodes?page=1`, 30, bypassCache);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allItems: any[] = [...(first.data ?? [])];
+  const lastPage = Math.min(Number(first.pagination?.last_visible_page) || 1, 15);
 
-    if (first.pagination?.has_next_page && lastPage > 1) {
-      const pageNumbers = Array.from({ length: lastPage - 1 }, (_, i) => i + 2);
-      // Fetch in small batches of 3 to respect Jikan rate limits while still loading fast
-      for (let i = 0; i < pageNumbers.length; i += 3) {
-        const batch = pageNumbers.slice(i, i + 3);
-        const results = await Promise.allSettled(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          batch.map((p) => jikanGet<any>(`/anime/${malId}/episodes?page=${p}`, 30)),
-        );
-        for (const r of results) {
-          if (r.status === 'fulfilled' && Array.isArray(r.value?.data)) {
-            allItems.push(...r.value.data);
-          }
+  if (first.pagination?.has_next_page && lastPage > 1) {
+    const pageNumbers = Array.from({ length: lastPage - 1 }, (_, i) => i + 2);
+    // Fetch in small batches of 3 to respect Jikan rate limits while still loading fast
+    for (let i = 0; i < pageNumbers.length; i += 3) {
+      const batch = pageNumbers.slice(i, i + 3);
+      const results = await Promise.allSettled(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        batch.map((p) => jikanGet<any>(`/anime/${malId}/episodes?page=${p}`, 30, bypassCache)),
+      );
+      for (const r of results) {
+        if (r.status === 'fulfilled' && Array.isArray(r.value?.data)) {
+          allItems.push(...r.value.data);
         }
       }
     }
-
-    const seen = new Set<number>();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return allItems
-      .filter((ep: any) => {
-        const num = Number(ep.mal_id);
-        if (!Number.isFinite(num) || seen.has(num)) return false;
-        seen.add(num);
-        return true;
-      })
-      .sort((a, b) => Number(a.mal_id) - Number(b.mal_id))
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .map((ep: any): UnifiedEpisode => ({
-        id: `mal-ep-${malId}-${ep.mal_id}`,
-        number: ep.mal_id,
-        title: ep.title || ep.title_romanji || `Episode ${ep.mal_id}`,
-        airDate: ep.aired ? ep.aired.slice(0, 10) : null,
-        isFiller: Boolean(ep.filler),
-      }));
-  } catch {
-    return [];
   }
+
+  const seen = new Set<number>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return allItems
+    .filter((ep: any) => {
+      const num = Number(ep.mal_id);
+      if (!Number.isFinite(num) || seen.has(num)) return false;
+      seen.add(num);
+      return true;
+    })
+    .sort((a, b) => Number(a.mal_id) - Number(b.mal_id))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((ep: any): UnifiedEpisode => ({
+      id: `mal-ep-${malId}-${ep.mal_id}`,
+      number: ep.mal_id,
+      title: ep.title || ep.title_romanji || `Episode ${ep.mal_id}`,
+      airDate: ep.aired ? ep.aired.slice(0, 10) : null,
+      isFiller: Boolean(ep.filler),
+    }));
 }
 
 export async function fetchJikanWeekSchedule(): Promise<CalendarEntry[]> {

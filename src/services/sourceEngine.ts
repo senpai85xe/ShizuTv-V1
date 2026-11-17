@@ -7,7 +7,23 @@ import {
   VideoServer,
   VideoStream,
 } from '../types/media';
-import { fetchJikanEpisodes } from './jikan';
+import { fetchJikanEpisodes, searchJikan } from './jikan';
+import { fetchKitsuEpisodes } from './kitsu';
+import { searchAniList } from './anilist';
+import {
+  AniZipMappingsResponse,
+  isGenericEpisodeTitle,
+  mergeRealEpisodes,
+  parseAniListStreamingEpisodes,
+  parseAniZipEpisodes,
+} from '../utils/episodeResolver';
+import {
+  analyzeEpisodeResolution,
+  EpisodeFetchTrace,
+  EpisodeProviderStep,
+  ProviderTraceStatus,
+  recordEpisodeTrace,
+} from '../utils/episodeDiagnostics';
 
 export const INBUILT_SOURCES: SourceInfo[] = [
   {
@@ -62,6 +78,104 @@ const SAMPLE_STREAMS = [
   },
 ];
 
+const aniZipCache = new Map<string, { expires: number; data: AniZipMappingsResponse }>();
+
+interface AniZipFetchOutcome {
+  data: AniZipMappingsResponse | null;
+  status: ProviderTraceStatus;
+  durationMs: number;
+  targetId: string | null;
+  note: string;
+  errorMessage?: string | null;
+  fromCache?: boolean;
+}
+
+async function fetchAniZipMappingsDetailed(
+  media: UnifiedMedia,
+  bypassCache = false,
+): Promise<AniZipFetchOutcome> {
+  const startedAt = performance.now();
+  const anilistId =
+    media.externalIds?.anilist || (media.providerId === 'anilist' || !media.providerId ? media.id : null);
+  const malId = media.idMal || media.externalIds?.mal || (media.providerId === 'myanimelist' ? media.id : null);
+
+  let queryParam = '';
+  if (anilistId && /^\d+$/.test(String(anilistId))) {
+    queryParam = `anilist_id=${encodeURIComponent(String(anilistId))}`;
+  } else if (malId && /^\d+$/.test(String(malId))) {
+    queryParam = `mal_id=${encodeURIComponent(String(malId))}`;
+  } else {
+    return {
+      data: null,
+      status: 'skipped',
+      durationMs: Math.round(performance.now() - startedAt),
+      targetId: null,
+      note: 'No numeric AniList or MAL ID available for AniZip lookup',
+    };
+  }
+
+  const now = Date.now();
+  const cached = !bypassCache ? aniZipCache.get(queryParam) : undefined;
+  if (cached && cached.expires > now) {
+    return {
+      data: cached.data,
+      status: cached.data.episodes ? 'hit' : 'empty',
+      durationMs: Math.round(performance.now() - startedAt),
+      targetId: queryParam,
+      note: 'Served from 30m in-memory AniZip cache',
+      fromCache: true,
+    };
+  }
+
+  try {
+    const response = await fetch(`https://api.ani.zip/mappings?${queryParam}`, {
+      signal: AbortSignal.timeout(7000),
+    });
+    const elapsed = Math.round(performance.now() - startedAt);
+    if (!response.ok) {
+      return {
+        data: null,
+        status: 'error',
+        durationMs: elapsed,
+        targetId: queryParam,
+        note: `AniZip returned HTTP ${response.status}`,
+        errorMessage: `HTTP ${response.status} ${response.statusText || ''}`.trim(),
+      };
+    }
+    const data = (await response.json()) as AniZipMappingsResponse;
+    aniZipCache.set(queryParam, { expires: now + 30 * 60_000, data });
+    return {
+      data,
+      status: data.episodes && Object.keys(data.episodes).length > 0 ? 'hit' : 'empty',
+      durationMs: elapsed,
+      targetId: queryParam,
+      note: `Fetched mappings (${data.episodeCount ?? Object.keys(data.episodes || {}).length} keys)`,
+    };
+  } catch (err) {
+    const elapsed = Math.round(performance.now() - startedAt);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const isTimeout = isTimeoutFailure(err);
+    return {
+      data: null,
+      status: isTimeout ? 'timeout' : 'error',
+      durationMs: elapsed,
+      targetId: queryParam,
+      note: isTimeout ? 'AniZip request timed out (7000ms)' : 'AniZip network error',
+      errorMessage: errMsg,
+    };
+  }
+}
+
+function isTimeoutFailure(err: unknown): boolean {
+  if (err instanceof Error && err.name === 'TimeoutError') return true;
+  const msg = err instanceof Error ? err.message : String(err || '');
+  return /timeout|timed out/i.test(msg);
+}
+
+function summarizeSampleTitles(episodes: UnifiedEpisode[]): string[] {
+  return episodes.slice(0, 4).map((e) => `${e.number}. ${e.title}`);
+}
+
 export function resolveFallbackEpisodesCount(media: Pick<UnifiedMedia, 'episodes' | 'nextEpisode'>): number {
   const fromEpisodes = media.episodes && media.episodes > 0 ? media.episodes : 0;
   const fromAiring = media.nextEpisode && media.nextEpisode > 1 ? media.nextEpisode - 1 : 0;
@@ -69,42 +183,289 @@ export function resolveFallbackEpisodesCount(media: Pick<UnifiedMedia, 'episodes
   return maxCount > 0 ? maxCount : 12;
 }
 
-export async function resolveEpisodesForMedia(media: UnifiedMedia): Promise<UnifiedEpisode[]> {
-  const expectedCount = resolveFallbackEpisodesCount(media);
+export interface ResolveEpisodesOptions {
+  sourceId?: string;
+  sourceName?: string;
+  overrideTitle?: string;
+  bypassCache?: boolean;
+  recordTrace?: boolean;
+}
 
-  // 1. Try real episode titles from Jikan if MAL ID is known
-  if (media.idMal) {
-    const jikanEps = await fetchJikanEpisodes(media.idMal);
-    if (jikanEps.length > 0) {
-      const highestFetched = jikanEps[jikanEps.length - 1]?.number ?? jikanEps.length;
-      if (expectedCount > highestFetched) {
-        const extra = Array.from({ length: expectedCount - highestFetched }, (_, idx) => {
-          const num = highestFetched + idx + 1;
-          return {
-            id: `${media.id}-ep-${num}`,
-            number: num,
-            title: `Episode ${num}`,
-            thumbnail: media.banner || media.cover || null,
-            durationSeconds: (media.duration || 24) * 60,
-          };
-        });
-        return [...jikanEps, ...extra];
+export async function resolveEpisodesWithDiagnostics(
+  media: UnifiedMedia,
+  options?: ResolveEpisodesOptions,
+): Promise<{ episodes: UnifiedEpisode[]; trace: EpisodeFetchTrace }> {
+  const overallStart = performance.now();
+  let targetMedia = media;
+  const overrideQuery = options?.overrideTitle?.trim();
+  let overrideMatched = false;
+
+  if (overrideQuery) {
+    try {
+      const anilistMatches = await searchAniList({
+        query: overrideQuery,
+        type: 'ANIME',
+        page: 1,
+        perPage: 1,
+      });
+      if (anilistMatches.items[0]) {
+        overrideMatched = true;
+        targetMedia = {
+          ...anilistMatches.items[0],
+          streamingEpisodes:
+            anilistMatches.items[0].id === media.id ? media.streamingEpisodes : undefined,
+        };
       }
-      return jikanEps;
+    } catch {
+      try {
+        const jikanMatches = await searchJikan(overrideQuery, 'ANIME', 1);
+        if (jikanMatches.items[0]) {
+          overrideMatched = true;
+          targetMedia = jikanMatches.items[0];
+        }
+      } catch {
+        // Ignore search override failure cleanly
+      }
     }
   }
 
-  // 2. Fallback to full episode count from AniList metadata (no 100-episode cap)
-  return Array.from({ length: expectedCount }, (_, idx) => {
-    const num = idx + 1;
-    return {
-      id: `${media.id}-ep-${num}`,
-      number: num,
-      title: `Episode ${num}`,
-      thumbnail: media.banner || media.cover || null,
-      durationSeconds: (media.duration || 24) * 60,
-    };
+  const fromEpisodes = targetMedia.episodes && targetMedia.episodes > 0 ? targetMedia.episodes : 0;
+  const fromAiring =
+    targetMedia.nextEpisode && targetMedia.nextEpisode > 1 ? targetMedia.nextEpisode - 1 : 0;
+  const knownCount = Math.max(fromEpisodes, fromAiring);
+
+  const initialMalId =
+    targetMedia.idMal ||
+    targetMedia.externalIds?.mal ||
+    (targetMedia.providerId === 'myanimelist' ? targetMedia.id : null);
+
+  const bypassProviderCache = Boolean(options?.bypassCache);
+  const jikanStart = performance.now();
+  const [aniZipOutcome, jikanResult] = await Promise.all([
+    fetchAniZipMappingsDetailed(targetMedia, bypassProviderCache),
+    initialMalId
+      ? fetchJikanEpisodes(String(initialMalId), bypassProviderCache)
+          .then((eps) => ({
+            episodes: eps,
+            durationMs: Math.round(performance.now() - jikanStart),
+            error: null as string | null,
+            timedOut: false,
+          }))
+          .catch((err) => ({
+            episodes: [] as UnifiedEpisode[],
+            durationMs: Math.round(performance.now() - jikanStart),
+            error: err instanceof Error ? err.message : String(err),
+            timedOut: isTimeoutFailure(err),
+          }))
+      : Promise.resolve({
+          episodes: [] as UnifiedEpisode[],
+          durationMs: 0,
+          error: null as string | null,
+          timedOut: false,
+        }),
+  ]);
+
+  const aniZipData = aniZipOutcome.data;
+  const aniZipEpisodes = parseAniZipEpisodes(aniZipData, targetMedia);
+  let jikanEpisodes = jikanResult.episodes;
+  let jikanDuration = jikanResult.durationMs;
+  let jikanError = jikanResult.error;
+  let jikanTimedOut = jikanResult.timedOut;
+  let effectiveMalId = initialMalId ? String(initialMalId) : null;
+
+  // If MAL ID was missing on initial media (e.g. Kitsu origin) but discovered via AniZip, hydrate Jikan filler metadata
+  const discoveredMalId = aniZipData?.mappings?.mal_id ? String(aniZipData.mappings.mal_id) : null;
+  if (!effectiveMalId && discoveredMalId && jikanEpisodes.length === 0) {
+    effectiveMalId = discoveredMalId;
+    const retryStart = performance.now();
+    try {
+      jikanEpisodes = await fetchJikanEpisodes(discoveredMalId, bypassProviderCache);
+      jikanDuration = Math.round(performance.now() - retryStart);
+    } catch (err) {
+      jikanDuration = Math.round(performance.now() - retryStart);
+      jikanError = err instanceof Error ? err.message : String(err);
+      jikanTimedOut = isTimeoutFailure(err);
+    }
+  }
+
+  const aniListStreaming = parseAniListStreamingEpisodes(
+    targetMedia.streamingEpisodes,
+    targetMedia.id,
+  );
+
+  // If neither AniZip nor Jikan yielded real episode titles, try Kitsu episodes when ID is available
+  const kitsuId =
+    targetMedia.externalIds?.kitsu ||
+    (targetMedia.providerId === 'kitsu' ? targetMedia.id : null) ||
+    (aniZipData?.mappings?.kitsu_id ? String(aniZipData.mappings.kitsu_id) : null);
+
+  const hasRichTitlesAlready =
+    aniZipEpisodes.some((e) => !isGenericEpisodeTitle(e.title, e.number)) ||
+    jikanEpisodes.some((e) => !isGenericEpisodeTitle(e.title, e.number)) ||
+    aniListStreaming.length > 0;
+
+  let kitsuEpisodes: UnifiedEpisode[] = [];
+  let kitsuDuration = 0;
+  let kitsuError: string | null = null;
+  let kitsuTimedOut = false;
+  let kitsuAttempted = false;
+  if (kitsuId && !hasRichTitlesAlready) {
+    kitsuAttempted = true;
+    const kitsuStart = performance.now();
+    try {
+      kitsuEpisodes = await fetchKitsuEpisodes(String(kitsuId), bypassProviderCache);
+      kitsuDuration = Math.round(performance.now() - kitsuStart);
+    } catch (err) {
+      kitsuDuration = Math.round(performance.now() - kitsuStart);
+      kitsuError = err instanceof Error ? err.message : String(err);
+      kitsuTimedOut = isTimeoutFailure(err);
+    }
+  }
+
+  const resolvedFallbackCount =
+    knownCount > 0
+      ? knownCount
+      : aniZipEpisodes.length > 0 ||
+          jikanEpisodes.length > 0 ||
+          kitsuEpisodes.length > 0 ||
+          aniListStreaming.length > 0
+        ? 0
+        : targetMedia.format === 'MOVIE'
+          ? 1
+          : 12;
+
+  const mergedEpisodes = mergeRealEpisodes({
+    mediaId: targetMedia.id,
+    expectedCount: resolvedFallbackCount,
+    aniZipEpisodes,
+    jikanEpisodes,
+    kitsuEpisodes,
+    aniListStreamingEpisodes: aniListStreaming,
+    fallbackDurationSeconds: (targetMedia.duration || 24) * 60,
+    fallbackThumbnail: targetMedia.banner || targetMedia.cover || null,
   });
+
+  const providerSteps: EpisodeProviderStep[] = [
+    {
+      provider: 'AniZip',
+      status:
+        aniZipOutcome.status === 'hit' && aniZipEpisodes.length === 0 ? 'empty' : aniZipOutcome.status,
+      durationMs: aniZipOutcome.durationMs,
+      episodeCount: aniZipEpisodes.length,
+      namedCount: aniZipEpisodes.filter((e) => !isGenericEpisodeTitle(e.title, e.number)).length,
+      targetId: aniZipOutcome.targetId,
+      sampleTitles: summarizeSampleTitles(aniZipEpisodes),
+      note:
+        aniZipEpisodes.length > 0
+          ? `${aniZipEpisodes.length} parsed episodes${aniZipOutcome.fromCache ? ' (cached)' : ''}`
+          : aniZipOutcome.note,
+      errorMessage: aniZipOutcome.errorMessage ?? null,
+    },
+    {
+      provider: 'AniList Streaming',
+      status: aniListStreaming.length > 0 ? 'hit' : 'empty',
+      durationMs: 0,
+      episodeCount: aniListStreaming.length,
+      namedCount: aniListStreaming.filter((e) => !isGenericEpisodeTitle(e.title, e.number)).length,
+      targetId: targetMedia.id,
+      sampleTitles: summarizeSampleTitles(aniListStreaming),
+      note:
+        aniListStreaming.length > 0
+          ? `${aniListStreaming.length} streaming episodes embedded on AniList media`
+          : '0 streamingEpisodes returned on AniList media',
+    },
+    {
+      provider: 'Jikan (MAL)',
+      status: !effectiveMalId
+        ? 'skipped'
+        : jikanError
+          ? jikanTimedOut || isTimeoutFailure(jikanError)
+            ? 'timeout'
+            : 'error'
+          : jikanEpisodes.length > 0
+            ? 'hit'
+            : 'empty',
+      durationMs: jikanDuration,
+      episodeCount: jikanEpisodes.length,
+      namedCount: jikanEpisodes.filter((e) => !isGenericEpisodeTitle(e.title, e.number)).length,
+      targetId: effectiveMalId,
+      sampleTitles: summarizeSampleTitles(jikanEpisodes),
+      note: !effectiveMalId
+        ? 'Skipped (no MAL ID mapped)'
+        : jikanEpisodes.length > 0
+          ? `${jikanEpisodes.length} MAL episodes (${jikanEpisodes.filter((e) => e.isFiller).length} filler)`
+          : jikanError
+            ? jikanTimedOut
+              ? 'Jikan API timed out (8500ms)'
+              : 'Jikan API request failed'
+            : 'Jikan returned 0 episode records',
+      errorMessage: jikanError,
+    },
+    {
+      provider: 'Kitsu',
+      status: !kitsuId
+        ? 'skipped'
+        : !kitsuAttempted
+          ? 'skipped'
+          : kitsuError
+            ? kitsuTimedOut || isTimeoutFailure(kitsuError)
+              ? 'timeout'
+              : 'error'
+            : kitsuEpisodes.length > 0
+              ? 'hit'
+              : 'empty',
+      durationMs: kitsuDuration,
+      episodeCount: kitsuEpisodes.length,
+      namedCount: kitsuEpisodes.filter((e) => !isGenericEpisodeTitle(e.title, e.number)).length,
+      targetId: kitsuId ? String(kitsuId) : null,
+      sampleTitles: summarizeSampleTitles(kitsuEpisodes),
+      note: !kitsuId
+        ? 'Skipped (no Kitsu ID mapped)'
+        : !kitsuAttempted
+          ? 'Skipped (higher-priority layers already supplied real titles)'
+          : kitsuEpisodes.length > 0
+            ? `${kitsuEpisodes.length} Kitsu episodes loaded`
+            : kitsuError
+              ? kitsuTimedOut
+                ? 'Kitsu API timed out (8500ms)'
+                : 'Kitsu API request failed'
+              : 'Kitsu returned 0 episodes',
+      errorMessage: kitsuError,
+    },
+  ];
+
+  const sourceId = options?.sourceId || 'shonenx-hls-inbuilt';
+  const sourceName =
+    options?.sourceName ||
+    INBUILT_SOURCES.find((s) => s.id === sourceId)?.name ||
+    sourceId;
+
+  const trace = analyzeEpisodeResolution({
+    inputMedia: media,
+    resolvedMedia: targetMedia,
+    sourceId,
+    sourceName,
+    overrideTitle: overrideQuery,
+    overrideMatched,
+    resolvedExpectedCount: resolvedFallbackCount,
+    providers: providerSteps,
+    mergedEpisodes,
+    totalDurationMs: Math.round(performance.now() - overallStart),
+  });
+
+  if (options?.recordTrace !== false) {
+    recordEpisodeTrace(trace);
+  }
+
+  return { episodes: mergedEpisodes, trace };
+}
+
+export async function resolveEpisodesForMedia(
+  media: UnifiedMedia,
+  options?: { sourceId?: string; sourceName?: string; overrideTitle?: string },
+): Promise<UnifiedEpisode[]> {
+  const { episodes } = await resolveEpisodesWithDiagnostics(media, options);
+  return episodes;
 }
 
 export function resolveChaptersForMedia(media: UnifiedMedia): UnifiedChapter[] {
@@ -121,12 +482,20 @@ export function resolveChaptersForMedia(media: UnifiedMedia): UnifiedChapter[] {
   });
 }
 
-export function resolveVideoServers(sourceId?: string): VideoServer[] {
+export function resolveVideoServers(sourceId?: string, sourceName?: string): VideoServer[] {
   if (sourceId === 'hianime-bridge') {
     return [
       { id: 'hd-1-sub', name: 'HD-1 (Sub)', category: 'sub' },
       { id: 'hd-2-sub', name: 'HD-2 (Sub)', category: 'sub' },
       { id: 'hd-1-dub', name: 'HD-1 (Dub)', category: 'dub' },
+    ];
+  }
+  if (sourceId && sourceId.startsWith('ext-')) {
+    const label = sourceName ? `${sourceName.slice(0, 18)}` : 'Extension';
+    return [
+      { id: 'primary-hls', name: `${label} · HD (Sub)`, category: 'sub' },
+      { id: 'direct-mp4', name: `${label} · Direct MP4`, category: 'sub' },
+      { id: 'dub-hls', name: `${label} · Dub`, category: 'dub' },
     ];
   }
   return [

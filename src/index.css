@@ -1190,3 +1190,99 @@ html.sx-theme-wave-active * {
     animation-delay: var(--sx-skeleton-delay, 0ms);
   }
 }
+
+/* Battery Saver Mode: disable non-essential UI & player ambient animations */
+html[data-battery-saver="true"] .sx-card-animate,
+html[data-battery-saver="true"] .sx-nav-label-enter,
+html[data-battery-saver="true"] .sx-hero-enter,
+html[data-battery-saver="true"] .sx-page-tab-enter,
+html[data-battery-saver="true"] .sx-page-push-enter,
+html[data-battery-saver="true"] .sx-page-pop-enter,
+html[data-battery-saver="true"] .sx-online-switch-next,
+html[data-battery-saver="true"] .sx-online-switch-prev,
+html[data-battery-saver="true"] .sx-online-dock-enter,
+html[data-battery-saver="true"] .sx-backdrop-enter,
+html[data-battery-saver="true"] .sx-sheet-enter,
+html[data-battery-saver="true"] .sx-mode-enter,
+html[data-battery-saver="true"] .sx-mode-exit,
+html[data-battery-saver="true"] .sx-player-popover,
+html[data-battery-saver="true"] .sx-player-drawer-enter,
+html[data-battery-saver="true"] .sx-player-badge-pop,
+html[data-battery-saver="true"] .sx-player-center-hud,
+html[data-battery-saver="true"] .sx-fs-topbar-enter,
+html[data-battery-saver="true"] .sx-lock-pill-enter,
+html[data-battery-saver="true"] .sx-comments-sheet-enter,
+html[data-battery-saver="true"] .sx-speed-popover-up,
+html[data-battery-saver="true"] .sx-gesture-guide-enter,
+html[data-battery-saver="true"] .sx-details-backdrop-enter,
+html[data-battery-saver="true"] .sx-details-hero-enter,
+html[data-battery-saver="true"] .sx-details-tab-enter,
+html[data-battery-saver="true"] .sx-details-tab-forward,
+html[data-battery-saver="true"] .sx-details-tab-backward,
+html[data-battery-saver="true"] .sx-player-stage-enter,
+html[data-battery-saver="true"] .sx-ep-badge-next,
+html[data-battery-saver="true"] .sx-ep-badge-prev,
+html[data-battery-saver="true"] .sx-player-icon-pop,
+html[data-battery-saver="true"] .sx-player-skip-pill,
+html[data-battery-saver="true"] .sx-player-subtitle-enter,
+html[data-battery-saver="true"] .sx-seek-ripple-left,
+html[data-battery-saver="true"] .sx-seek-ripple-right,
+html[data-battery-saver="true"] .sx-player-tab-body,
+html[data-battery-saver="true"] .sx-buffering-shimmer,
+html[data-battery-saver="true"] .sx-filter-chip-enter,
+html[data-battery-saver="true"] .sx-results-stage-enter,
+html[data-battery-saver="true"] .sx-home-header-return,
+html[data-battery-saver="true"] .sx-skeleton-enter,
+html[data-battery-saver="true"] .sx-pull-haptic-pop,
+html[data-battery-saver="true"] .sx-watch-emoji-float,
+html[data-battery-saver="true"] .animate-pulse,
+html[data-battery-saver="true"] .animate-ping,
+html[data-battery-saver="true"] .sx-skeleton-surface::after,
+html[data-battery-saver="true"] .sx-skeleton-surface-soft::after,
+html[data-battery-saver="true"] .sx-skeleton-surface-accent::after {
+  animation: none !important;
+}
+
+html[data-battery-saver="true"] .sx-skeleton-surface::after,
+html[data-battery-saver="true"] .sx-skeleton-surface-soft::after,
+html[data-battery-saver="true"] .sx-skeleton-surface-accent::after {
+  opacity: 0 !important;
+}
+
+html[data-battery-saver="true"] .sx-card-spring,
+html[data-battery-saver="true"] .sx-coverflow-slide,
+html[data-battery-saver="true"] .sx-pill-glide,
+html[data-battery-saver="true"] .sx-shelf-item,
+html[data-battery-saver="true"] .sx-reveal,
+html[data-battery-saver="true"] .sx-player-drawer,
+html[data-battery-saver="true"] .sx-player-controls-fade,
+html[data-battery-saver="true"] .sx-player-play-btn,
+html[data-battery-saver="true"] .sx-fs-rotate-spring,
+html[data-battery-saver="true"] .sx-fs-bar-top,
+html[data-battery-saver="true"] .sx-fs-bar-bottom,
+html[data-battery-saver="true"] .sx-fs-center-cluster,
+html[data-battery-saver="true"] .sx-details-poster-hover,
+html[data-battery-saver="true"] .sx-sticky-header,
+html[data-battery-saver="true"] .sx-results-grid-state,
+html[data-battery-saver="true"] .sx-pull-content-spring,
+html[data-battery-saver="true"] .sx-pull-pill-spring,
+html[data-battery-saver="true"] .sx-reaction-btn {
+  transition: none !important;
+}
+
+html[data-battery-saver="true"] .sx-shelf-item[data-inview="false"],
+html[data-battery-saver="true"] .sx-reveal[data-revealed="false"] {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+html[data-battery-saver="true"] .sx-card-spring:hover,
+html[data-battery-saver="true"] .sx-card-spring:active,
+html[data-battery-saver="true"] .sx-reaction-btn:hover,
+html[data-battery-saver="true"] .sx-reaction-btn:active,
+html[data-battery-saver="true"] .sx-player-play-btn:hover,
+html[data-battery-saver="true"] .sx-player-play-btn:active,
+html[data-battery-saver="true"] button:not([role="switch"]):not([data-no-press]):active:not(:disabled) {
+  transform: none !important;
+}
+

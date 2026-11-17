@@ -69,7 +69,7 @@ export default defineConfig({
         clientsClaim: true,
         skipWaiting: true,
         navigateFallback: 'index.html',
-        navigateFallbackDenylist: [/^\/api\//, /^\/ws\//],
+        navigateFallbackDenylist: [/^\/api\//, /^\/ws\//, /^\/auth\//],
         globPatterns: [
           '**/*.{js,css,html,ico,svg,woff,woff2}',
           'apple-touch-icon.png',

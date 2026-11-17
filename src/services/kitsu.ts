@@ -1,15 +1,16 @@
-import { MediaType, TrackerCategory, UnifiedMedia } from '../types/media';
+import { MediaType, TrackerCategory, UnifiedEpisode, UnifiedMedia } from '../types/media';
 
 const KITSU_BASE = 'https://kitsu.io/api/edge';
 const cache = new Map<string, { expires: number; data: unknown }>();
 
-async function kitsuGet<T>(path: string, ttlMin = 15): Promise<T> {
+async function kitsuGet<T>(path: string, ttlMin = 15, bypassCache = false): Promise<T> {
   const now = Date.now();
-  const hit = cache.get(path);
+  const hit = !bypassCache ? cache.get(path) : undefined;
   if (hit && hit.expires > now) return hit.data as T;
 
   const res = await fetch(`${KITSU_BASE}${path}`, {
     headers: { Accept: 'application/vnd.api+json' },
+    signal: AbortSignal.timeout(7500),
   });
   if (!res.ok) throw new Error(`Kitsu API ${res.status}: ${res.statusText}`);
   const json = await res.json();
@@ -88,4 +89,52 @@ export async function fetchKitsuDetails(id: string, type: MediaType): Promise<Un
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const json = await kitsuGet<any>(`/${endpoint}/${id}`, 30);
   return mapKitsuMedia(json.data, type);
+}
+
+export async function fetchKitsuEpisodes(
+  kitsuId: string,
+  bypassCache = false,
+): Promise<UnifiedEpisode[]> {
+  const episodes: UnifiedEpisode[] = [];
+  const seen = new Set<number>();
+
+  for (let page = 0; page < 5; page++) {
+    const offset = page * 20;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const json = await kitsuGet<any>(
+      `/anime/${encodeURIComponent(kitsuId)}/episodes?page[limit]=20&page[offset]=${offset}&sort=number`,
+      30,
+      bypassCache,
+    );
+    const list = Array.isArray(json.data) ? json.data : [];
+    if (list.length === 0) break;
+
+    for (const item of list) {
+      const attrs = item.attributes || {};
+      const num = Number(attrs.number);
+      if (!Number.isFinite(num) || num <= 0 || seen.has(num)) continue;
+      seen.add(num);
+      const epTitle =
+        attrs.canonicalTitle?.trim() ||
+        attrs.titles?.en_us?.trim() ||
+        attrs.titles?.en?.trim() ||
+        attrs.titles?.en_jp?.trim() ||
+        `Episode ${num}`;
+      episodes.push({
+        id: `kitsu-ep-${kitsuId}-${num}`,
+        number: num,
+        title: epTitle,
+        description:
+          typeof attrs.synopsis === 'string' && attrs.synopsis.trim() ? attrs.synopsis.trim() : null,
+        thumbnail: attrs.thumbnail?.original || null,
+        airDate: attrs.airdate || null,
+        durationSeconds:
+          typeof attrs.length === 'number' && attrs.length > 0 ? attrs.length * 60 : undefined,
+      });
+    }
+
+    if (!json.links?.next) break;
+  }
+
+  return episodes.sort((a, b) => a.number - b.number);
 }

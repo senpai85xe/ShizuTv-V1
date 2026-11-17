@@ -124,7 +124,7 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
       data-testid="watch-party-ui"
       data-no-gesture="true"
       aria-label="Live Chat and Reactions"
-      className="relative w-full rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/78 dark:bg-[var(--sx-surface-container)]/76 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 text-[var(--sx-on-surface)] shadow-[0_20px_50px_rgba(15,23,42,0.12)] dark:shadow-[0_24px_60px_rgba(0,0,0,0.65)] overflow-hidden"
+      className="relative w-full rounded-[var(--sx-radius)] bg-white/32 dark:bg-white/[0.06] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/8 text-[var(--sx-on-surface)] shadow-[0_18px_46px_-14px_rgba(0,0,0,0.2)] overflow-hidden"
     >
       {/* Ambient live reaction preview ribbon at the top-right inside panel if no video overlay exists */}
       {showFloatingReactions && reactions.length > 0 && (
@@ -153,9 +153,9 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
       )}
 
       {/* Header Row */}
-      <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 sm:py-3 bg-[var(--sx-surface-high)]/38 dark:bg-white/[0.04] backdrop-blur-xl border-b border-[var(--sx-outline)] dark:border-white/12">
+      <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 sm:py-3 bg-white/22 dark:bg-white/[0.04] backdrop-blur-xl border-b border-white/35 dark:border-white/12">
         <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-          <span className="flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-full bg-[var(--sx-surface-high)]/75 dark:bg-white/10 backdrop-blur-md border border-white/40 dark:border-white/12 text-[var(--sx-primary)]">
+          <span className="flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-full bg-white/35 dark:bg-white/10 backdrop-blur-md border border-white/45 dark:border-white/14 text-[var(--sx-primary)]">
             <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
           </span>
           <div className="min-w-0">
@@ -212,7 +212,7 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
       {!collapsed && (
         <div className="p-3.5 sm:p-4 space-y-3">
           {showInviteStrip && (
-            <div className="rounded-2xl bg-[var(--sx-surface-high)]/62 dark:bg-white/[0.06] backdrop-blur-xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 px-3.5 py-2 flex items-center justify-between gap-2.5 shadow-sm">
+            <div className="rounded-2xl bg-white/26 dark:bg-white/[0.05] backdrop-blur-xl backdrop-saturate-150 border border-white/45 dark:border-white/14 ring-1 ring-inset ring-white/20 dark:ring-white/8 px-3.5 py-2 flex items-center justify-between gap-2.5 shadow-sm">
               <div className="min-w-0 flex items-baseline gap-2">
                 <span className="text-[11px] font-medium text-[var(--sx-on-surface-muted)]">
                   Room
@@ -230,7 +230,7 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
                   data-testid="watch-party-copy-code-btn"
                   onClick={() => void handleCopy('code')}
                   aria-label="Copy room code"
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--sx-surface-container)]/75 dark:bg-white/10 backdrop-blur-md border border-white/40 dark:border-white/15 text-[11px] font-bold text-[var(--sx-on-surface)] whitespace-nowrap"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/35 dark:bg-white/10 backdrop-blur-md border border-white/45 dark:border-white/14 text-[11px] font-bold text-[var(--sx-on-surface)] whitespace-nowrap"
                 >
                   {copiedTarget === 'code' ? (
                     <>
@@ -249,7 +249,7 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
                   data-testid="watch-party-copy-link-btn"
                   onClick={() => void handleCopy('link')}
                   aria-label="Copy invite link"
-                  className="min-h-[30px] min-w-[30px] rounded-full bg-[var(--sx-surface-container)]/75 dark:bg-white/10 backdrop-blur-md border border-white/40 dark:border-white/15 flex items-center justify-center text-[var(--sx-on-surface)]"
+                  className="min-h-[30px] min-w-[30px] rounded-full bg-white/35 dark:bg-white/10 backdrop-blur-md border border-white/45 dark:border-white/14 flex items-center justify-center text-[var(--sx-on-surface)]"
                 >
                   {copiedTarget === 'link' ? (
                     <Check className="w-3.5 h-3.5 text-emerald-500" />
@@ -264,14 +264,14 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
           {lastEventNotice && (
             <p
               data-testid="watch-party-event-notice"
-              className="px-3 py-1 rounded-full bg-[var(--sx-surface-high)]/55 dark:bg-white/[0.06] backdrop-blur-md border border-white/40 dark:border-white/10 ring-1 ring-inset ring-white/20 dark:ring-white/5 text-[11px] font-medium text-[var(--sx-on-surface-muted)] truncate"
+              className="px-3 py-1 rounded-full bg-white/24 dark:bg-white/[0.05] backdrop-blur-md border border-white/40 dark:border-white/10 ring-1 ring-inset ring-white/20 dark:ring-white/5 text-[11px] font-medium text-[var(--sx-on-surface-muted)] truncate"
             >
               {lastEventNotice}
             </p>
           )}
 
           {/* Sub-tabs: Comments/Chat vs Viewers */}
-          <div className="grid grid-cols-2 gap-1 p-1 rounded-full bg-[var(--sx-surface-high)]/62 dark:bg-white/[0.06] backdrop-blur-xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-sm">
+          <div className="grid grid-cols-2 gap-1 p-1 rounded-full bg-white/26 dark:bg-white/[0.05] backdrop-blur-xl backdrop-saturate-150 border border-white/45 dark:border-white/14 ring-1 ring-inset ring-white/20 dark:ring-white/8 shadow-sm">
             <button
               type="button"
               data-testid="watch-party-tab-chat"
@@ -308,7 +308,7 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
                 className="h-44 sm:h-56 overflow-y-auto space-y-1.5 pr-1 text-xs"
               >
                 {displayMessages.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-center py-6 px-4 rounded-2xl bg-[var(--sx-surface-high)]/38 dark:bg-white/[0.04] backdrop-blur-md border border-white/35 dark:border-white/10">
+                  <div className="h-full flex flex-col items-center justify-center text-center py-6 px-4 rounded-2xl bg-white/20 dark:bg-white/[0.04] backdrop-blur-md border border-white/40 dark:border-white/10">
                     <p className="text-xs font-semibold text-[var(--sx-on-surface-muted)]">
                       No comments yet — chat or send a reaction while watching live!
                     </p>
@@ -321,7 +321,7 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
                       <div
                         key={msg.id}
                         data-testid="watch-party-chat-item"
-                        className="flex items-start gap-2 leading-snug break-words rounded-2xl bg-[var(--sx-surface-high)]/48 dark:bg-white/[0.06] backdrop-blur-md border border-white/40 dark:border-white/10 ring-1 ring-inset ring-white/20 dark:ring-white/5 px-2.5 py-1.5"
+                        className="flex items-start gap-2 leading-snug break-words rounded-2xl bg-white/24 dark:bg-white/[0.05] backdrop-blur-md border border-white/40 dark:border-white/10 ring-1 ring-inset ring-white/20 dark:ring-white/5 px-2.5 py-1.5"
                       >
                         <span
                           aria-hidden="true"
@@ -359,7 +359,7 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
                 <div
                   data-testid="watch-party-reaction-bar"
                   aria-label="Floating emoji reaction bar"
-                  className="flex items-center justify-between gap-1 px-2 py-1.5 rounded-2xl bg-[var(--sx-surface-high)]/65 dark:bg-white/[0.08] backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-[0_10px_28px_rgba(15,23,42,0.08)] dark:shadow-[0_14px_34px_rgba(0,0,0,0.45)] overflow-x-auto no-scrollbar"
+                  className="flex items-center justify-between gap-1 px-2 py-1.5 rounded-2xl bg-white/32 dark:bg-white/[0.07] backdrop-blur-2xl backdrop-saturate-150 border border-white/48 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-[0_10px_28px_rgba(15,23,42,0.08)] dark:shadow-[0_14px_34px_rgba(0,0,0,0.4)] overflow-x-auto no-scrollbar"
                 >
                   {WATCH_PARTY_REACTIONS.map((emoji, idx) => (
                     <button
@@ -391,7 +391,7 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
                     maxLength={280}
                     onChange={(e) => setChatDraft(e.target.value)}
                     placeholder="Comment live..."
-                    className="flex-1 min-w-0 min-h-[42px] px-4 py-2 rounded-full bg-[var(--sx-surface-high)]/60 dark:bg-white/[0.08] backdrop-blur-xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/20 dark:ring-white/8 text-xs sm:text-sm text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] focus:bg-[var(--sx-surface-container)]/80 dark:focus:bg-white/[0.12] transition-colors"
+                    className="flex-1 min-w-0 min-h-[42px] px-4 py-2 rounded-full bg-white/28 dark:bg-white/[0.07] backdrop-blur-xl backdrop-saturate-150 border border-white/48 dark:border-white/14 ring-1 ring-inset ring-white/20 dark:ring-white/8 text-xs sm:text-sm text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] focus:bg-white/45 dark:focus:bg-white/[0.12] transition-colors"
                   />
                   <button
                     type="submit"
@@ -408,7 +408,7 @@ export const WatchPartyUI: React.FC<WatchPartyUIProps> = ({
           ) : (
             <ul
               data-testid="watch-party-participants-list"
-              className="max-h-56 overflow-y-auto divide-y divide-[var(--sx-outline)] dark:divide-white/10 rounded-2xl bg-[var(--sx-surface-high)]/45 dark:bg-white/[0.05] backdrop-blur-xl backdrop-saturate-150 border border-white/40 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/8 px-3 py-1"
+              className="max-h-56 overflow-y-auto divide-y divide-white/25 dark:divide-white/10 rounded-2xl bg-white/24 dark:bg-white/[0.05] backdrop-blur-xl backdrop-saturate-150 border border-white/45 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/8 px-3 py-1"
             >
               {room.participants.map((participant) => {
                 const isSelf = participant.id === currentParticipantId;

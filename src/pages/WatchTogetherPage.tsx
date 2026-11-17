@@ -33,6 +33,12 @@ import {
   CreateWatchRoomPayload,
 } from '../components/CreateWatchRoomModal';
 
+const watchGlassCardClass =
+  'bg-white/32 dark:bg-white/[0.06] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/8 shadow-[0_12px_32px_-12px_rgba(0,0,0,0.16)]';
+
+const watchGlassControlClass =
+  'bg-white/26 dark:bg-white/[0.06] backdrop-blur-2xl backdrop-saturate-150 border border-white/48 dark:border-white/14 ring-1 ring-inset ring-white/22 dark:ring-white/8 shadow-[0_8px_24px_-10px_rgba(0,0,0,0.14)]';
+
 export const WatchTogetherPage: React.FC = () => {
   const navigate = useNavigate();
   const { state } = useApp();
@@ -261,7 +267,7 @@ export const WatchTogetherPage: React.FC = () => {
       <li
         key={room.roomCode}
         data-testid="watch-together-room-card"
-        className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/80 backdrop-blur-2xl border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 p-3.5 sm:p-4 flex items-start justify-between gap-3.5 transition-colors hover:border-[var(--sx-primary)]/40"
+        className={`rounded-[var(--sx-radius)] ${watchGlassCardClass} p-3.5 sm:p-4 flex items-start justify-between gap-3.5 transition-colors hover:border-[var(--sx-primary)]/40`}
       >
         <div className="flex items-start gap-3.5 min-w-0 flex-1">
           <div className="w-16 h-24 sm:w-20 sm:h-28 rounded-xl overflow-hidden bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] shrink-0 flex items-center justify-center">
@@ -347,7 +353,7 @@ export const WatchTogetherPage: React.FC = () => {
       <li
         key={`${room.roomCode}-${room.endedAt}`}
         data-testid="watch-together-ended-card"
-        className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/80 backdrop-blur-2xl border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 p-3.5 sm:p-4 flex items-start gap-3.5"
+        className={`rounded-[var(--sx-radius)] ${watchGlassCardClass} p-3.5 sm:p-4 flex items-start gap-3.5`}
       >
         <div className="w-16 h-24 sm:w-20 sm:h-28 rounded-xl overflow-hidden bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] shrink-0 flex items-center justify-center">
           {thumb ? (
@@ -439,7 +445,7 @@ export const WatchTogetherPage: React.FC = () => {
           onClick={() => void fetchLobbyState(true)}
           aria-label="Refresh active rooms"
           title="Refresh active rooms"
-          className="w-11 h-11 rounded-full bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/40 flex items-center justify-center text-[var(--sx-on-surface)] transition-colors shrink-0"
+          className={`w-11 h-11 rounded-full ${watchGlassControlClass} hover:border-[var(--sx-primary)]/40 flex items-center justify-center text-[var(--sx-on-surface)] transition-colors shrink-0`}
         >
           <RotateCw className={`w-4 h-4 ${refreshSpinning ? 'animate-spin' : ''}`} />
         </button>
@@ -464,13 +470,13 @@ export const WatchTogetherPage: React.FC = () => {
               setJoinError(null);
             }}
             placeholder="Room code"
-            className="flex-1 min-w-0 min-h-[48px] px-5 py-3 rounded-full bg-[var(--sx-surface-container)]/85 backdrop-blur-xl border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 text-sm font-semibold text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
+            className={`flex-1 min-w-0 min-h-[48px] px-5 py-3 rounded-full ${watchGlassControlClass} text-sm font-semibold text-[var(--sx-on-surface)] placeholder:text-[var(--sx-on-surface-muted)] focus:outline-none focus:border-[var(--sx-primary)] transition-colors`}
           />
           <button
             type="submit"
             data-testid="watch-together-join-btn"
             disabled={!canJoinCode}
-            className="min-h-[48px] px-6 py-3 rounded-full bg-[var(--sx-surface-container)]/85 backdrop-blur-xl border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 hover:border-[var(--sx-primary)] text-sm font-bold text-[var(--sx-on-surface)] disabled:opacity-50 whitespace-nowrap shrink-0 transition-colors"
+            className={`min-h-[48px] px-6 py-3 rounded-full ${watchGlassControlClass} hover:border-[var(--sx-primary)] text-sm font-bold text-[var(--sx-on-surface)] disabled:opacity-50 whitespace-nowrap shrink-0 transition-colors`}
           >
             {joining ? 'Joining...' : 'Join'}
           </button>
@@ -511,7 +517,7 @@ export const WatchTogetherPage: React.FC = () => {
           className={`min-h-[40px] px-4 py-2 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap inline-flex items-center gap-2 border transition-colors ${
             activeTab === 'live'
               ? 'bg-[var(--sx-primary)] border-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
-              : 'bg-[var(--sx-surface-container)]/75 backdrop-blur-md border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+              : `${watchGlassControlClass} text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]`
           }`}
         >
           <span>Live now</span>
@@ -532,7 +538,7 @@ export const WatchTogetherPage: React.FC = () => {
           className={`min-h-[40px] px-4 py-2 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap inline-flex items-center gap-2 border transition-colors ${
             activeTab === 'ended'
               ? 'bg-[var(--sx-primary)] border-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
-              : 'bg-[var(--sx-surface-container)]/75 backdrop-blur-md border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+              : `${watchGlassControlClass} text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]`
           }`}
         >
           <span>Ended</span>
@@ -550,7 +556,7 @@ export const WatchTogetherPage: React.FC = () => {
           className={`min-h-[40px] px-4 py-2 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap inline-flex items-center gap-2 border transition-colors ${
             activeTab === 'my'
               ? 'bg-[var(--sx-primary)] border-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
-              : 'bg-[var(--sx-surface-container)]/75 backdrop-blur-md border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+              : `${watchGlassControlClass} text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]`
           }`}
         >
           <span>My rooms</span>
@@ -562,14 +568,14 @@ export const WatchTogetherPage: React.FC = () => {
         {loadingRooms &&
         publicRooms.length === 0 &&
         endedRooms.length === 0 ? (
-          <div className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)] py-12 text-center text-xs font-semibold text-[var(--sx-on-surface-muted)]">
+          <div className={`rounded-[var(--sx-radius)] ${watchGlassCardClass} py-12 text-center text-xs font-semibold text-[var(--sx-on-surface-muted)]`}>
             Loading watch rooms...
           </div>
         ) : activeTab === 'live' ? (
           publicRooms.length === 0 ? (
             <div
               data-testid="watch-together-empty-rooms"
-              className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)] py-12 px-4 text-center space-y-2.5"
+              className={`rounded-[var(--sx-radius)] ${watchGlassCardClass} py-12 px-4 text-center space-y-2.5`}
             >
               <MonitorOff
                 aria-hidden="true"
@@ -594,7 +600,7 @@ export const WatchTogetherPage: React.FC = () => {
           endedRooms.length === 0 ? (
             <div
               data-testid="watch-together-empty-ended"
-              className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)] py-12 px-4 text-center space-y-2.5"
+              className={`rounded-[var(--sx-radius)] ${watchGlassCardClass} py-12 px-4 text-center space-y-2.5`}
             >
               <Clock
                 aria-hidden="true"
@@ -618,7 +624,7 @@ export const WatchTogetherPage: React.FC = () => {
         ) : myLiveRooms.length === 0 && myEndedRooms.length === 0 ? (
           <div
             data-testid="watch-together-empty-my"
-            className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)] py-12 px-4 text-center space-y-2.5"
+            className={`rounded-[var(--sx-radius)] ${watchGlassCardClass} py-12 px-4 text-center space-y-2.5`}
           >
             <Users
               aria-hidden="true"

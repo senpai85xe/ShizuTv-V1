@@ -59,7 +59,7 @@ import {
   HlsQualityOption,
   PLAYBACK_SPEED_OPTIONS,
   resolveAudioLanguageOption,
-  resolvePreferredHlsLevel,
+  resolveBatterySaverHlsLevel,
   shouldAutoStartPlayback,
   shouldHideBarsForOverlay,
   shouldShowFullscreenControls,
@@ -140,6 +140,7 @@ interface InlineAnimePlayerProps {
   episodes: UnifiedEpisode[];
   episodeIndex: number;
   sourceId?: string;
+  sourceName?: string;
   playSignal?: number;
   initialTime?: number | null;
   initialResumePlaying?: boolean;
@@ -154,6 +155,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   episodes,
   episodeIndex,
   sourceId,
+  sourceName,
   playSignal = 0,
   initialTime = null,
   initialResumePlaying = false,
@@ -181,7 +183,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     [safeIndex, episodes.length],
   );
 
-  const servers = useMemo(() => resolveVideoServers(sourceId), [sourceId]);
+  const servers = useMemo(
+    () => resolveVideoServers(sourceId, sourceName),
+    [sourceId, sourceName],
+  );
   const [selectedServer, setSelectedServer] = useState<VideoServer>(servers[0]);
 
   useEffect(() => {
@@ -221,6 +226,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const lastAppliedSyncSeqRef = useRef<number>(0);
 
   const ambientEnabled = state.playerPrefs.ambientGlow;
+  const effectiveAmbientEnabled = ambientEnabled && !state.playerPrefs.batterySaver;
   const activeAudioLangOption = resolveAudioLanguageOption(state.playerPrefs.audioLanguage);
   const [playing, setPlaying] = useState(false);
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
@@ -504,9 +510,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
         if (!hls || cancelled) return;
         const options = buildHlsQualityOptions(hls.levels);
         setHlsQualityOptions(options);
-        const preferredLevel = resolvePreferredHlsLevel(
+        const preferredLevel = resolveBatterySaverHlsLevel(
           hls.levels,
           state.playerPrefs.defaultQuality,
+          state.playerPrefs.batterySaver,
         );
         hls.currentLevel = preferredLevel;
         setSelectedHlsLevel(preferredLevel);
@@ -587,9 +594,24 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     fetchAniSkipIntervals(media.idMal, currentEpisode.number).then(setSkipIntervals);
   }, [media.idMal, currentEpisode.number]);
 
-  // Subtle ambient background glow sampled from active playing frames (paused in fullscreen to prevent lag)
+  // Dynamically apply Battery Saver 480p stream cap or preferred quality changes on active HLS streams
   useEffect(() => {
-    if (!ambientEnabled || !playing || isFullscreen) return;
+    const hls = hlsRef.current;
+    if (!hls || !hls.levels || hls.levels.length === 0) return;
+    const nextLevel = resolveBatterySaverHlsLevel(
+      hls.levels,
+      state.playerPrefs.defaultQuality,
+      state.playerPrefs.batterySaver,
+    );
+    if (hls.currentLevel !== nextLevel) {
+      hls.currentLevel = nextLevel;
+    }
+    setSelectedHlsLevel(nextLevel);
+  }, [state.playerPrefs.batterySaver, state.playerPrefs.defaultQuality]);
+
+  // Subtle ambient background glow sampled from active playing frames (paused in fullscreen or Battery Saver)
+  useEffect(() => {
+    if (!effectiveAmbientEnabled || !playing || isFullscreen) return;
     let rafId = 0;
     let lastSample = 0;
 
@@ -614,7 +636,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
 
     rafId = window.requestAnimationFrame(sampleAmbient);
     return () => window.cancelAnimationFrame(rafId);
-  }, [ambientEnabled, playing, isFullscreen]);
+  }, [effectiveAmbientEnabled, playing, isFullscreen]);
 
   // Record Watch History & advance progress when playing an episode
   useEffect(() => {
@@ -1337,11 +1359,16 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   };
 
   const handleSelectHlsLevel = (levelIndex: number, qualityPref?: VideoQualityPref) => {
-    if (hlsRef.current) {
-      hlsRef.current.currentLevel = levelIndex;
+    const hls = hlsRef.current;
+    const effectiveLevel =
+      state.playerPrefs.batterySaver && hls?.levels?.length
+        ? resolveBatterySaverHlsLevel(hls.levels, qualityPref || state.playerPrefs.defaultQuality, true)
+        : levelIndex;
+    if (hls) {
+      hls.currentLevel = effectiveLevel;
     }
-    setSelectedHlsLevel(levelIndex);
-    if (qualityPref) {
+    setSelectedHlsLevel(effectiveLevel);
+    if (qualityPref && !state.playerPrefs.batterySaver) {
       updatePlayerPrefs({ defaultQuality: qualityPref });
     }
   };
@@ -1400,10 +1427,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           data-playing={playing ? 'true' : 'false'}
           aria-hidden="true"
           className={`pointer-events-none absolute -inset-4 sm:-inset-7 -z-10 transition-opacity duration-500 ${
-            ambientEnabled ? (playing ? 'opacity-80' : 'opacity-25') : 'opacity-0'
+            effectiveAmbientEnabled ? (playing ? 'opacity-80' : 'opacity-25') : 'opacity-0'
           }`}
         >
-          {backdropArtwork && ambientEnabled && (
+          {backdropArtwork && effectiveAmbientEnabled && (
             <img
               src={backdropArtwork}
               alt=""
@@ -1450,7 +1477,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           isFullscreen
             ? 'fixed inset-0 w-full h-full z-50 overflow-hidden'
             : `relative w-full aspect-video border border-white/25 dark:border-white/15 transition-shadow duration-300 ${
-                playing && ambientEnabled
+                playing && effectiveAmbientEnabled
                   ? 'shadow-[0_18px_52px_-12px_rgba(0,0,0,0.65),0_0_46px_-8px_color-mix(in srgb,var(--sx-primary)_45%,transparent)]'
                   : 'shadow-[0_14px_38px_rgba(15,23,42,0.28)]'
               }`
@@ -1762,7 +1789,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           )}
 
           {/* Floating Watch Party Animated Emojis across the screen (compositor spring motion) */}
-          {watchPartyMode?.showReactions !== false &&
+          {!state.playerPrefs.batterySaver &&
+            watchPartyMode?.showReactions !== false &&
             watchPartyMode?.reactions &&
             watchPartyMode.reactions.length > 0 && (
             <div

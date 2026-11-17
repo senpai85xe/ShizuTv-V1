@@ -6,6 +6,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
+import {
+  ANILIST_TOKEN_URL,
+  buildAniListAuthorizeUrl,
+  resolveAniListRedirectUri,
+} from './src/utils/anilistOAuth';
+import {
+  isSafeExternalHttpUrl,
+  parseExtensionRepoManifest,
+} from './src/utils/extensionRepoParser';
+import type { ExtensionRepo, SourceInfo } from './src/types/media';
 
 type WatchPartyTrack = 'H-Sub' | 'Dub';
 
@@ -92,6 +102,98 @@ const roomExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const endedRooms: WatchPartyEndedRoomSummary[] = [];
 const socketMeta = new Map<WebSocket, ConnectionMeta>();
 
+const ANILIST_SESSION_COOKIE_NAME = 'shizutv_anilist_token';
+const OAUTH_STATE_TTL_MS = 10 * 60_000;
+const oauthPendingStates = new Map<
+  string,
+  { redirectUri: string; createdAt: number }
+>();
+
+function pruneExpiredOAuthStates() {
+  const cutoff = Date.now() - OAUTH_STATE_TTL_MS;
+  for (const [key, value] of oauthPendingStates.entries()) {
+    if (value.createdAt < cutoff) {
+      oauthPendingStates.delete(key);
+    }
+  }
+}
+
+function getAniListOAuthConfig() {
+  const clientId = (
+    process.env.ANILIST_CLIENT_ID ||
+    process.env.CLIENT_ID ||
+    process.env.VITE_ANILIST_CLIENT_ID ||
+    ''
+  ).trim();
+  const clientSecret = (
+    process.env.ANILIST_CLIENT_SECRET ||
+    process.env.CLIENT_SECRET ||
+    ''
+  ).trim();
+  return {
+    clientId,
+    clientSecret,
+    configured: clientId.length > 0,
+    hasSecret: clientSecret.length > 0,
+    flow: (clientSecret.length > 0 ? 'code' : 'token') as 'code' | 'token',
+  };
+}
+
+function parseCookieHeader(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (key) {
+      try {
+        out[key] = decodeURIComponent(val);
+      } catch {
+        out[key] = val;
+      }
+    }
+  }
+  return out;
+}
+
+function setAniListSessionCookie(
+  res: express.Response,
+  accessToken: string,
+  expiresInSeconds?: number | null,
+) {
+  const maxAgeMs =
+    typeof expiresInSeconds === 'number' &&
+    Number.isFinite(expiresInSeconds) &&
+    expiresInSeconds > 0
+      ? Math.min(expiresInSeconds, 365 * 24 * 60 * 60) * 1000
+      : 30 * 24 * 60 * 60 * 1000;
+  res.cookie(ANILIST_SESSION_COOKIE_NAME, accessToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'none',
+    path: '/',
+    maxAge: maxAgeMs,
+  });
+}
+
+function clearAniListSessionCookie(res: express.Response) {
+  res.clearCookie(ANILIST_SESSION_COOKIE_NAME, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'none',
+    path: '/',
+  });
+}
+
+function escapeHtmlScriptJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+}
+
 type CommunityCategory = 'announcements' | 'general' | 'feedback' | 'features' | 'help';
 type CommunityLabel = 'resolved' | 'planned' | 'duplicate' | 'bug';
 
@@ -124,6 +226,14 @@ interface StoredCommunityPost {
 }
 
 const COMMUNITY_STORE_PATH = path.join(os.tmpdir(), 'shizutv-community-posts-v1.json');
+
+const EXTRA_COMMUNITY_SEED_IDS = new Set([
+  'seed-seasonal',
+  'seed-softsubs',
+  'seed-feedback-sync',
+  'seed-general-recs',
+  'seed-help-anilist',
+]);
 
 function createSeedCommunityPosts(): StoredCommunityPost[] {
   const now = Date.now();
@@ -159,116 +269,6 @@ function createSeedCommunityPosts(): StoredCommunityPost[] {
       views: 192,
       createdAt: now - 3 * 86_400_000,
     },
-    {
-      id: 'seed-seasonal',
-      clientId: 'seed-rio',
-      category: 'features',
-      title: 'Feature Suggestion: Top Seasonal Anime Showcase',
-      body: 'Similar to the Trending row, adding a dedicated Top Seasonal Anime showcase with quick Watch Party buttons would make weekend bingeing effortless.',
-      authorName: 'Rio',
-      pinned: false,
-      label: 'resolved',
-      linkedAnime: [{ id: 21, title: 'One Piece' }],
-      baseScore: 12,
-      votes: {},
-      comments: [
-        {
-          id: 'seed-c3',
-          authorName: 'ShizuTv',
-          authorIsMod: true,
-          body: 'Marked Resolved — seasonal filters and Watch Party quick drawers are live now!',
-          createdAt: now - 10 * 3600_000,
-        },
-      ],
-      views: 78,
-      createdAt: now - 16 * 3600_000,
-    },
-    {
-      id: 'seed-softsubs',
-      clientId: 'seed-apprehend',
-      category: 'features',
-      title: 'Multi-language soft-subs & custom font presets',
-      body: 'Awesome work on the inline player gestures! Would love extra **soft-sub styling** presets and quick audio/subtitle switches right from fullscreen.',
-      authorName: 'Apprehend',
-      pinned: false,
-      label: 'planned',
-      linkedAnime: [],
-      baseScore: 9,
-      votes: {},
-      comments: [
-        {
-          id: 'seed-c4',
-          authorName: 'Mina',
-          body: 'Fullscreen audio switcher already landed, waiting on font presets next!',
-          createdAt: now - 12 * 3600_000,
-        },
-      ],
-      views: 63,
-      createdAt: now - 21 * 3600_000,
-    },
-    {
-      id: 'seed-feedback-sync',
-      clientId: 'seed-midnight',
-      category: 'feedback',
-      title: 'Mobile Watch Together room layout & chat polish',
-      body: 'Tested a Watch Party on mobile portrait — the frosted glass chat overlay feels super smooth now. Would be nice to auto-remember preferred **H-Sub** or **Dub** track.',
-      authorName: 'Midnight',
-      pinned: false,
-      label: 'resolved',
-      linkedAnime: [{ id: 16498, title: 'Attack on Titan' }],
-      baseScore: 7,
-      votes: {},
-      comments: [],
-      views: 54,
-      createdAt: now - 28 * 3600_000,
-    },
-    {
-      id: 'seed-general-recs',
-      clientId: 'seed-void',
-      category: 'general',
-      title: 'Anime suggestions & testing out the new Community tab!',
-      body: 'I finished catching up on weekend episodes and need peak action/mystery recs.\n> Bonus points if there are no major ||ending spoilers|| in the replies!',
-      authorName: 'TheVOID',
-      pinned: false,
-      label: null,
-      linkedAnime: [{ id: 1535, title: 'Death Note' }],
-      baseScore: 5,
-      votes: {},
-      comments: [
-        {
-          id: 'seed-c5',
-          authorName: 'Kuro',
-          body: 'Try **Monster** or **Steins;Gate** if you loved Death Note.',
-          createdAt: now - 18 * 3600_000,
-        },
-      ],
-      views: 94,
-      createdAt: now - 2 * 86_400_000,
-    },
-    {
-      id: 'seed-help-anilist',
-      clientId: 'seed-brian',
-      category: 'help',
-      title: 'How to sync AniList watchlist progress automatically?',
-      body: 'Just started using ShizuTv — how do I make episode progress update on AniList automatically after watching?',
-      authorName: 'Brian',
-      pinned: false,
-      label: 'resolved',
-      linkedAnime: [],
-      baseScore: 4,
-      votes: {},
-      comments: [
-        {
-          id: 'seed-c6',
-          authorName: 'ShizuTv',
-          authorIsMod: true,
-          body: 'Head to **Settings → Tracking & Accounts** to link AniList, then progress syncs automatically from the inline player!',
-          createdAt: now - 20 * 3600_000,
-        },
-      ],
-      views: 42,
-      createdAt: now - 30 * 3600_000,
-    },
   ];
 }
 
@@ -278,7 +278,23 @@ function loadCommunityPosts(): StoredCommunityPost[] {
       const raw = fs.readFileSync(COMMUNITY_STORE_PATH, 'utf8');
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed as StoredCommunityPost[];
+        const cleaned = (parsed as StoredCommunityPost[]).filter(
+          (post) => !EXTRA_COMMUNITY_SEED_IDS.has(post.id),
+        );
+        if (cleaned.length !== parsed.length) {
+          try {
+            fs.writeFileSync(
+              COMMUNITY_STORE_PATH,
+              JSON.stringify(cleaned.length > 0 ? cleaned : createSeedCommunityPosts()),
+              'utf8',
+            );
+          } catch {
+            // Ignore write failure in ephemeral containers
+          }
+        }
+        if (cleaned.length > 0) {
+          return cleaned;
+        }
       }
     }
   } catch {
@@ -555,6 +571,410 @@ async function startServer() {
   const app = express();
   app.use(express.json());
 
+  const resolveServerRedirectUri = (queryOrigin?: string) => {
+    if (queryOrigin) {
+      try {
+        const parsed = new URL(queryOrigin);
+        if (parsed.protocol === 'https:' && parsed.hostname.endsWith('.run.app')) {
+          return `${parsed.origin}/auth/callback`;
+        }
+      } catch {
+        // Ignore invalid origin query string
+      }
+    }
+    return resolveAniListRedirectUri(
+      process.env.APP_URL,
+      queryOrigin || `http://localhost:${PORT}`,
+    );
+  };
+
+  app.get('/api/auth/anilist/status', (req, res) => {
+    const config = getAniListOAuthConfig();
+    const queryOrigin = typeof req.query.origin === 'string' ? req.query.origin : undefined;
+    const redirectUri = resolveServerRedirectUri(queryOrigin);
+    const cookies = parseCookieHeader(req.headers.cookie);
+    res.json({
+      configured: config.configured,
+      hasSecret: config.hasSecret,
+      clientId: config.clientId || null,
+      flow: config.flow,
+      redirectUri,
+      authenticated: Boolean(cookies[ANILIST_SESSION_COOKIE_NAME]),
+    });
+  });
+
+  app.get('/api/auth/anilist/url', (req, res) => {
+    const config = getAniListOAuthConfig();
+    const queryOrigin = typeof req.query.origin === 'string' ? req.query.origin : undefined;
+    const redirectUri = resolveServerRedirectUri(queryOrigin);
+
+    if (!config.configured) {
+      res.status(200).json({
+        configured: false,
+        url: null,
+        redirectUri,
+        message:
+          'AniList OAuth Client ID is missing. Configure ANILIST_CLIENT_ID and ANILIST_CLIENT_SECRET in AI Studio environment variables.',
+      });
+      return;
+    }
+
+    pruneExpiredOAuthStates();
+    const state = crypto.randomBytes(16).toString('hex');
+    oauthPendingStates.set(state, {
+      redirectUri,
+      createdAt: Date.now(),
+    });
+
+    const url = buildAniListAuthorizeUrl({
+      clientId: config.clientId,
+      redirectUri,
+      state,
+      responseType: config.flow,
+    });
+
+    res.json({
+      url,
+      state,
+      redirectUri,
+      configured: true,
+      flow: config.flow,
+    });
+  });
+
+  app.post('/api/auth/anilist/exchange-code', async (req, res) => {
+    const bodyObj = (req.body ?? {}) as Record<string, unknown>;
+    const code = typeof bodyObj.code === 'string' ? bodyObj.code.trim() : '';
+    const requestedRedirectUri =
+      typeof bodyObj.redirectUri === 'string' ? bodyObj.redirectUri.trim() : '';
+    const requestOrigin = typeof bodyObj.origin === 'string' ? bodyObj.origin.trim() : undefined;
+
+    if (!code) {
+      res.status(400).json({ message: 'Authorization code is required.' });
+      return;
+    }
+
+    const config = getAniListOAuthConfig();
+    if (!config.configured || !config.hasSecret) {
+      res.status(400).json({
+        message:
+          'Server OAuth credentials (ANILIST_CLIENT_ID / ANILIST_CLIENT_SECRET) are not configured.',
+      });
+      return;
+    }
+
+    const redirectUri = requestedRedirectUri || resolveServerRedirectUri(requestOrigin);
+
+    try {
+      const tokenResp = await fetch(ANILIST_TOKEN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          redirect_uri: redirectUri,
+          code,
+        }),
+      });
+
+      const tokenJson = (await tokenResp.json().catch(() => ({}))) as {
+        access_token?: string;
+        expires_in?: number;
+        error?: string;
+        message?: string;
+      };
+
+      if (!tokenResp.ok || !tokenJson.access_token) {
+        res.status(400).json({
+          message:
+            tokenJson.message ||
+            tokenJson.error ||
+            'Failed to exchange authorization code. Codes expire quickly—please authorize again.',
+        });
+        return;
+      }
+
+      const expiresIn =
+        typeof tokenJson.expires_in === 'number' && Number.isFinite(tokenJson.expires_in)
+          ? tokenJson.expires_in
+          : null;
+      setAniListSessionCookie(res, tokenJson.access_token, expiresIn);
+      res.json({ accessToken: tokenJson.access_token, expiresIn });
+    } catch (err) {
+      res.status(502).json({
+        message: err instanceof Error ? err.message : 'Network error exchanging AniList code.',
+      });
+    }
+  });
+
+  app.get('/api/auth/anilist/session', (req, res) => {
+    const cookies = parseCookieHeader(req.headers.cookie);
+    const accessToken = cookies[ANILIST_SESSION_COOKIE_NAME];
+    if (!accessToken) {
+      res.status(200).json({ authenticated: false, accessToken: null });
+      return;
+    }
+    res.json({ authenticated: true, accessToken, expiresIn: null });
+  });
+
+  app.post('/api/auth/anilist/session', (req, res) => {
+    const bodyObj = (req.body ?? {}) as Record<string, unknown>;
+    const accessToken =
+      typeof bodyObj.accessToken === 'string' ? bodyObj.accessToken.trim() : '';
+    if (!accessToken) {
+      res.status(400).json({ message: 'accessToken is required' });
+      return;
+    }
+    const expiresIn =
+      typeof bodyObj.expiresIn === 'number' && Number.isFinite(bodyObj.expiresIn)
+        ? bodyObj.expiresIn
+        : null;
+    setAniListSessionCookie(res, accessToken, expiresIn);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/auth/anilist/logout', (_req, res) => {
+    clearAniListSessionCookie(res);
+    res.json({ ok: true });
+  });
+
+  const handleAniListOAuthCallback: express.RequestHandler = async (req, res) => {
+    const error = typeof req.query.error === 'string' ? req.query.error : '';
+    const errorDescription =
+      typeof req.query.error_description === 'string' ? req.query.error_description : '';
+    const code = typeof req.query.code === 'string' ? req.query.code.trim() : '';
+    const state = typeof req.query.state === 'string' ? req.query.state.trim() : '';
+
+    if (error) {
+      const payload = {
+        type: 'ANILIST_OAUTH_ERROR',
+        error,
+        errorDescription: errorDescription || 'AniList authorization was cancelled or denied.',
+        state: state || null,
+      };
+      res.status(200).type('html').send(`<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>AniList Login</title></head>
+  <body style="font-family:system-ui,sans-serif;background:#0b0c12;color:#f5f5f7;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;">
+    <div>
+      <p style="font-weight:700;margin-bottom:8px;">AniList Authorization Cancelled</p>
+      <p style="opacity:.72;font-size:14px;">You can close this window and return to ShizuTv.</p>
+    </div>
+    <script>
+      (function () {
+        var payload = ${escapeHtmlScriptJson(payload)};
+        if (window.opener) {
+          window.opener.postMessage(payload, '*');
+          window.close();
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+      return;
+    }
+
+    if (code) {
+      pruneExpiredOAuthStates();
+      const pending = state ? oauthPendingStates.get(state) : undefined;
+      if (state) {
+        oauthPendingStates.delete(state);
+      }
+
+      const config = getAniListOAuthConfig();
+      const redirectUri =
+        pending?.redirectUri ||
+        resolveAniListRedirectUri(process.env.APP_URL, `http://localhost:${PORT}`);
+
+      if (!config.configured || !config.hasSecret) {
+        const payload = {
+          type: 'ANILIST_OAUTH_ERROR',
+          error: 'missing_client_secret',
+          errorDescription:
+            'Server is missing ANILIST_CLIENT_ID or ANILIST_CLIENT_SECRET to exchange the authorization code.',
+          state: state || null,
+        };
+        res.status(200).type('html').send(`<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>AniList Login</title></head>
+  <body style="font-family:system-ui,sans-serif;background:#0b0c12;color:#f5f5f7;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;">
+    <p>Server OAuth credentials are not configured.</p>
+    <script>
+      (function () {
+        var payload = ${escapeHtmlScriptJson(payload)};
+        if (window.opener) {
+          window.opener.postMessage(payload, '*');
+          window.close();
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+        return;
+      }
+
+      try {
+        const tokenResp = await fetch(ANILIST_TOKEN_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            grant_type: 'authorization_code',
+            client_id: config.clientId,
+            client_secret: config.clientSecret,
+            redirect_uri: redirectUri,
+            code,
+          }),
+        });
+
+        const tokenJson = (await tokenResp.json().catch(() => ({}))) as {
+          access_token?: string;
+          expires_in?: number;
+          error?: string;
+          message?: string;
+        };
+
+        if (!tokenResp.ok || !tokenJson.access_token) {
+          const errPayload = {
+            type: 'ANILIST_OAUTH_ERROR',
+            error: tokenJson.error || 'token_exchange_failed',
+            errorDescription:
+              tokenJson.message || 'Failed to exchange AniList authorization code for token.',
+            state: state || null,
+          };
+          res.status(200).type('html').send(`<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>AniList Login</title></head>
+  <body style="font-family:system-ui,sans-serif;background:#0b0c12;color:#f5f5f7;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;">
+    <p>AniList token exchange failed. You can close this window.</p>
+    <script>
+      (function () {
+        var payload = ${escapeHtmlScriptJson(errPayload)};
+        if (window.opener) {
+          window.opener.postMessage(payload, '*');
+          window.close();
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+          return;
+        }
+
+        const expiresIn =
+          typeof tokenJson.expires_in === 'number' && Number.isFinite(tokenJson.expires_in)
+            ? tokenJson.expires_in
+            : null;
+        setAniListSessionCookie(res, tokenJson.access_token, expiresIn);
+
+        const successPayload = {
+          type: 'ANILIST_OAUTH_SUCCESS',
+          accessToken: tokenJson.access_token,
+          expiresIn,
+          state: state || null,
+        };
+
+        res.status(200).type('html').send(`<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>AniList Connected</title></head>
+  <body style="font-family:system-ui,sans-serif;background:#0b0c12;color:#f5f5f7;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;">
+    <div>
+      <p style="font-weight:700;margin-bottom:8px;">Authentication successful</p>
+      <p style="opacity:.72;font-size:14px;">This window should close automatically.</p>
+    </div>
+    <script>
+      (function () {
+        var payload = ${escapeHtmlScriptJson(successPayload)};
+        if (window.opener) {
+          window.opener.postMessage(payload, '*');
+          window.close();
+        } else {
+          window.location.href = '/settings';
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+        return;
+      } catch (err) {
+        const errPayload = {
+          type: 'ANILIST_OAUTH_ERROR',
+          error: 'network_error',
+          errorDescription: err instanceof Error ? err.message : 'AniList token exchange error.',
+          state: state || null,
+        };
+        res.status(200).type('html').send(`<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>AniList Login</title></head>
+  <body style="font-family:system-ui,sans-serif;background:#0b0c12;color:#f5f5f7;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;">
+    <p>Network error while connecting to AniList.</p>
+    <script>
+      (function () {
+        var payload = ${escapeHtmlScriptJson(errPayload)};
+        if (window.opener) {
+          window.opener.postMessage(payload, '*');
+          window.close();
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+        return;
+      }
+    }
+
+    // Support implicit-grant hash fragment callbacks (#access_token=...) if client secret is omitted
+    res.status(200).type('html').send(`<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>AniList Login</title></head>
+  <body style="font-family:system-ui,sans-serif;background:#0b0c12;color:#f5f5f7;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;">
+    <div>
+      <p style="font-weight:700;margin-bottom:8px;">Completing AniList Login...</p>
+      <p style="opacity:.72;font-size:14px;">This window should close automatically.</p>
+    </div>
+    <script>
+      (function () {
+        var hash = window.location.hash ? window.location.hash.slice(1) : '';
+        var params = new URLSearchParams(hash);
+        var token = params.get('access_token');
+        var expiresRaw = params.get('expires_in');
+        var expiresIn = expiresRaw ? Number(expiresRaw) : null;
+        var hashState = params.get('state');
+        var hashError = params.get('error');
+        var hashErrDesc = params.get('error_description');
+        var payload = token
+          ? {
+              type: 'ANILIST_OAUTH_SUCCESS',
+              accessToken: token,
+              expiresIn: Number.isFinite(expiresIn) ? expiresIn : null,
+              state: hashState || ${escapeHtmlScriptJson(state || null)},
+            }
+          : {
+              type: 'ANILIST_OAUTH_ERROR',
+              error: hashError || 'missing_token',
+              errorDescription: hashErrDesc || 'No AniList authorization token was returned.',
+              state: hashState || ${escapeHtmlScriptJson(state || null)},
+            };
+        if (window.opener) {
+          window.opener.postMessage(payload, '*');
+          window.close();
+        } else {
+          window.location.href = '/settings';
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+  };
+
+  app.get(['/auth/callback', '/auth/callback/'], handleAniListOAuthCallback);
+
   app.get('/api/watch-party/rooms', (_req, res) => {
     res.json({
       rooms: getPublicRoomsList(),
@@ -720,6 +1140,130 @@ async function startServer() {
     communityPosts.splice(idx, 1);
     persistCommunityPosts();
     res.json({ deleted: true });
+  });
+
+  app.post('/api/extensions/fetch-repo', async (req, res) => {
+    const bodyObj = (req.body ?? {}) as Record<string, unknown>;
+    const rawUrl = typeof bodyObj.url === 'string' ? bodyObj.url.trim() : '';
+    const managerRaw = typeof bodyObj.manager === 'string' ? bodyObj.manager.trim() : undefined;
+    const manager = (
+      managerRaw === 'aniyomi' ||
+      managerRaw === 'mangayomi' ||
+      managerRaw === 'cloudstream' ||
+      managerRaw === 'shonenx'
+        ? managerRaw
+        : undefined
+    ) as ExtensionRepo['manager'] | undefined;
+    const fallbackName =
+      typeof bodyObj.name === 'string' && bodyObj.name.trim()
+        ? bodyObj.name.trim().slice(0, 80)
+        : undefined;
+
+    if (!isSafeExternalHttpUrl(rawUrl)) {
+      res.status(400).json({
+        message: 'Invalid repository URL. Only public http/https manifest URLs are allowed.',
+      });
+      return;
+    }
+
+    try {
+      const upstream = await fetch(rawUrl, {
+        headers: {
+          Accept: 'application/json, text/plain, */*',
+          'User-Agent': 'ShizuTv-Web/2.1.5',
+        },
+        signal: AbortSignal.timeout(8500),
+      });
+
+      if (!upstream.ok) {
+        res.status(502).json({
+          message: `Repository returned HTTP ${upstream.status} ${upstream.statusText || ''}`.trim(),
+        });
+        return;
+      }
+
+      const rawText = await upstream.text();
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(rawText);
+      } catch {
+        res.status(422).json({
+          message:
+            'URL does not return a JSON extension manifest (expected Aniyomi index.min.json, Mangayomi index.json, or CloudStream repo.json).',
+        });
+        return;
+      }
+
+      const parsed = parseExtensionRepoManifest(parsedJson, {
+        repoUrl: rawUrl,
+        manager,
+        fallbackName,
+      });
+
+      const collectedSources: SourceInfo[] = [...parsed.sources];
+      const seenIds = new Set(collectedSources.map((s) => s.id));
+
+      if (parsed.pluginListUrls.length > 0) {
+        const subResults = await Promise.allSettled(
+          parsed.pluginListUrls.slice(0, 4).map(async (pluginUrl) => {
+            if (!isSafeExternalHttpUrl(pluginUrl)) return [];
+            const subRes = await fetch(pluginUrl, {
+              headers: {
+                Accept: 'application/json, text/plain, */*',
+                'User-Agent': 'ShizuTv-Web/2.1.5',
+              },
+              signal: AbortSignal.timeout(8000),
+            });
+            if (!subRes.ok) return [];
+            const subJson = await subRes.json().catch(() => null);
+            if (!subJson) return [];
+            return parseExtensionRepoManifest(subJson, {
+              repoUrl: rawUrl,
+              manager: manager ?? 'cloudstream',
+              fallbackName: parsed.repoName || fallbackName,
+            }).sources;
+          }),
+        );
+
+        for (const outcome of subResults) {
+          if (outcome.status === 'fulfilled') {
+            for (const src of outcome.value) {
+              if (!seenIds.has(src.id)) {
+                seenIds.add(src.id);
+                collectedSources.push(src);
+              }
+            }
+          }
+        }
+      }
+
+      if (collectedSources.length === 0) {
+        res.status(422).json({
+          message: 'No extension sources found in this repository manifest.',
+        });
+        return;
+      }
+
+      let derivedHostname = 'Custom Repo';
+      try {
+        derivedHostname = new URL(rawUrl).hostname.replace(/^www\./, '');
+      } catch {
+        // Keep fallback hostname
+      }
+
+      res.json({
+        repoName: parsed.repoName || fallbackName || derivedHostname,
+        format: parsed.format,
+        sources: collectedSources,
+      });
+    } catch (err) {
+      res.status(502).json({
+        message:
+          err instanceof Error
+            ? `Failed to fetch repository manifest: ${err.message}`
+            : 'Network error fetching repository manifest.',
+      });
+    }
   });
 
   const server = http.createServer(app);

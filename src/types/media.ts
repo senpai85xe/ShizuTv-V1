@@ -88,6 +88,7 @@ export interface UnifiedMedia {
   relationType?: string | null;
   relations?: UnifiedMedia[];
   recommendations?: UnifiedMedia[];
+  streamingEpisodes?: MediaStreamingEpisode[];
 }
 
 export interface UnifiedEpisode {
@@ -99,6 +100,14 @@ export interface UnifiedEpisode {
   airDate?: string | null;
   isFiller?: boolean;
   durationSeconds?: number;
+  externalUrl?: string | null;
+}
+
+export interface MediaStreamingEpisode {
+  title: string;
+  thumbnail?: string | null;
+  url?: string | null;
+  site?: string | null;
 }
 
 export interface UnifiedChapter {
@@ -226,6 +235,8 @@ export interface SourceInfo {
   lang: string;
   version: string;
   repoUrl?: string;
+  baseUrl?: string;
+  pkg?: string;
   iconUrl?: string;
   description?: string;
   isNsfw?: boolean;

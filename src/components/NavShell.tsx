@@ -137,7 +137,7 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
   const roundness = `${Math.min(20, state.themePrefs.uiRoundness)}px`;
 
   const glassSurfaceClass =
-    'bg-[var(--sx-surface-container)]/58 dark:bg-[var(--sx-surface-container)]/50 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/8 shadow-[0_14px_38px_-10px_rgba(0,0,0,0.34)]';
+    'bg-white/38 dark:bg-white/[0.07] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/8 shadow-[0_14px_38px_-10px_rgba(0,0,0,0.28)]';
   const glassActiveBubbleClass =
     'bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 backdrop-blur-md border border-white/40 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/10 shadow-[0_4px_16px_-4px_rgba(0,0,0,0.18)]';
 
@@ -152,8 +152,8 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
         data-testid="online-hub-switcher"
         className={`fixed z-40 pointer-events-none sx-online-dock-enter ${
           tvLayout
-            ? 'bottom-5 left-1/2 -translate-x-1/2 px-3'
-            : `bottom-[calc(4.75rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 px-3 md:bottom-5 landscape:bottom-5 ${
+            ? 'bottom-6 left-1/2 -translate-x-1/2 px-3'
+            : `bottom-[calc(5.85rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 px-3 md:bottom-6 landscape:bottom-6 ${
                 isGlassPillStyle && isIconOnlyStyle
                   ? 'md:left-[calc(50%+37px)] landscape:left-[calc(50%+37px)]'
                   : 'md:left-[calc(50%+42px)] landscape:left-[calc(50%+42px)]'
@@ -263,12 +263,6 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
                 >
                   <span className="relative inline-flex items-center justify-center">
                     <Icon className="w-4 h-4" />
-                    {isOnline && (
-                      <span
-                        aria-hidden="true"
-                        className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-[var(--sx-surface)] animate-pulse"
-                      />
-                    )}
                   </span>
                   <span>{item.label}</span>
                   {item.badge ? (
@@ -437,12 +431,6 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
                       } shrink-0`}
                       strokeWidth={isGlassPill && active ? 2.3 : 1.9}
                     />
-                    {isOnline && (
-                      <span
-                        aria-hidden="true"
-                        className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-[var(--sx-surface-container)] animate-pulse"
-                      />
-                    )}
                   </span>
                   {!isIconOnly && (
                     <span
@@ -575,7 +563,7 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
       <main
         className={`flex-1 min-w-0 pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] ${
           showOnlineSwitcher
-            ? 'pb-40 md:pb-24 landscape:pb-24'
+            ? 'pb-44 md:pb-24 landscape:pb-24'
             : 'pb-24 md:pb-10 landscape:pb-10'
         } overflow-x-clip`}
       >
@@ -686,12 +674,6 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
                     }
                     strokeWidth={isGlassPill && active ? 2.3 : 1.9}
                   />
-                  {isOnline && (
-                    <span
-                      aria-hidden="true"
-                      className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-[var(--sx-surface-container)] animate-pulse"
-                    />
-                  )}
                 </span>
                 {showLabel && (
                   <span
