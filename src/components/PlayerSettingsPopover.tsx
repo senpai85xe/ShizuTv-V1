@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
   Check,
-  ExternalLink,
   Keyboard,
   ListVideo,
   PictureInPicture2,
@@ -23,7 +22,6 @@ import {
   VideoFitMode,
   VideoQualityPref,
 } from '../store/AppContext';
-import { VideoServer } from '../types/media';
 import {
   HlsQualityOption,
   parseSubtitleText,
@@ -47,13 +45,10 @@ interface PlayerSettingsPopoverProps {
   onChangeSpeed: (speed: number) => void;
   muted: boolean;
   onToggleMute: () => void;
-  // Quality & servers
+  // Quality
   hlsQualityOptions: HlsQualityOption[];
   selectedHlsLevel: number;
   onSelectHlsLevel: (levelIndex: number, qualityLabel?: VideoQualityPref) => void;
-  servers?: VideoServer[];
-  selectedServerId?: string;
-  onSelectServer?: (server: VideoServer) => void;
   // Subtitles & editor
   subtitleTracks: SubtitleTrackSummary[];
   activeSubLang: string;
@@ -68,7 +63,6 @@ interface PlayerSettingsPopoverProps {
   onToggleNativePip?: () => void;
   onOpenEpisodes?: () => void;
   episodeCount?: number;
-  onOpenFullPlayer?: () => void;
   onOpenShortcuts?: () => void;
   compact?: boolean;
 }
@@ -95,9 +89,6 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
   hlsQualityOptions,
   selectedHlsLevel,
   onSelectHlsLevel,
-  servers,
-  selectedServerId,
-  onSelectServer,
   subtitleTracks,
   activeSubLang,
   onChangeSubLang,
@@ -110,7 +101,6 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
   onToggleNativePip,
   onOpenEpisodes,
   episodeCount,
-  onOpenFullPlayer,
   onOpenShortcuts,
   compact = false,
 }) => {
@@ -430,20 +420,6 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                 </button>
               )}
             </div>
-
-            {onOpenFullPlayer && (
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onOpenFullPlayer();
-                }}
-                className="w-full py-2 px-3 rounded-xl bg-white/12 hover:bg-white/20 text-[11px] font-extrabold flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open Dedicated Player</span>
-              </button>
-            )}
           </div>
         )}
 
@@ -513,34 +489,6 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                     })}
               </div>
             </div>
-
-            {servers && servers.length > 0 && onSelectServer && (
-              <div>
-                <p className="text-[10px] font-extrabold uppercase tracking-wider text-white/55 mb-1.5">
-                  Stream Mirror
-                </p>
-                <div className="space-y-1">
-                  {servers.map((srv) => {
-                    const active = srv.id === selectedServerId;
-                    return (
-                      <button
-                        key={srv.id}
-                        type="button"
-                        onClick={() => onSelectServer(srv)}
-                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-bold transition-colors ${
-                          active
-                            ? 'bg-white text-zinc-950'
-                            : 'bg-white/8 text-white/90 hover:bg-white/15'
-                        }`}
-                      >
-                        <span className="truncate">{srv.name}</span>
-                        <span className="text-[9px] uppercase opacity-75">{srv.category}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </div>
         )}
 

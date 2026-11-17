@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, BookOpen, Tv } from 'lucide-react';
+import { AlertTriangle, ArrowDown, BookOpen, Check, RefreshCw, Tv } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import {
   HomeSection,
@@ -44,6 +44,8 @@ import {
 } from '../utils/homeModeTransition';
 import { shouldOpenProfileSheet } from '../utils/themeDefaults';
 import { useScrollPersistence } from '../hooks/useScrollPersistence';
+import { usePullToRefresh } from '../hooks/usePullToRefresh';
+import { computePullIndicatorScale } from '../utils/pullToRefresh';
 
 const HOME_MEDIA_MODE_KEY = 'shonenx_home_media_mode';
 
@@ -224,6 +226,66 @@ export const HomePage: React.FC = () => {
     setOutageTracker(null);
   }, [loadResetKey]);
 
+  const refreshHomeFeeds = useCallback(async () => {
+    homeFeedsCache.delete(loadResetKey);
+    triggeredKeysRef.current.clear();
+    const discoveryToRefresh = visibleSections.filter((s) => s.type === 'discovery');
+    const tasks = discoveryToRefresh.map((sec) => {
+      const fetchKey = getSectionFetchKey(
+        sec.id,
+        effectiveMetadataTracker,
+        state.contentPrefs.adultContentMode,
+      );
+      triggeredKeysRef.current.add(fetchKey);
+      return loadSection(sec);
+    });
+    if (tasks.length > 0) {
+      await Promise.allSettled(tasks);
+    } else {
+      try {
+        const res = await fetchDiscoveryCategory(
+          effectiveMetadataTracker,
+          'trending',
+          homeMediaMode,
+          state.contentPrefs.adultContentMode,
+          1,
+        );
+        setFallbackHeroFeed({ items: res.items, loading: false, error: null });
+      } catch (err) {
+        setFallbackHeroFeed({
+          items: [],
+          loading: false,
+          error: err instanceof Error ? err.message : 'Failed to refresh hero feed',
+        });
+      }
+    }
+    addLog('INFO', 'HomeRefresh', `Refreshed ${homeMediaMode} home sections`);
+  }, [
+    loadResetKey,
+    visibleSections,
+    effectiveMetadataTracker,
+    state.contentPrefs.adultContentMode,
+    loadSection,
+    homeMediaMode,
+    addLog,
+  ]);
+
+  const {
+    pullDistance,
+    phase: pullPhase,
+    progress: pullProgress,
+    isPulling,
+    isArmed: isPullArmed,
+    isRefreshing: isPullRefreshing,
+    hapticPulseCount,
+  } = usePullToRefresh({
+    onRefresh: refreshHomeFeeds,
+    disabled: isRestoringScroll || profileOpen || profileSheetOpen || discoveryModalOpen,
+  });
+
+  const pullIndicatorVisible = pullPhase !== 'idle';
+  const pullIndicatorScale = computePullIndicatorScale(pullProgress, isPullArmed);
+
   const anilistUserId = state.profiles.anilist?.id;
   useEffect(() => {
     if (
@@ -331,19 +393,10 @@ export const HomePage: React.FC = () => {
       });
       return;
     }
-    const epCount = Math.min(media.episodes || 12, 24);
-    const episodes = Array.from({ length: epCount }, (_, i) => ({
-      id: `${media.id}-ep-${i + 1}`,
-      number: i + 1,
-      title: `Episode ${i + 1}`,
-      thumbnail: media.banner || media.cover || null,
-      durationSeconds: (media.duration || 24) * 60,
-    }));
-    navigate('/player', {
+    navigate(`/details/${media.type.toLowerCase()}/${media.id}`, {
       state: {
         media,
-        episodes,
-        episodeIndex: 0,
+        initialTab: 'watch',
       },
     });
   };
@@ -562,8 +615,86 @@ export const HomePage: React.FC = () => {
     <div
       data-testid="home-page"
       data-restoring-scroll={isRestoringScroll ? 'true' : 'false'}
-      className="min-h-screen space-y-7 pb-10"
+      data-pull-phase={pullPhase}
+      className="relative min-h-screen"
     >
+      {/* iOS Spring Pull-to-Refresh Capsule Indicator */}
+      <div
+        aria-live="polite"
+        aria-hidden={!pullIndicatorVisible}
+        data-testid="home-pull-refresh-indicator"
+        data-refresh-phase={pullPhase}
+        data-haptic-pulses={hapticPulseCount}
+        style={{
+          transform: pullIndicatorVisible
+            ? `translate3d(-50%, ${Math.max(4, Math.min(26, pullDistance * 0.28))}px, 0) scale(${pullIndicatorScale})`
+            : 'translate3d(-50%, -32px, 0) scale(0.75)',
+        }}
+        className={`sx-pull-pill-spring pointer-events-none fixed top-[max(0.75rem,env(safe-area-inset-top))] left-1/2 z-50 flex items-center gap-2 rounded-full border px-3.5 py-2 text-xs font-extrabold backdrop-blur-2xl shadow-[0_14px_34px_-10px_rgba(0,0,0,0.45)] ${
+          pullIndicatorVisible ? 'opacity-100' : 'opacity-0'
+        } ${
+          isPullArmed || isPullRefreshing
+            ? 'border-[var(--sx-primary)]/50 bg-[var(--sx-surface-container)]/92 text-[var(--sx-on-surface)]'
+            : pullPhase === 'completing'
+              ? 'border-emerald-500/45 bg-[var(--sx-surface-container)]/92 text-emerald-400'
+              : 'border-[var(--sx-outline)] bg-[var(--sx-surface-container)]/85 text-[var(--sx-on-surface-muted)]'
+        }`}
+      >
+        <span
+          key={
+            pullPhase === 'completing'
+              ? 'pull-done'
+              : isPullArmed
+                ? 'pull-armed'
+                : 'pull-icon'
+          }
+          className={`flex h-5 w-5 items-center justify-center rounded-full ${
+            pullPhase === 'completing'
+              ? 'sx-pull-haptic-pop bg-emerald-500/15 text-emerald-400'
+              : isPullArmed
+                ? 'sx-pull-haptic-pop bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                : isPullRefreshing
+                  ? 'bg-[var(--sx-primary)]/15 text-[var(--sx-primary)]'
+                  : 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface)]'
+          }`}
+        >
+          {pullPhase === 'completing' ? (
+            <Check className="h-3.5 w-3.5" />
+          ) : isPullRefreshing ? (
+            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <ArrowDown
+              style={{
+                transform: `rotate(${isPullArmed ? 180 : Math.round(pullProgress * 165)}deg)`,
+                transition: 'transform 220ms var(--sx-ease-bounce)',
+              }}
+              className="h-3.5 w-3.5"
+            />
+          )}
+        </span>
+
+        <span className="whitespace-nowrap tracking-tight">
+          {pullPhase === 'completing'
+            ? 'Updated'
+            : isPullRefreshing
+              ? 'Refreshing...'
+              : isPullArmed
+                ? 'Release to refresh'
+                : 'Pull to refresh'}
+        </span>
+      </div>
+
+      {/* Spring-Displaced Content Stage */}
+      <div
+        style={
+          pullDistance > 0
+            ? {
+                transform: `translate3d(0, ${pullDistance}px, 0)`,
+              }
+            : undefined
+        }
+        className={`space-y-7 pb-10 ${isPulling ? '' : 'sx-pull-content-spring'}`}
+      >
       <HomeHeader
         onOpenProfile={() =>
           shouldOpenProfileSheet(state.uiPrefs.homeHeaderStyle)
@@ -703,6 +834,7 @@ export const HomePage: React.FC = () => {
         open={discoveryModalOpen}
         onClose={() => setDiscoveryModalOpen(false)}
       />
+      </div>
     </div>
   );
 };

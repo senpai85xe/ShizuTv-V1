@@ -12,7 +12,7 @@ export function detectPlayerGestureKind(
   dy: number,
   startX: number,
   containerWidth: number,
-  thresholdPx = 14,
+  thresholdPx = 18,
 ): PlayerGestureKind {
   const absX = Math.abs(dx);
   const absY = Math.abs(dy);
@@ -71,4 +71,63 @@ export function formatSignedSeekDelta(deltaSeconds: number): string {
   if (!Number.isFinite(deltaSeconds) || deltaSeconds === 0) return '+00:00';
   const sign = deltaSeconds > 0 ? '+' : '-';
   return `${sign}${formatPlayerTime(Math.abs(deltaSeconds))}`;
+}
+
+/**
+ * Maps viewport pointer offsets & deltas into local stage coordinates.
+ * When rotated 90deg clockwise, viewport +Y aligns with stage +X (seek),
+ * and viewport -X aligns with stage +Y (drag up = screen right = +dx).
+ */
+export function mapStageGestureCoordinates(input: {
+  dx: number;
+  dy: number;
+  clientX: number;
+  clientY: number;
+  rectLeft: number;
+  rectTop: number;
+  rectWidth: number;
+  rectHeight: number;
+  cssRotated: boolean;
+}): {
+  stageDx: number;
+  stageDy: number;
+  stageLocalX: number;
+  stageWidth: number;
+} {
+  if (!input.cssRotated) {
+    return {
+      stageDx: input.dx,
+      stageDy: input.dy,
+      stageLocalX: input.clientX - input.rectLeft,
+      stageWidth: input.rectWidth > 0 ? input.rectWidth : 360,
+    };
+  }
+  return {
+    stageDx: input.dy,
+    stageDy: -input.dx,
+    stageLocalX: input.clientY - input.rectTop,
+    stageWidth: input.rectHeight > 0 ? input.rectHeight : 640,
+  };
+}
+
+export const GESTURE_GUIDE_DURATION_MS = 2000;
+
+export interface GestureGuideItem {
+  id: 'brightness' | 'seek' | 'volume';
+  label: string;
+  hint: string;
+}
+
+export const GESTURE_GUIDE_ITEMS: readonly GestureGuideItem[] = [
+  { id: 'brightness', label: 'Brightness', hint: 'Left vertical' },
+  { id: 'seek', label: 'Seek', hint: 'Slide horizontally' },
+  { id: 'volume', label: 'Volume', hint: 'Right vertical' },
+];
+
+export function shouldTriggerGestureGuide(input: {
+  alreadyShown: boolean;
+  isLocked: boolean;
+  isPipActive: boolean;
+}): boolean {
+  return !input.alreadyShown && !input.isLocked && !input.isPipActive;
 }

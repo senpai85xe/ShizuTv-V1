@@ -4,8 +4,10 @@ import Hls from 'hls.js';
 import {
   ArrowLeft,
   FastForward,
+  Globe,
   Keyboard,
   ListVideo,
+  Lock,
   Maximize,
   Minimize,
   Pause,
@@ -20,6 +22,7 @@ import {
   SkipForward,
   Subtitles,
   Sun,
+  Users,
   Volume2,
   VolumeX,
   X,
@@ -57,6 +60,15 @@ import {
 } from '../utils/pipPlayer';
 import { PlayerEpisodeDrawer } from '../components/PlayerEpisodeDrawer';
 import { PlayerSettingsPopover } from '../components/PlayerSettingsPopover';
+import { WatchPartyUI } from '../components/WatchPartyUI';
+import { useWatchParty } from '../hooks/useWatchParty';
+import {
+  isValidRoomCode,
+  normalizeRoomCode,
+  resolveDefaultDisplayName,
+  shouldApplyRemoteSeek,
+  WatchPartySyncAction,
+} from '../utils/watchParty';
 import {
   EpisodeChangeDirection,
   getEpisodeBadgeTransitionClass,
@@ -82,15 +94,32 @@ export const PlayerPage: React.FC = () => {
   const { pipSession, enterInAppPip, closePip } = usePip();
 
   const routeState = (location.state as PlayerLocationState | null) || {};
+  const [partyHydratedRoom, setPartyHydratedRoom] = useState<{
+    mediaId: string;
+    mediaTitle: string;
+    mediaCover?: string;
+    mediaBanner?: string;
+    totalEpisodes: number;
+  } | null>(null);
+
   const media: UnifiedMedia = routeState.media ?? {
-    id: 'demo-anime',
+    id: partyHydratedRoom?.mediaId || 'demo-anime',
     type: 'ANIME',
-    title: { english: 'ShizuTv Stream Preview' },
+    title: { english: partyHydratedRoom?.mediaTitle || 'ShizuTv Stream Preview' },
+    cover: partyHydratedRoom?.mediaCover,
+    banner: partyHydratedRoom?.mediaBanner,
+    episodes: partyHydratedRoom?.totalEpisodes,
   };
   const episodes: UnifiedEpisode[] =
     routeState.episodes && routeState.episodes.length > 0
       ? routeState.episodes
-      : [{ id: 'ep-1', number: 1, title: 'Episode 1' }];
+      : Array.from({ length: Math.max(1, partyHydratedRoom?.totalEpisodes || 1) }, (_, idx) => ({
+          id: `${media.id}-ep-${idx + 1}`,
+          number: idx + 1,
+          title: `Episode ${idx + 1}`,
+          thumbnail: media.banner || media.cover || null,
+          durationSeconds: (media.duration || 24) * 60,
+        }));
 
   const [epIndex, setEpIndex] = useState(routeState.episodeIndex ?? 0);
   const currentEpisode = episodes[epIndex] ?? episodes[0];
@@ -179,7 +208,125 @@ export const PlayerPage: React.FC = () => {
   const [showServerMenu, setShowServerMenu] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showWatchPartyModal, setShowWatchPartyModal] = useState(false);
+  const [partyDisplayName, setPartyDisplayName] = useState(() =>
+    resolveDefaultDisplayName(state.profiles),
+  );
+  const [partyIsPublic, setPartyIsPublic] = useState(true);
+  const [partyCodeDraft, setPartyCodeDraft] = useState('');
   const [skipIntervals, setSkipIntervals] = useState<SkipInterval[]>([]);
+  const isApplyingRemoteSyncRef = useRef(false);
+  const autoJoinedQueryRoomRef = useRef(false);
+
+  const applyRemotePlayback = (
+    remoteEpisodeNumber: number,
+    remoteTime: number,
+    remotePlaying: boolean,
+  ) => {
+    isApplyingRemoteSyncRef.current = true;
+    const matchedEpIdx = episodes.findIndex((e) => e.number === remoteEpisodeNumber);
+    if (matchedEpIdx >= 0 && matchedEpIdx !== epIndex) {
+      pendingStartTimeRef.current = remoteTime;
+      pendingResumePlayRef.current = remotePlaying;
+      setEpIndex(matchedEpIdx);
+    } else {
+      const v = videoRef.current;
+      if (v) {
+        if (shouldApplyRemoteSeek(v.currentTime || 0, remoteTime)) {
+          try {
+            v.currentTime = remoteTime;
+            setCurrentTime(remoteTime);
+          } catch {
+            // Ignore seek failure prior to metadata load
+          }
+        }
+        if (remotePlaying && v.paused) {
+          v.play().catch(() => {});
+        } else if (!remotePlaying && !v.paused) {
+          v.pause();
+        }
+      }
+    }
+    window.setTimeout(() => {
+      isApplyingRemoteSyncRef.current = false;
+    }, 300);
+  };
+
+  const watchParty = useWatchParty({
+    onRoomHydrated: (hydratedRoom, syncedTime) => {
+      setShowWatchPartyModal(false);
+      if (!routeState.media) {
+        setPartyHydratedRoom({
+          mediaId: hydratedRoom.mediaId,
+          mediaTitle: hydratedRoom.mediaTitle,
+          mediaCover: hydratedRoom.mediaCover,
+          mediaBanner: hydratedRoom.mediaBanner,
+          totalEpisodes: Math.max(hydratedRoom.episodeNumber, hydratedRoom.totalEpisodes || 1),
+        });
+      }
+      if (watchParty.participantId && hydratedRoom.hostId === watchParty.participantId) {
+        return;
+      }
+      if (hydratedRoom.participants.length > 1 || hydratedRoom.hostId !== hydratedRoom.participants[0]?.id) {
+        applyRemotePlayback(
+          hydratedRoom.episodeNumber,
+          syncedTime,
+          hydratedRoom.isPlaying,
+        );
+      }
+    },
+    onRemoteSync: (payload) => {
+      applyRemotePlayback(
+        payload.episodeNumber,
+        payload.currentTime,
+        payload.isPlaying,
+      );
+    },
+  });
+
+  useEffect(() => {
+    if (watchParty.isActive) {
+      setShowWatchPartyModal(false);
+    }
+  }, [watchParty.isActive]);
+
+  useEffect(() => {
+    if (autoJoinedQueryRoomRef.current) return;
+    const params = new URLSearchParams(location.search);
+    const roomFromUrl = normalizeRoomCode(params.get('room') || '');
+    if (isValidRoomCode(roomFromUrl)) {
+      autoJoinedQueryRoomRef.current = true;
+      setPartyCodeDraft(roomFromUrl);
+      watchParty.joinRoom({
+        roomCode: roomFromUrl,
+        userName: partyDisplayName,
+      });
+    } else if (params.get('host') === '1') {
+      autoJoinedQueryRoomRef.current = true;
+      setShowWatchPartyModal(true);
+    }
+    return () => {
+      autoJoinedQueryRoomRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search]);
+
+  const emitWatchPartySync = (
+    action: WatchPartySyncAction,
+    timeOverride?: number,
+    playingOverride?: boolean,
+  ) => {
+    if (!watchParty.isActive || isApplyingRemoteSyncRef.current) return;
+    const v = videoRef.current;
+    watchParty.sendSync({
+      action,
+      currentTime:
+        typeof timeOverride === 'number' ? timeOverride : v?.currentTime ?? currentTime,
+      isPlaying: typeof playingOverride === 'boolean' ? playingOverride : v ? !v.paused : playing,
+      episodeNumber: currentEpisode.number,
+      episodeTitle: currentEpisode.title,
+    });
+  };
 
   const autoPlay = state.playerPrefs.autoPlay;
   const fitMode: VideoFitMode = state.playerPrefs.videoFit || 'contain';
@@ -305,7 +452,8 @@ export const PlayerPage: React.FC = () => {
       !showEpisodeDrawer &&
       !showServerMenu &&
       !showSettingsMenu &&
-      !showShortcuts
+      !showShortcuts &&
+      !showWatchPartyModal
     ) {
       hideTimerRef.current = window.setTimeout(() => {
         setShowControls(false);
@@ -342,6 +490,7 @@ export const PlayerPage: React.FC = () => {
     setCurrentTime(next);
     triggerSeekFeedback(delta);
     scheduleHideControls();
+    emitWatchPartySync('seek', next);
   };
 
   const toggleFullscreen = async () => {
@@ -544,7 +693,15 @@ export const PlayerPage: React.FC = () => {
 
   const handleStagePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
-    if (showEpisodeDrawer || showServerMenu || showSettingsMenu || showShortcuts) return;
+    if (
+      showEpisodeDrawer ||
+      showServerMenu ||
+      showSettingsMenu ||
+      showShortcuts ||
+      showWatchPartyModal
+    ) {
+      return;
+    }
     const target = e.target as HTMLElement | null;
     if (target?.closest('button, input, select, a, [data-no-gesture="true"]')) return;
 
@@ -633,6 +790,7 @@ export const PlayerPage: React.FC = () => {
       setCurrentTime(finalSeek.targetTime);
       setGestureSeekState(finalSeek);
       flashHudHide();
+      emitWatchPartySync('seek', finalSeek.targetTime);
     } else if (session.lockedKind === 'volume' || session.lockedKind === 'brightness') {
       flashHudHide();
     }
@@ -645,7 +803,15 @@ export const PlayerPage: React.FC = () => {
   };
 
   const handleStageWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (showEpisodeDrawer || showServerMenu || showSettingsMenu || showShortcuts) return;
+    if (
+      showEpisodeDrawer ||
+      showServerMenu ||
+      showSettingsMenu ||
+      showShortcuts ||
+      showWatchPartyModal
+    ) {
+      return;
+    }
     const target = e.target as HTMLElement | null;
     if (target?.closest('[data-no-gesture="true"]')) return;
     if (Math.abs(e.deltaY) < 2) return;
@@ -821,10 +987,12 @@ export const PlayerPage: React.FC = () => {
         onPlay={() => {
           setPlaying(true);
           scheduleHideControls(true);
+          emitWatchPartySync('play', videoRef.current?.currentTime ?? currentTime, true);
         }}
         onPause={() => {
           setPlaying(false);
           setShowControls(true);
+          emitWatchPartySync('pause', videoRef.current?.currentTime ?? currentTime, false);
         }}
         onLoadedData={() => setHasVideoFrame(true)}
         onPlaying={() => setHasVideoFrame(true)}
@@ -937,7 +1105,7 @@ export const PlayerPage: React.FC = () => {
             state.playerPrefs.subtitlePosition === 'top'
               ? 'top-20'
               : controlsVisible
-                ? 'bottom-32 sm:bottom-28'
+                ? 'bottom-48 sm:bottom-28'
                 : 'bottom-10'
           }`}
         >
@@ -1043,6 +1211,32 @@ export const PlayerPage: React.FC = () => {
               title="Player Settings"
             >
               <Settings className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              data-testid="player-watch-party-btn"
+              aria-label="Watch Party"
+              onClick={() => {
+                setShowServerMenu(false);
+                setShowSettingsMenu(false);
+                setShowEpisodeDrawer(false);
+                if (!watchParty.isActive) {
+                  watchParty.clearError();
+                  setShowWatchPartyModal((v) => !v);
+                }
+              }}
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-full backdrop-blur-2xl border text-xs font-bold shadow-xl transition-colors ${
+                watchParty.isActive || showWatchPartyModal
+                  ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
+                  : 'bg-black/55 border-white/15 hover:bg-white/15 text-white'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline whitespace-nowrap">
+                {watchParty.isActive && watchParty.room
+                  ? watchParty.room.roomCode
+                  : 'Party'}
+              </span>
             </button>
             <button
               type="button"
@@ -1184,6 +1378,7 @@ export const PlayerPage: React.FC = () => {
                     const t = Number(e.target.value);
                     if (videoRef.current) videoRef.current.currentTime = t;
                     setCurrentTime(t);
+                    emitWatchPartySync('seek', t);
                   }}
                   className="relative z-10 w-full opacity-0 cursor-pointer h-4"
                 />
@@ -1428,9 +1623,6 @@ export const PlayerPage: React.FC = () => {
         hlsQualityOptions={hlsQualityOptions}
         selectedHlsLevel={selectedHlsLevel}
         onSelectHlsLevel={handleSelectHlsLevel}
-        servers={servers}
-        selectedServerId={selectedServer.id}
-        onSelectServer={(srv) => setSelectedServer(srv)}
         subtitleTracks={
           stream.subtitles?.map((s) => ({ lang: s.lang, label: s.label })) || [
             { lang: 'en', label: 'English' },
@@ -1471,9 +1663,189 @@ export const PlayerPage: React.FC = () => {
         open={showEpisodeDrawer}
         episodes={episodes}
         activeIndex={epIndex}
-        onSelectEpisode={(idx) => setEpIndex(idx)}
+        onSelectEpisode={(idx) => {
+          setEpIndex(idx);
+          const nextEp = episodes[idx];
+          if (nextEp && watchParty.isActive && !isApplyingRemoteSyncRef.current) {
+            watchParty.sendSync({
+              action: 'episode',
+              currentTime: 0,
+              isPlaying: playing,
+              episodeNumber: nextEp.number,
+              episodeTitle: nextEp.title,
+            });
+          }
+        }}
         onClose={() => setShowEpisodeDrawer(false)}
       />
+
+      {/* Active Watch Party Panel integrated in PlayerPage layout */}
+      {watchParty.isActive && watchParty.room && (
+        <div
+          data-testid="player-watch-party-container"
+          data-no-gesture="true"
+          className="absolute top-16 sm:top-20 right-3 sm:right-5 z-30 w-[min(20rem,calc(100vw-1.5rem))] max-h-[calc(100dvh-9rem)] overflow-y-auto pointer-events-auto"
+        >
+          <WatchPartyUI
+            room={watchParty.room}
+            currentParticipantId={watchParty.participantId}
+            connectionStatus={watchParty.status}
+            lastEventNotice={watchParty.lastEventNotice}
+            onLeaveRoom={watchParty.leaveRoom}
+          />
+        </div>
+      )}
+
+      {/* Watch Party Create / Join Modal */}
+      {showWatchPartyModal && !watchParty.isActive && (
+        <div
+          data-no-gesture="true"
+          className="sx-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+          onClick={() => setShowWatchPartyModal(false)}
+        >
+          <div
+            data-testid="watch-party-lobby-modal"
+            onClick={(e) => e.stopPropagation()}
+            className="sx-sheet-enter w-full max-w-sm rounded-3xl bg-zinc-900/95 backdrop-blur-2xl border border-white/15 p-5 space-y-4 shadow-2xl"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-[var(--sx-player-accent)]">
+                  <Users className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-extrabold text-white">Watch Party</h3>
+                  <p className="text-[11px] text-white/65">
+                    Watch {title} · Ep {currentEpisode.number} together
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowWatchPartyModal(false)}
+                aria-label="Close Watch Party dialog"
+                className="min-h-[36px] min-w-[36px] rounded-full hover:bg-white/10 flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <label className="block space-y-1.5">
+              <span className="text-[11px] font-bold text-white/75">Display Name</span>
+              <input
+                type="text"
+                data-testid="watch-party-name-input"
+                value={partyDisplayName}
+                maxLength={28}
+                onChange={(e) => setPartyDisplayName(e.target.value)}
+                placeholder="Your name"
+                className="w-full px-3.5 py-2.5 rounded-2xl bg-black/45 border border-white/15 text-xs font-semibold text-white placeholder:text-white/40 focus:outline-none focus:border-[var(--sx-player-accent)]"
+              />
+            </label>
+
+            <div className="space-y-1.5">
+              <span className="text-[11px] font-bold text-white/75">Room Visibility</span>
+              <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-black/45 border border-white/10">
+                <button
+                  type="button"
+                  data-testid="watch-party-visibility-public"
+                  onClick={() => setPartyIsPublic(true)}
+                  className={`min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors ${
+                    partyIsPublic
+                      ? 'bg-white text-black shadow-sm'
+                      : 'text-white/70 hover:text-white'
+                  }`}
+                >
+                  <Globe className="w-3.5 h-3.5 shrink-0" />
+                  <span>Public Room</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="watch-party-visibility-private"
+                  onClick={() => setPartyIsPublic(false)}
+                  className={`min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors ${
+                    !partyIsPublic
+                      ? 'bg-white text-black shadow-sm'
+                      : 'text-white/70 hover:text-white'
+                  }`}
+                >
+                  <Lock className="w-3.5 h-3.5 shrink-0" />
+                  <span>Private Code</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-white/55 px-0.5">
+                {partyIsPublic
+                  ? 'Visible in Watch Together Active Rooms for anyone to join.'
+                  : 'Hidden from Active Rooms — friends join using your 6-digit code.'}
+              </p>
+            </div>
+
+            {watchParty.error && (
+              <p
+                data-testid="watch-party-error"
+                className="text-xs font-semibold text-red-300 bg-red-500/15 border border-red-400/25 rounded-2xl px-3 py-2"
+              >
+                {watchParty.error}
+              </p>
+            )}
+
+            <button
+              type="button"
+              data-testid="watch-party-create-btn"
+              onClick={() =>
+                watchParty.createRoom({
+                  userName: partyDisplayName,
+                  isPublic: partyIsPublic,
+                  mediaId: media.id,
+                  mediaTitle: title,
+                  mediaCover: media.cover,
+                  mediaBanner: media.banner,
+                  totalEpisodes: episodes.length,
+                  episodeNumber: currentEpisode.number,
+                  episodeTitle: currentEpisode.title,
+                  currentTime: videoRef.current?.currentTime ?? currentTime,
+                  isPlaying: playing,
+                })
+              }
+              className="w-full min-h-[44px] px-4 py-2.5 rounded-2xl bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-xs font-extrabold flex items-center justify-center gap-2 whitespace-nowrap shadow-lg"
+            >
+              <Users className="w-4 h-4" />
+              <span>Host New Room</span>
+            </button>
+
+            <div className="pt-2 border-t border-white/10 space-y-2">
+              <label className="block text-[11px] font-bold text-white/75">
+                Join Existing Room
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  data-testid="watch-party-code-input"
+                  value={partyCodeDraft}
+                  onChange={(e) => setPartyCodeDraft(normalizeRoomCode(e.target.value))}
+                  placeholder="Enter code"
+                  maxLength={8}
+                  className="flex-1 min-w-0 px-3.5 py-2.5 rounded-2xl bg-black/45 border border-white/15 text-xs font-mono-tabular font-bold tracking-[0.14em] text-white placeholder:text-white/40 placeholder:tracking-normal placeholder:font-sans focus:outline-none focus:border-[var(--sx-player-accent)]"
+                />
+                <button
+                  type="button"
+                  data-testid="watch-party-join-btn"
+                  disabled={!isValidRoomCode(partyCodeDraft)}
+                  onClick={() =>
+                    watchParty.joinRoom({
+                      roomCode: partyCodeDraft,
+                      userName: partyDisplayName,
+                    })
+                  }
+                  className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-white/12 hover:bg-white/20 disabled:opacity-40 text-xs font-bold text-white whitespace-nowrap shrink-0 transition-colors"
+                >
+                  Join Room
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Keyboard & Gesture Shortcuts Modal */}
       {showShortcuts && (

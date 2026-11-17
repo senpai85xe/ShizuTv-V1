@@ -21,6 +21,11 @@ import {
   selectMediaCardStyle,
 } from '../utils/mediaCard';
 import {
+  AudioLanguageCode,
+  DEFAULT_AMBIENT_ENABLED,
+  DEFAULT_AUTO_PIP_ENABLED,
+} from '../utils/inlinePlayer';
+import {
   DEFAULT_EPISODE_CHAPTER_STYLE,
   resolveEpisodeChapterStyle,
 } from '../utils/episodeChapterStyle';
@@ -79,6 +84,8 @@ export interface PlayerPrefs {
   autoSkipEd: boolean;
   autoNextEpisode: boolean;
   autoPip: boolean;
+  ambientGlow: boolean;
+  audioLanguage: AudioLanguageCode;
   defaultSpeed: number;
   videoFit: VideoFitMode;
   subtitleEnabled: boolean;
@@ -227,7 +234,9 @@ const DEFAULT_STATE: PersistedState = {
     autoSkipOp: false,
     autoSkipEd: false,
     autoNextEpisode: true,
-    autoPip: true,
+    autoPip: DEFAULT_AUTO_PIP_ENABLED,
+    ambientGlow: DEFAULT_AMBIENT_ENABLED,
+    audioLanguage: 'ja',
     defaultSpeed: 1.0,
     videoFit: 'contain',
     subtitleEnabled: true,

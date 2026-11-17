@@ -13,6 +13,7 @@ import { DetailsPage } from './pages/DetailsPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { PlayerPage } from './pages/PlayerPage';
 import { ReaderPage } from './pages/ReaderPage';
+import { WatchTogetherPage } from './pages/WatchTogetherPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { DownloadsPage } from './pages/DownloadsPage';
 import { ContinueHistoryPage } from './pages/ContinueHistoryPage';
@@ -55,9 +56,10 @@ export const App: React.FC = () => {
             <RouteScrollCoordinator />
             <PipProvider>
               <Routes>
-                {/* Fullscreen Player, Reader & Details Sheet (No NavShell) */}
+                {/* Fullscreen Player, Reader, Watch Together & Details Sheet (No NavShell) */}
                 <Route path="/player" element={<PlayerPage />} />
                 <Route path="/reader" element={<ReaderPage />} />
+                <Route path="/watch-together" element={<WatchTogetherPage />} />
                 <Route path="/details/:mediaType/:id" element={<DetailsPage />} />
 
                 {/* Main Application Shell */}

@@ -232,3 +232,127 @@ export function parseSubtitleText(raw: string): SubtitleCue[] {
     text,
   }));
 }
+
+export const DEFAULT_AMBIENT_ENABLED = false;
+export const DEFAULT_AUTO_PIP_ENABLED = false;
+
+export type AudioLanguageCode = 'ja' | 'en' | 'hi' | 'es';
+
+export interface AudioLanguageOption {
+  code: AudioLanguageCode;
+  shortLabel: string;
+  label: string;
+  serverCategory: 'sub' | 'dub';
+}
+
+export const AUDIO_LANGUAGE_OPTIONS: AudioLanguageOption[] = [
+  { code: 'ja', shortLabel: 'JP', label: 'Japanese (Original)', serverCategory: 'sub' },
+  { code: 'en', shortLabel: 'EN', label: 'English (Dub)', serverCategory: 'dub' },
+  { code: 'hi', shortLabel: 'HI', label: 'Hindi (Dub)', serverCategory: 'dub' },
+  { code: 'es', shortLabel: 'ES', label: 'Spanish (Dub)', serverCategory: 'dub' },
+];
+
+export function resolveAudioLanguageOption(
+  code?: string | null,
+): AudioLanguageOption {
+  return (
+    AUDIO_LANGUAGE_OPTIONS.find((opt) => opt.code === code) ?? AUDIO_LANGUAGE_OPTIONS[0]
+  );
+}
+
+export type FullscreenCommentScope = 'episode' | 'series';
+
+export function getCommentsScopeKey(
+  mediaId: string,
+  scope: FullscreenCommentScope,
+  episodeNumber: number,
+): string {
+  if (scope === 'episode') {
+    const safeEp =
+      Number.isFinite(episodeNumber) && episodeNumber > 0
+        ? Math.floor(episodeNumber)
+        : 1;
+    return `${mediaId}::ep::${safeEp}`;
+  }
+  return mediaId;
+}
+
+export function shouldShowFullscreenControls(input: {
+  isLocked: boolean;
+  controlsVisible: boolean;
+  hasActiveOverlay: boolean;
+}): boolean {
+  if (input.isLocked) return false;
+  return Boolean(input.controlsVisible || input.hasActiveOverlay);
+}
+
+export function shouldHideBarsForOverlay(input: {
+  showCommentsModal: boolean;
+  showEpisodeDrawer: boolean;
+  showSettingsMenu: boolean;
+  showSpeedMenu: boolean;
+  showAudioLangMenu: boolean;
+}): {
+  hideBottomBar: boolean;
+  hideCenterCluster: boolean;
+} {
+  const hasFullDrawerOrModal = Boolean(input.showCommentsModal || input.showEpisodeDrawer);
+  const hasAnyPopover = Boolean(
+    hasFullDrawerOrModal ||
+      input.showSettingsMenu ||
+      input.showSpeedMenu ||
+      input.showAudioLangMenu,
+  );
+  return {
+    hideBottomBar: hasFullDrawerOrModal,
+    hideCenterCluster: hasAnyPopover,
+  };
+}
+
+export const PLAYBACK_SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+
+export function getNextVideoFitMode(
+  current: 'contain' | 'cover' | 'fill',
+): 'contain' | 'cover' | 'fill' {
+  if (current === 'contain') return 'cover';
+  if (current === 'cover') return 'fill';
+  return 'contain';
+}
+
+export function getVideoFitBadgeLabel(fitMode: 'contain' | 'cover' | 'fill'): string {
+  switch (fitMode) {
+    case 'cover':
+      return 'Zoom';
+    case 'fill':
+      return 'Fill';
+    case 'contain':
+    default:
+      return 'Fit';
+  }
+}
+
+export function computeFullscreenRotationStage(input: {
+  isFullscreen: boolean;
+  isRotated: boolean;
+  viewportWidth: number;
+  viewportHeight: number;
+  nativeOrientationLandscape: boolean;
+}): {
+  cssRotated: boolean;
+  stageWidthPx?: number;
+  stageHeightPx?: number;
+} {
+  if (!input.isFullscreen) {
+    return { cssRotated: false };
+  }
+  const safeW = Number.isFinite(input.viewportWidth) && input.viewportWidth > 0 ? input.viewportWidth : 390;
+  const safeH = Number.isFinite(input.viewportHeight) && input.viewportHeight > 0 ? input.viewportHeight : 844;
+  if (!input.isRotated || input.nativeOrientationLandscape) {
+    return { cssRotated: false, stageWidthPx: safeW, stageHeightPx: safeH };
+  }
+  return {
+    cssRotated: true,
+    stageWidthPx: safeH,
+    stageHeightPx: safeW,
+  };
+}

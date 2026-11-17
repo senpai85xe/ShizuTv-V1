@@ -1537,6 +1537,12 @@ export const PlayerSettingsPage: React.FC = () => {
           checked={playerPrefs.autoPip}
           onChange={(autoPip) => updatePlayerPrefs({ autoPip })}
         />
+        <ToggleRow
+          label="Ambient Glow Effect"
+          description="Sample colors from the playing video to illuminate around the inline player"
+          checked={playerPrefs.ambientGlow}
+          onChange={(ambientGlow) => updatePlayerPrefs({ ambientGlow })}
+        />
 
         <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>

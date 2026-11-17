@@ -5,15 +5,25 @@ import {
   buildHlsQualityOptions,
   clampEpisodeIndex,
   computeAutoSkipTarget,
+  computeFullscreenRotationStage,
+  DEFAULT_AMBIENT_ENABLED,
+  DEFAULT_AUTO_PIP_ENABLED,
   findActiveSubtitleCue,
   formatQualityLabel,
   formatScrubberPercent,
+  getCommentsScopeKey,
   getEffectiveDurationSeconds,
   getEpisodeNavigationState,
+  getNextVideoFitMode,
+  getVideoFitBadgeLabel,
   getVideoFitClass,
   parseSubtitleText,
+  PLAYBACK_SPEED_OPTIONS,
+  resolveAudioLanguageOption,
   resolvePreferredHlsLevel,
   shouldAutoStartPlayback,
+  shouldHideBarsForOverlay,
+  shouldShowFullscreenControls,
 } from './inlinePlayer';
 
 test('clampEpisodeIndex clamps negative, NaN, and overflowing indices safely', () => {
@@ -134,5 +144,86 @@ test('resolveFallbackEpisodesCount preserves full counts beyond 100 episodes', (
   assert.equal(resolveFallbackEpisodesCount({ episodes: null, nextEpisode: 1123 }), 1122);
   assert.equal(resolveFallbackEpisodesCount({ episodes: 500, nextEpisode: 12 }), 500);
   assert.equal(resolveFallbackEpisodesCount({ episodes: null, nextEpisode: null }), 12);
+});
+
+test('fullscreen helpers resolve audio languages, comment scope keys, lock visibility, and OFF defaults', () => {
+  assert.equal(DEFAULT_AMBIENT_ENABLED, false);
+  assert.equal(DEFAULT_AUTO_PIP_ENABLED, false);
+
+  assert.equal(resolveAudioLanguageOption('hi').shortLabel, 'HI');
+  assert.equal(resolveAudioLanguageOption('hi').serverCategory, 'dub');
+  assert.equal(resolveAudioLanguageOption('unknown').code, 'ja');
+
+  assert.equal(getCommentsScopeKey('21', 'episode', 5), '21::ep::5');
+  assert.equal(getCommentsScopeKey('21', 'series', 5), '21');
+
+  assert.equal(
+    shouldShowFullscreenControls({ isLocked: true, controlsVisible: true, hasActiveOverlay: true }),
+    false,
+  );
+  assert.equal(
+    shouldShowFullscreenControls({ isLocked: false, controlsVisible: false, hasActiveOverlay: true }),
+    true,
+  );
+
+  assert.deepEqual(
+    shouldHideBarsForOverlay({
+      showCommentsModal: false,
+      showEpisodeDrawer: false,
+      showSettingsMenu: false,
+      showSpeedMenu: true,
+      showAudioLangMenu: false,
+    }),
+    { hideBottomBar: false, hideCenterCluster: true },
+  );
+  assert.deepEqual(
+    shouldHideBarsForOverlay({
+      showCommentsModal: false,
+      showEpisodeDrawer: true,
+      showSettingsMenu: false,
+      showSpeedMenu: false,
+      showAudioLangMenu: false,
+    }),
+    { hideBottomBar: true, hideCenterCluster: true },
+  );
+
+  assert.equal(getNextVideoFitMode('contain'), 'cover');
+  assert.equal(getNextVideoFitMode('cover'), 'fill');
+  assert.equal(getNextVideoFitMode('fill'), 'contain');
+  assert.equal(getVideoFitBadgeLabel('contain'), 'Fit');
+  assert.equal(getVideoFitBadgeLabel('cover'), 'Zoom');
+  assert.equal(getVideoFitBadgeLabel('fill'), 'Fill');
+  assert.ok(PLAYBACK_SPEED_OPTIONS.includes(1) && PLAYBACK_SPEED_OPTIONS.includes(2));
+
+  assert.deepEqual(
+    computeFullscreenRotationStage({
+      isFullscreen: true,
+      isRotated: true,
+      viewportWidth: 390,
+      viewportHeight: 844,
+      nativeOrientationLandscape: false,
+    }),
+    { cssRotated: true, stageWidthPx: 844, stageHeightPx: 390 },
+  );
+  assert.deepEqual(
+    computeFullscreenRotationStage({
+      isFullscreen: true,
+      isRotated: true,
+      viewportWidth: 844,
+      viewportHeight: 390,
+      nativeOrientationLandscape: true,
+    }),
+    { cssRotated: false, stageWidthPx: 844, stageHeightPx: 390 },
+  );
+  assert.deepEqual(
+    computeFullscreenRotationStage({
+      isFullscreen: false,
+      isRotated: false,
+      viewportWidth: 390,
+      viewportHeight: 844,
+      nativeOrientationLandscape: false,
+    }),
+    { cssRotated: false },
+  );
 });
 

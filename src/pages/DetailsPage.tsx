@@ -157,8 +157,10 @@ export const DetailsPage: React.FC = () => {
     },
   );
   const [loadingDetails, setLoadingDetails] = useState(true);
-  const [activeTab, setActiveTab] = useState<DetailsTab>('info');
-  const prevTabRef = React.useRef<DetailsTab>('info');
+  const initialRequestedTab =
+    (location.state as { initialTab?: DetailsTab } | null)?.initialTab || 'info';
+  const [activeTab, setActiveTab] = useState<DetailsTab>(initialRequestedTab);
+  const prevTabRef = React.useRef<DetailsTab>(initialRequestedTab);
   const [tabDirection, setTabDirection] = useState<DetailsTabDirection>('none');
   const switchTab = (nextTab: DetailsTab) => {
     setTabDirection(getDetailsTabDirection(prevTabRef.current, nextTab));
@@ -554,11 +556,6 @@ export const DetailsPage: React.FC = () => {
               onChangeEpisodeIndex={(nextIdx) => {
                 setHasPickedInlineEpisode(true);
                 setInlineEpisodeIndex(nextIdx);
-              }}
-              onOpenFullPlayer={(idx) => {
-                navigate('/player', {
-                  state: { media, episodes, episodeIndex: idx, sourceId: selectedSourceId },
-                });
               }}
             />
           ) : loadingDetails && !initialMedia && !media.cover ? (

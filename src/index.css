@@ -498,11 +498,159 @@ html.sx-theme-wave-active * {
   transform: scale(0.92);
 }
 
+/* iOS Fullscreen Player Stage, Topbar, Lock Pill & Comments Sheet Animations */
+@keyframes sxFsStageEnter {
+  0% {
+    opacity: 0.72;
+    transform: scale(0.94);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.006);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes sxFsTopbarEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -14px, 0) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes sxLockPillEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0) scale(0.86);
+  }
+  65% {
+    opacity: 1;
+    transform: translate3d(0, -2px, 0) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes sxCommentsSheetEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 34px, 0) scale(0.94);
+  }
+  72% {
+    opacity: 1;
+    transform: translate3d(0, -2px, 0) scale(1.005);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.sx-fs-stage-enter {
+  animation: sxFsStageEnter 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.sx-fs-topbar-enter {
+  animation: sxFsTopbarEnter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.sx-lock-pill-enter {
+  animation: sxLockPillEnter 280ms cubic-bezier(0.34, 1.38, 0.64, 1) both;
+  will-change: transform, opacity;
+}
+
+.sx-comments-sheet-enter {
+  animation: sxCommentsSheetEnter 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.sx-fs-rotate-spring {
+  transition:
+    transform 440ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 320ms cubic-bezier(0.32, 0.72, 0, 1),
+    height 320ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+
+.sx-fs-bar-top {
+  transition:
+    opacity 280ms var(--sx-ease-ios),
+    transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+.sx-fs-bar-bottom {
+  transition:
+    opacity 280ms var(--sx-ease-ios),
+    transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+.sx-fs-center-cluster {
+  transition:
+    opacity 260ms var(--sx-ease-ios),
+    transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+@keyframes sxSpeedPopoverUp {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.9);
+  }
+  70% {
+    opacity: 1;
+    transform: translate3d(0, -1.5px, 0) scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.sx-speed-popover-up {
+  animation: sxSpeedPopoverUp 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+@keyframes sxGestureGuideEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, 6px, 0) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0) scale(1);
+  }
+}
+
+.sx-gesture-guide-enter {
+  animation: sxGestureGuideEnter 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sx-player-popover,
   .sx-player-drawer-enter,
   .sx-player-badge-pop,
   .sx-player-center-hud,
+  .sx-fs-stage-enter,
+  .sx-fs-topbar-enter,
+  .sx-lock-pill-enter,
+  .sx-comments-sheet-enter,
+  .sx-speed-popover-up,
+  .sx-gesture-guide-enter,
   .sx-details-backdrop-enter,
   .sx-details-hero-enter,
   .sx-details-tab-enter,
@@ -535,12 +683,21 @@ html.sx-theme-wave-active * {
   .sx-player-drawer,
   .sx-player-controls-fade,
   .sx-player-play-btn,
+  .sx-fs-rotate-spring,
+  .sx-fs-bar-top,
+  .sx-fs-bar-bottom,
+  .sx-fs-center-cluster,
   .sx-details-poster-hover,
   .sx-sticky-header,
   .sx-sticky-header[data-visible="false"],
   .sx-sticky-header[data-visible="true"],
-  .sx-results-grid-state {
+  .sx-results-grid-state,
+  .sx-pull-content-spring,
+  .sx-pull-pill-spring {
     transition: none;
+  }
+  .sx-pull-haptic-pop {
+    animation: none;
   }
 }
 
@@ -872,6 +1029,35 @@ html.sx-theme-wave-active * {
 .sx-home-header-return {
   transform-origin: top center;
   animation: sxHomeHeaderReturn 440ms var(--sx-ease-bounce) both;
+}
+
+/* Home Pull-to-Refresh iOS Spring Transitions */
+@keyframes sxPullHapticPop {
+  0% {
+    transform: scale(0.84);
+  }
+  55% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.sx-pull-content-spring {
+  transition: transform 420ms var(--sx-ease-spring);
+}
+
+.sx-pull-pill-spring {
+  transition:
+    transform 360ms var(--sx-ease-spring),
+    opacity 220ms var(--sx-ease-ios),
+    border-color 220ms ease,
+    box-shadow 260ms ease;
+}
+
+.sx-pull-haptic-pop {
+  animation: sxPullHapticPop 340ms var(--sx-ease-bounce) both;
 }
 
 /* Custom GPU-Accelerated Directional Shimmer Skeleton System */
