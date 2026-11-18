@@ -22,6 +22,7 @@ import {
   Hash,
   Home,
   Info,
+  Languages,
   Layers,
   LayoutGrid,
   List,
@@ -56,6 +57,7 @@ import {
   UnifiedChapter,
   UnifiedEpisode,
   UnifiedMedia,
+  VideoStream,
 } from '../types/media';
 import { fetchMediaDetails } from '../services/discoveryService';
 import { searchAniList } from '../services/anilist';
@@ -69,9 +71,16 @@ import {
   resolveVideoStreamAsync,
 } from '../services/sourceEngine';
 import {
+  buildSelectableAudioOptions,
+  resolveAudioLanguageOption,
+  resolvePersistedSubtitleLang,
+  resolvePreferredVideoServer,
+} from '../utils/inlinePlayer';
+import {
   filterAvailableSources,
   formatSourceAvailabilityLabel,
   getSourceManagerBadge,
+  resolveActiveSourceId,
 } from '../utils/sourcePicker';
 import { SmartImage } from '../components/SmartImage';
 import { MediaCard } from '../components/MediaCard';
@@ -143,6 +152,8 @@ export const DetailsPage: React.FC = () => {
   const {
     state,
     updateUiPrefs,
+    updatePlayerPrefs,
+    setPreferredSource,
     getLibraryEntry,
     upsertLibraryEntry,
     removeLibraryEntry,
@@ -239,11 +250,22 @@ export const DetailsPage: React.FC = () => {
     return activeMatched.length > 0 ? activeMatched : typeMatched;
   }, [isManga, state.customSources, state.discoveryPrefs.activeSources]);
 
-  const [selectedSourceId, setSelectedSourceId] = useState<string>(
-    availableSources[0]?.id || 'shonenx-hls-inbuilt',
+  const preferredSourceIdForType = isManga
+    ? state.discoveryPrefs.preferredMangaSourceId
+    : state.discoveryPrefs.preferredAnimeSourceId;
+  const selectedSourceId = useMemo(
+    () =>
+      resolveActiveSourceId({
+        availableSources,
+        preferredSourceId: preferredSourceIdForType,
+        isManga,
+      }),
+    [availableSources, preferredSourceIdForType, isManga],
   );
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [sourcePickerQuery, setSourcePickerQuery] = useState('');
+  const [audioPickerOpen, setAudioPickerOpen] = useState(false);
+  const [resolvedWatchStream, setResolvedWatchStream] = useState<VideoStream | null>(null);
   const [matchedTitleOverride, setMatchedTitleOverride] = useState<string>('');
   const [matchedOverrideMedia, setMatchedOverrideMedia] = useState<UnifiedMedia | null>(null);
   const [wrongTitleOpen, setWrongTitleOpen] = useState(false);
@@ -334,11 +356,6 @@ export const DetailsPage: React.FC = () => {
     }
   }, [libEntry]);
 
-  useEffect(() => {
-    if (availableSources.length > 0 && !availableSources.some((s) => s.id === selectedSourceId)) {
-      setSelectedSourceId(availableSources[0].id);
-    }
-  }, [availableSources, selectedSourceId]);
 
   useEffect(() => {
     if (!id) return;
@@ -470,16 +487,17 @@ export const DetailsPage: React.FC = () => {
   }, [wrongTitleOpen, wrongTitleDraft, isManga]);
 
   useEffect(() => {
-    if (!sourcePickerOpen && !wrongTitleOpen && !trailerOpen) return;
+    if (!sourcePickerOpen && !wrongTitleOpen && !trailerOpen && !audioPickerOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (wrongTitleOpen) setWrongTitleOpen(false);
       else if (sourcePickerOpen) setSourcePickerOpen(false);
+      else if (audioPickerOpen) setAudioPickerOpen(false);
       else if (trailerOpen) setTrailerOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [sourcePickerOpen, wrongTitleOpen, trailerOpen]);
+  }, [sourcePickerOpen, wrongTitleOpen, audioPickerOpen, trailerOpen]);
 
   const title = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
   useDocumentTitle(
@@ -490,6 +508,14 @@ export const DetailsPage: React.FC = () => {
   const effectiveSourceTitle = matchedTitleOverride.trim() || title;
   const activeSource =
     availableSources.find((s) => s.id === selectedSourceId) ?? availableSources[0];
+  const selectableAudioOptions = useMemo(
+    () => buildSelectableAudioOptions(resolvedWatchStream?.availableAudios, activeSource?.lang),
+    [resolvedWatchStream?.availableAudios, activeSource?.lang],
+  );
+  const activeAudioOption = resolveAudioLanguageOption(
+    state.playerPrefs.audioLanguage,
+    selectableAudioOptions,
+  );
   const filteredSourcePickerList = useMemo(
     () => filterAvailableSources(availableSources, sourcePickerQuery),
     [availableSources, sourcePickerQuery],
@@ -671,7 +697,11 @@ export const DetailsPage: React.FC = () => {
       title: item.title,
     };
     const servers = resolveVideoServers(selectedSourceId, activeSource?.name);
-    const firstServer = servers[0];
+    const firstServer = resolvePreferredVideoServer({
+      servers,
+      preferredServerId: state.playerPrefs.preferredServerBySource?.[selectedSourceId],
+      desiredAudioCategory: activeAudioOption.serverCategory,
+    });
     if (!firstServer) return;
 
     void (async () => {
@@ -683,6 +713,8 @@ export const DetailsPage: React.FC = () => {
           sourceId: selectedSourceId,
           sourceName: activeSource?.name,
           sourceBaseUrl: activeSource?.baseUrl,
+          sourceLang: activeSource?.lang,
+          audioLanguage: state.playerPrefs.audioLanguage,
           overrideTitle: matchedTitleOverride.trim() || undefined,
         });
 
@@ -889,12 +921,17 @@ export const DetailsPage: React.FC = () => {
               sourceId={selectedSourceId}
               sourceName={activeSource?.name}
               sourceBaseUrl={activeSource?.baseUrl}
+              sourceLang={activeSource?.lang}
               overrideTitle={matchedTitleOverride.trim() || undefined}
               playSignal={inlinePlaySignal}
               initialTime={navMediaState?.startTime ?? null}
               initialResumePlaying={Boolean(navMediaState?.resumePlaying)}
-              initialSubLang={navMediaState?.activeSubLang ?? 'en'}
+              initialSubLang={resolvePersistedSubtitleLang(
+                navMediaState?.activeSubLang,
+                state.playerPrefs.subtitleLanguage,
+              )}
               initialEditedCuesMap={navMediaState?.editedCuesMap}
+              onStreamResolved={setResolvedWatchStream}
               onChangeEpisodeIndex={(nextIdx) => {
                 setHasPickedInlineEpisode(true);
                 setInlineEpisodeIndex(nextIdx);
@@ -1748,6 +1785,109 @@ export const DetailsPage: React.FC = () => {
                 </button>
               </div>
             </section>
+
+            {/* Audio Language Selector Card (Directly Below Anime Source) */}
+            {!isManga && (
+              <section
+                data-testid="details-audio-language-card"
+                className={`${frostedCardClass} p-3 sm:p-3.5 space-y-2.5`}
+              >
+                <button
+                  type="button"
+                  data-testid="details-audio-language-btn"
+                  aria-expanded={audioPickerOpen}
+                  aria-haspopup="listbox"
+                  onClick={() => setAudioPickerOpen((prev) => !prev)}
+                  className="w-full flex items-center justify-between gap-2.5 text-left group"
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="w-10 h-10 rounded-2xl shrink-0 bg-[var(--sx-on-surface)]/8 dark:bg-white/10 border border-white/35 dark:border-white/12 flex items-center justify-center">
+                      <Languages className="w-4 h-4 text-[var(--sx-primary)]" />
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs sm:text-sm font-extrabold">
+                          Audio Language
+                        </span>
+                        <span
+                          data-testid="details-audio-active-badge"
+                          className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/14 text-[var(--sx-primary)] text-[10px] font-black uppercase tracking-wider"
+                        >
+                          {activeAudioOption.shortLabel} · {activeAudioOption.label}
+                        </span>
+                      </div>
+                      <p className="text-[11px] font-semibold text-[var(--sx-on-surface-muted)] truncate">
+                        {resolvedWatchStream?.provider
+                          ? `Active source: ${resolvedWatchStream.provider}`
+                          : `Plays from ${activeSource?.name || 'ShizuTv Stream (Inbuilt)'}`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold group-hover:border-[var(--sx-primary)] transition-colors">
+                    <span>Select</span>
+                    <ChevronDown
+                      className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                        audioPickerOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </span>
+                </button>
+
+                {audioPickerOpen && (
+                  <div
+                    role="listbox"
+                    aria-label="Audio Language"
+                    data-testid="details-audio-language-menu"
+                    className="pt-2.5 border-t border-[var(--sx-outline)] grid grid-cols-1 sm:grid-cols-2 gap-2"
+                  >
+                    {selectableAudioOptions.map((opt) => {
+                      const isSelected = opt.code === activeAudioOption.code;
+                      return (
+                        <button
+                          key={opt.code}
+                          type="button"
+                          role="option"
+                          aria-selected={isSelected}
+                          data-testid={`details-audio-option-${opt.code}`}
+                          onClick={() => {
+                            updatePlayerPrefs({ audioLanguage: opt.code });
+                            setResolvedWatchStream(null);
+                            setAudioPickerOpen(false);
+                          }}
+                          className={`w-full px-3 py-2.5 rounded-2xl border flex items-center justify-between gap-2 text-left transition-all ${
+                            isSelected
+                              ? 'bg-[var(--sx-primary)]/12 border-[var(--sx-primary)] text-[var(--sx-on-surface)] shadow-sm'
+                              : 'bg-[var(--sx-on-surface)]/5 dark:bg-white/5 border-white/25 dark:border-white/10 hover:border-[var(--sx-primary)]/60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className={`px-1.5 py-0.5 rounded-md text-[10px] font-black font-mono-tabular uppercase shrink-0 ${
+                                isSelected
+                                  ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                                  : 'bg-[var(--sx-on-surface)]/10 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
+                              }`}
+                            >
+                              {opt.shortLabel}
+                            </span>
+                            <span className="text-xs font-extrabold truncate">{opt.label}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {opt.confirmed && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[9.5px] font-extrabold uppercase">
+                                Available
+                              </span>
+                            )}
+                            {isSelected && <Check className="w-3.5 h-3.5 text-[var(--sx-primary)]" />}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
 
             {/* Filter & Episode Tools Row */}
             {(() => {
@@ -2711,7 +2851,8 @@ export const DetailsPage: React.FC = () => {
                           type="button"
                           data-testid={`source-picker-item-${src.id}`}
                           onClick={() => {
-                            setSelectedSourceId(src.id);
+                            setPreferredSource(isManga ? 'MANGA' : 'ANIME', src.id);
+                            setResolvedWatchStream(null);
                             setSourcePickerOpen(false);
                           }}
                           className={`w-full p-3 rounded-2xl border flex items-center justify-between gap-3 text-left transition-all ${

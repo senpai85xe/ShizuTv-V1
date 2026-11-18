@@ -62,3 +62,37 @@ export function formatSourceAvailabilityLabel(params: {
 
   return parts.join(' · ');
 }
+
+export const DEFAULT_ANIME_SOURCE_ID = 'shonenx-hls-inbuilt';
+export const DEFAULT_MANGA_SOURCE_ID = 'shonenx-manga-inbuilt';
+
+export function getDefaultSourceIdForMedia(isManga: boolean): string {
+  return isManga ? DEFAULT_MANGA_SOURCE_ID : DEFAULT_ANIME_SOURCE_ID;
+}
+
+/**
+ * Resolves which source id should be active for a media page:
+ * - If the user has explicitly selected a preferred source and it is currently installed/available, keep using it.
+ * - Otherwise default to ShizuTv inbuilt ('shonenx-hls-inbuilt' for anime, 'shonenx-manga-inbuilt' for manga).
+ * - Only fall back to the first available source if even the default source was disabled/removed.
+ */
+export function resolveActiveSourceId(params: {
+  availableSources: Array<Pick<SourceInfo, 'id'>>;
+  preferredSourceId?: string | null;
+  isManga: boolean;
+}): string {
+  const defaultId = getDefaultSourceIdForMedia(params.isManga);
+  const { availableSources, preferredSourceId } = params;
+  if (!Array.isArray(availableSources) || availableSources.length === 0) {
+    return defaultId;
+  }
+  const cleanPref = typeof preferredSourceId === 'string' ? preferredSourceId.trim() : '';
+  if (cleanPref && availableSources.some((s) => s.id === cleanPref)) {
+    return cleanPref;
+  }
+  if (availableSources.some((s) => s.id === defaultId)) {
+    return defaultId;
+  }
+  return availableSources[0].id;
+}
+

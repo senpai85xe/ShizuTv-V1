@@ -48,6 +48,7 @@ import {
   AudioLanguageCode,
   AudioLanguageOption,
   buildHlsQualityOptions,
+  buildSelectableAudioOptions,
   buildSubtitleBoxCssProps,
   clampAutoSkipDestination,
   clampEpisodeIndex,
@@ -68,6 +69,9 @@ import {
   resolveAudioLanguageOption,
   resolveAvailableAudioOptions,
   resolveBatterySaverHlsLevel,
+  resolvePersistedSubtitleLang,
+  resolvePreferredVideoServer,
+  shouldAutoMatchAudioForServerChange,
   shouldAutoStartPlayback,
   shouldHideBarsForOverlay,
   shouldShowFullscreenControls,
@@ -151,6 +155,7 @@ interface InlineAnimePlayerProps {
   sourceId?: string;
   sourceName?: string;
   sourceBaseUrl?: string;
+  sourceLang?: string;
   overrideTitle?: string;
   playSignal?: number;
   initialTime?: number | null;
@@ -159,6 +164,7 @@ interface InlineAnimePlayerProps {
   initialEditedCuesMap?: Record<string, SubtitleCue[]>;
   watchPartyMode?: InlineWatchPartyMode;
   onChangeEpisodeIndex: (nextIndex: number) => void;
+  onStreamResolved?: (stream: VideoStream | null) => void;
 }
 
 export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
@@ -168,18 +174,26 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   sourceId,
   sourceName,
   sourceBaseUrl,
+  sourceLang,
   overrideTitle,
   playSignal = 0,
   initialTime = null,
   initialResumePlaying = false,
-  initialSubLang = 'en',
+  initialSubLang,
   initialEditedCuesMap,
   watchPartyMode,
   onChangeEpisodeIndex,
+  onStreamResolved,
 }) => {
   const navigate = useNavigate();
-  const { state, updatePlayerPrefs, recordHistory, getLibraryEntry, upsertLibraryEntry } =
-    useApp();
+  const {
+    state,
+    updatePlayerPrefs,
+    setPreferredServerForSource,
+    recordHistory,
+    getLibraryEntry,
+    upsertLibraryEntry,
+  } = useApp();
   const { pipSession, enterInAppPip, closePip, isPipActive } = usePip();
 
   const safeIndex = clampEpisodeIndex(episodeIndex, episodes.length);
@@ -200,16 +214,44 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     () => resolveVideoServers(sourceId, sourceName),
     [sourceId, sourceName],
   );
+  const desiredAudioCategory = resolveAudioLanguageOption(
+    state.playerPrefs.audioLanguage,
+  ).serverCategory;
+  const persistedServerIdForSource = sourceId
+    ? state.playerPrefs.preferredServerBySource?.[sourceId]
+    : undefined;
   const [selectedServer, setSelectedServer] = useState<VideoServer>(() => {
     const initCategory = resolveAudioLanguageOption(state.playerPrefs.audioLanguage).serverCategory;
-    return rawServers.find((s) => s.category === initCategory) ?? rawServers[0];
+    return (
+      resolvePreferredVideoServer({
+        servers: rawServers,
+        preferredServerId: persistedServerIdForSource,
+        desiredAudioCategory: initCategory,
+      }) ?? rawServers[0]
+    );
   });
 
   useEffect(() => {
-    if (rawServers.length > 0 && !rawServers.some((s) => s.id === selectedServer?.id)) {
-      setSelectedServer(rawServers[0]);
+    if (rawServers.length === 0) return;
+    const serverInSource = rawServers.some((s) => s.id === selectedServer?.id);
+    const serverMatchesCategory = selectedServer?.category === desiredAudioCategory;
+    if (!serverInSource || !serverMatchesCategory) {
+      const nextSrv = resolvePreferredVideoServer({
+        servers: rawServers,
+        preferredServerId: persistedServerIdForSource,
+        desiredAudioCategory,
+      });
+      if (nextSrv && nextSrv.id !== selectedServer?.id) {
+        setSelectedServer(nextSrv);
+      }
     }
-  }, [rawServers, selectedServer]);
+  }, [
+    rawServers,
+    desiredAudioCategory,
+    persistedServerIdForSource,
+    selectedServer?.id,
+    selectedServer?.category,
+  ]);
 
   const [stream, setStream] = useState<VideoStream | null>(null);
   const [streamLoading, setStreamLoading] = useState(true);
@@ -219,11 +261,21 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const [streamRetryNonce, setStreamRetryNonce] = useState(0);
   const [mirrorIndex, setMirrorIndex] = useState(0);
   const [fetchedCuesMap, setFetchedCuesMap] = useState<Record<string, SubtitleCue[]>>({});
+  const onStreamResolvedRef = useRef(onStreamResolved);
+  onStreamResolvedRef.current = onStreamResolved;
 
   useEffect(() => {
     const controller = new AbortController();
-    const serverToUse = selectedServer || rawServers[0];
+    const matchedServerForAudio =
+      rawServers.find(
+        (s) => s.id === selectedServer?.id && s.category === desiredAudioCategory,
+      ) ??
+      rawServers.find((s) => s.category === desiredAudioCategory) ??
+      selectedServer ??
+      rawServers[0];
+
     setStream(null);
+    onStreamResolvedRef.current?.(null);
     setStreamLoading(true);
     setIsBuffering(false);
     setAutoplayBlocked(false);
@@ -237,10 +289,12 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     resolveVideoStreamAsync({
       media,
       episode: currentEpisode,
-      server: serverToUse,
+      server: matchedServerForAudio,
       sourceId,
       sourceName,
       sourceBaseUrl,
+      sourceLang,
+      audioLanguage: state.playerPrefs.audioLanguage,
       overrideTitle,
       bypassCache: streamRetryNonce > 0,
       signal: controller.signal,
@@ -248,11 +302,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       .then((resolved) => {
         if (controller.signal.aborted) return;
         setStream(resolved);
+        onStreamResolvedRef.current?.(resolved);
         setStreamLoading(false);
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
         setStream(null);
+        onStreamResolvedRef.current?.(null);
         setStreamLoading(false);
         setStreamError(
           err instanceof Error ? err.message : 'Unable to resolve an active episode stream.',
@@ -269,6 +325,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     sourceId,
     sourceName,
     sourceBaseUrl,
+    sourceLang,
+    state.playerPrefs.audioLanguage,
     overrideTitle,
     streamRetryNonce,
   ]);
@@ -314,15 +372,21 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     () => resolveAvailableAudioOptions(stream?.availableAudios),
     [stream?.availableAudios],
   );
+  const selectableAudioOptions = useMemo(
+    () => buildSelectableAudioOptions(stream?.availableAudios, sourceLang),
+    [stream?.availableAudios, sourceLang],
+  );
   const hasDubAudio = availableAudioOptions.some((a) => a.serverCategory === 'dub');
   const availableServers = useMemo(() => {
     if (!stream) return rawServers;
-    const filtered = rawServers.filter((s) => s.category !== 'dub' || hasDubAudio);
+    const filtered = rawServers.filter(
+      (s) => s.category !== 'dub' || hasDubAudio || desiredAudioCategory === 'dub',
+    );
     return filtered.length > 0 ? filtered : rawServers;
-  }, [rawServers, stream, hasDubAudio]);
+  }, [rawServers, stream, hasDubAudio, desiredAudioCategory]);
   const activeAudioLangOption = resolveAudioLanguageOption(
     state.playerPrefs.audioLanguage,
-    availableAudioOptions,
+    selectableAudioOptions,
   );
   const [playing, setPlaying] = useState(false);
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
@@ -332,7 +396,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const [muted, setMuted] = useState(false);
   const [brightness, setBrightness] = useState(1);
   const [speed, setSpeed] = useState(state.playerPrefs.defaultSpeed || 1);
-  const [activeSubLang, setActiveSubLang] = useState<string>(initialSubLang);
+  const [activeSubLang, setActiveSubLang] = useState<string>(() =>
+    resolvePersistedSubtitleLang(initialSubLang, state.playerPrefs.subtitleLanguage),
+  );
   const [editedCuesMap, setEditedCuesMap] = useState<Record<string, SubtitleCue[]>>(
     initialEditedCuesMap ?? {},
   );
@@ -423,18 +489,21 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
 
   useEffect(() => {
     if (!stream || !selectedServer) return;
-    if (selectedServer.category === 'dub' && !hasDubAudio) {
+    if (desiredAudioCategory === 'sub' && selectedServer.category === 'dub' && !hasDubAudio) {
       const subServer = availableServers.find((s) => s.category === 'sub') ?? availableServers[0];
       if (subServer && subServer.id !== selectedServer.id) {
         setSelectedServer(subServer);
       }
     }
-  }, [stream, hasDubAudio, selectedServer, availableServers]);
+  }, [stream, desiredAudioCategory, hasDubAudio, selectedServer, availableServers]);
 
   const handleSelectAudioOption = (opt: AudioLanguageOption) => {
     updatePlayerPrefs({ audioLanguage: opt.code as AudioLanguageCode });
-    const matchingServer =
-      availableServers.find((s) => s.category === opt.serverCategory) ?? availableServers[0];
+    const matchingServer = resolvePreferredVideoServer({
+      servers: availableServers,
+      preferredServerId: persistedServerIdForSource,
+      desiredAudioCategory: opt.serverCategory,
+    });
     if (matchingServer && matchingServer.id !== selectedServer?.id) {
       setSelectedServer(matchingServer);
     }
@@ -442,11 +511,15 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
 
   const handleSelectServer = (srv: VideoServer) => {
     setSelectedServer(srv);
-    if (srv.category === 'dub' && hasDubAudio) {
-      updatePlayerPrefs({ audioLanguage: 'en' });
-    } else if (srv.category === 'sub') {
-      updatePlayerPrefs({ audioLanguage: 'ja' });
+    if (sourceId) {
+      setPreferredServerForSource(sourceId, srv.id);
     }
+    updatePlayerPrefs({
+      audioLanguage: shouldAutoMatchAudioForServerChange(
+        state.playerPrefs.audioLanguage,
+        srv.category,
+      ),
+    });
   };
 
   useEffect(() => {
@@ -1026,6 +1099,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     sourceId,
     sourceName,
     sourceBaseUrl,
+    sourceLang,
     overrideTitle,
     serverId: selectedServer?.id,
     currentTime,
@@ -1044,6 +1118,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     sourceId,
     sourceName,
     sourceBaseUrl,
+    sourceLang,
     overrideTitle,
     serverId: selectedServer?.id,
     currentTime,
@@ -1094,6 +1169,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
         sourceId: snap.sourceId,
         sourceName: snap.sourceName,
         sourceBaseUrl: snap.sourceBaseUrl,
+        sourceLang: snap.sourceLang,
         overrideTitle: snap.overrideTitle,
         serverId: snap.serverId,
         currentTime: liveTime,
@@ -1139,6 +1215,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       sourceId,
       sourceName,
       sourceBaseUrl,
+      sourceLang,
       overrideTitle,
       serverId: selectedServer?.id,
       currentTime: liveTime,
@@ -2887,23 +2964,23 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             </div>
           )}
 
-          {/* Fullscreen Audio Language Selector Popover (Real source tracks only) */}
+          {/* Fullscreen Audio Language Selector Popover */}
           {isFullscreen && showAudioLangMenu && (
             <div
               data-no-gesture="true"
               data-testid="fs-audio-lang-popover"
               onClick={(e) => e.stopPropagation()}
-              className="sx-player-popover absolute top-16 sm:top-[4.25rem] right-3 sm:right-6 z-40 w-64 rounded-2xl bg-zinc-950/90 backdrop-blur-2xl border border-white/20 ring-1 ring-inset ring-white/10 p-2.5 space-y-1 shadow-2xl"
+              className="sx-player-popover absolute top-16 sm:top-[4.25rem] right-3 sm:right-6 z-40 w-68 rounded-2xl bg-zinc-950/90 backdrop-blur-2xl border border-white/20 ring-1 ring-inset ring-white/10 p-2.5 space-y-1 shadow-2xl"
             >
               <div className="flex items-center justify-between px-2 py-1">
                 <p className="text-[10px] font-extrabold uppercase tracking-wider text-white/55">
                   Audio Language
                 </p>
                 <span className="text-[9.5px] font-bold text-white/45 tabular-nums">
-                  {availableAudioOptions.length} {availableAudioOptions.length === 1 ? 'track' : 'tracks'}
+                  {selectableAudioOptions.length} options
                 </span>
               </div>
-              {availableAudioOptions.map((opt) => {
+              {selectableAudioOptions.map((opt) => {
                 const active = opt.code === activeAudioLangOption.code;
                 return (
                   <button
@@ -2920,13 +2997,18 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                         : 'text-white/90 hover:bg-white/12'
                     }`}
                   >
-                    <span className="flex items-center gap-2">
-                      <span className="font-mono-tabular text-[10px] opacity-80">
+                    <span className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono-tabular text-[10px] opacity-80 shrink-0">
                         {opt.shortLabel}
                       </span>
-                      <span>{opt.label}</span>
+                      <span className="truncate">{opt.label}</span>
+                      {opt.confirmed && !active && (
+                        <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-white/12 text-white/75 shrink-0">
+                          Detected
+                        </span>
+                      )}
                     </span>
-                    {active && <Check className="w-3.5 h-3.5" />}
+                    {active && <Check className="w-3.5 h-3.5 shrink-0" />}
                   </button>
                 );
               })}
@@ -2982,7 +3064,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           }
           activeSubLang={activeSubLang}
           activeTrackLang={activeTrack?.lang}
-          onChangeSubLang={(lang) => setActiveSubLang(lang)}
+          onChangeSubLang={(lang) => {
+            setActiveSubLang(lang);
+            updatePlayerPrefs({ subtitleLanguage: lang });
+          }}
           cues={effectiveCues}
           currentTime={currentTime}
           onUpdateCues={(nextCues) =>

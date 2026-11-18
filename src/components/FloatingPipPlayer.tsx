@@ -16,15 +16,19 @@ import {
 import { useApp } from '../store/AppContext';
 import { usePip } from '../store/PipContext';
 import { getPreferredTitle, VideoStream } from '../types/media';
-import { resolveVideoServers, resolveVideoStreamAsync } from '../services/sourceEngine';
+import { INBUILT_SOURCES, resolveVideoServers, resolveVideoStreamAsync } from '../services/sourceEngine';
 import {
   buildSubtitleBoxCssProps,
   findActiveSubtitleCue,
   formatScrubberPercent,
   getEpisodeNavigationState,
   parseSubtitleText,
+  resolveAudioLanguageOption,
+  resolvePersistedSubtitleLang,
+  resolvePreferredVideoServer,
   SubtitleCue,
 } from '../utils/inlinePlayer';
+import { resolveActiveSourceId } from '../utils/sourcePicker';
 import { SubtitleFormattedText } from './SubtitleFormattedText';
 import { formatPlayerTime } from '../utils/detailsLayout';
 import {
@@ -114,14 +118,61 @@ export const FloatingPipPlayer: React.FC = () => {
     return pipSession.episodes[pipSession.episodeIndex] ?? pipSession.episodes[0] ?? null;
   }, [pipSession]);
 
-  const servers = useMemo(
-    () => resolveVideoServers(pipSession?.sourceId, pipSession?.sourceName),
-    [pipSession?.sourceId, pipSession?.sourceName],
+  const availableAnimeSources = useMemo(() => {
+    const combined = [...INBUILT_SOURCES, ...state.customSources];
+    const typeMatched = combined.filter(
+      (s) =>
+        s.mediaTypes.includes('ANIME') ||
+        s.mediaTypes.includes('MOVIE') ||
+        s.mediaTypes.includes('TV'),
+    );
+    const activeMatched = typeMatched.filter((s) =>
+      state.discoveryPrefs.activeSources.includes(s.id),
+    );
+    return activeMatched.length > 0 ? activeMatched : typeMatched;
+  }, [state.customSources, state.discoveryPrefs.activeSources]);
+
+  const effectiveSourceId = useMemo(
+    () =>
+      pipSession?.sourceId ||
+      resolveActiveSourceId({
+        availableSources: availableAnimeSources,
+        preferredSourceId: state.discoveryPrefs.preferredAnimeSourceId,
+        isManga: false,
+      }),
+    [pipSession?.sourceId, availableAnimeSources, state.discoveryPrefs.preferredAnimeSourceId],
   );
+  const effectiveSourceMeta = useMemo(
+    () => availableAnimeSources.find((s) => s.id === effectiveSourceId),
+    [availableAnimeSources, effectiveSourceId],
+  );
+  const effectiveSourceName = pipSession?.sourceName ?? effectiveSourceMeta?.name;
+  const effectiveSourceBaseUrl = pipSession?.sourceBaseUrl ?? effectiveSourceMeta?.baseUrl;
+  const effectiveSourceLang = pipSession?.sourceLang ?? effectiveSourceMeta?.lang;
+
+  const servers = useMemo(
+    () => resolveVideoServers(effectiveSourceId, effectiveSourceName),
+    [effectiveSourceId, effectiveSourceName],
+  );
+  const desiredAudioCategory = resolveAudioLanguageOption(
+    state.playerPrefs.audioLanguage,
+  ).serverCategory;
   const activeServer = useMemo(() => {
-    if (!pipSession?.serverId) return servers[0];
-    return servers.find((s) => s.id === pipSession.serverId) ?? servers[0];
-  }, [servers, pipSession?.serverId]);
+    return (
+      resolvePreferredVideoServer({
+        servers,
+        preferredServerId: state.playerPrefs.preferredServerBySource?.[effectiveSourceId],
+        routeServerId: pipSession?.serverId,
+        desiredAudioCategory,
+      }) ?? servers[0]
+    );
+  }, [
+    servers,
+    state.playerPrefs.preferredServerBySource,
+    effectiveSourceId,
+    pipSession?.serverId,
+    desiredAudioCategory,
+  ]);
 
   const [stream, setStream] = useState<VideoStream | null>(null);
   const [streamLoading, setStreamLoading] = useState(false);
@@ -148,9 +199,11 @@ export const FloatingPipPlayer: React.FC = () => {
       media: pipSession.media,
       episode: currentEpisode,
       server: activeServer,
-      sourceId: pipSession.sourceId,
-      sourceName: pipSession.sourceName,
-      sourceBaseUrl: pipSession.sourceBaseUrl,
+      sourceId: effectiveSourceId,
+      sourceName: effectiveSourceName,
+      sourceBaseUrl: effectiveSourceBaseUrl,
+      sourceLang: effectiveSourceLang,
+      audioLanguage: state.playerPrefs.audioLanguage,
       overrideTitle: pipSession.overrideTitle,
       bypassCache: streamRetryNonce > 0,
       signal: controller.signal,
@@ -176,9 +229,11 @@ export const FloatingPipPlayer: React.FC = () => {
     currentEpisode?.id,
     currentEpisode?.number,
     activeServer.id,
-    pipSession?.sourceId,
-    pipSession?.sourceName,
-    pipSession?.sourceBaseUrl,
+    effectiveSourceId,
+    effectiveSourceName,
+    effectiveSourceBaseUrl,
+    effectiveSourceLang,
+    state.playerPrefs.audioLanguage,
     pipSession?.overrideTitle,
     streamRetryNonce,
   ]);
@@ -285,7 +340,10 @@ export const FloatingPipPlayer: React.FC = () => {
   }, [pipSession?.media.id, currentEpisode?.id, activeStreamUrl]);
 
   // Fetch remote WebVTT subtitle track if needed
-  const pipTrackLang = pipSession?.activeSubLang || 'en';
+  const pipTrackLang = resolvePersistedSubtitleLang(
+    pipSession?.activeSubLang,
+    state.playerPrefs.subtitleLanguage,
+  );
   const pipActiveTrack =
     stream?.subtitles?.find((s) => s.lang === pipTrackLang) ??
     (pipTrackLang === 'en' ? stream?.subtitles?.[0] : undefined);

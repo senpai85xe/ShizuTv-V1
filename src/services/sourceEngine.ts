@@ -513,6 +513,8 @@ export interface ResolveVideoStreamParams {
   sourceId?: string;
   sourceName?: string;
   sourceBaseUrl?: string;
+  sourceLang?: string;
+  audioLanguage?: 'ja' | 'en' | 'hi' | 'es';
   overrideTitle?: string;
   bypassCache?: boolean;
   signal?: AbortSignal;
@@ -528,6 +530,8 @@ export async function resolveVideoStreamAsync(
     sourceId,
     sourceName,
     sourceBaseUrl,
+    sourceLang,
+    audioLanguage,
     overrideTitle,
     bypassCache,
     signal,
@@ -551,9 +555,11 @@ export async function resolveVideoStreamAsync(
       serverId: server.id,
       serverName: server.name,
       category: server.category,
+      audioLanguage,
       sourceId,
       sourceName,
       sourceBaseUrl,
+      sourceLang,
       bypassCache: Boolean(bypassCache),
     }),
   });

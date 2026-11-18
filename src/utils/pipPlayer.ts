@@ -10,6 +10,7 @@ export interface PipSessionState {
   sourceId?: string;
   sourceName?: string;
   sourceBaseUrl?: string;
+  sourceLang?: string;
   overrideTitle?: string;
   serverId?: string;
   currentTime: number;

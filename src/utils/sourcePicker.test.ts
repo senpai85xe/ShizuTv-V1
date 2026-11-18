@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DEFAULT_ANIME_SOURCE_ID,
+  DEFAULT_MANGA_SOURCE_ID,
   filterAvailableSources,
   formatSourceAvailabilityLabel,
   getSourceManagerBadge,
+  resolveActiveSourceId,
 } from './sourcePicker';
 import { SourceInfo } from '../types/media';
 
@@ -98,5 +101,62 @@ test('formatSourceAvailabilityLabel formats loading, resolved count, status, and
       resolvedCount: 1,
     }),
     '1 chapter available',
+  );
+});
+
+test('resolveActiveSourceId defaults to ShizuTv and persists explicit user selection until changed', () => {
+  const customFirstList: SourceInfo[] = [SAMPLE_SOURCES[1], SAMPLE_SOURCES[0], SAMPLE_SOURCES[2]];
+
+  assert.equal(
+    resolveActiveSourceId({
+      availableSources: customFirstList,
+      preferredSourceId: undefined,
+      isManga: false,
+    }),
+    DEFAULT_ANIME_SOURCE_ID,
+  );
+
+  assert.equal(
+    resolveActiveSourceId({
+      availableSources: customFirstList,
+      preferredSourceId: 'ext-ay-gotaku-en',
+      isManga: false,
+    }),
+    'ext-ay-gotaku-en',
+  );
+
+  assert.equal(
+    resolveActiveSourceId({
+      availableSources: customFirstList,
+      preferredSourceId: 'removed-extension',
+      isManga: false,
+    }),
+    DEFAULT_ANIME_SOURCE_ID,
+  );
+
+  assert.equal(
+    resolveActiveSourceId({
+      availableSources: [
+        {
+          id: 'mangadex-bridge',
+          name: 'MangaDex',
+          type: 'extension',
+          mediaTypes: ['MANGA'],
+          lang: 'multi',
+          version: '1.0',
+        },
+        {
+          id: DEFAULT_MANGA_SOURCE_ID,
+          name: 'ShizuTv Reader (Inbuilt)',
+          type: 'inbuilt',
+          mediaTypes: ['MANGA'],
+          lang: 'en',
+          version: '2.1.5',
+        },
+      ],
+      preferredSourceId: null,
+      isManga: true,
+    }),
+    DEFAULT_MANGA_SOURCE_ID,
   );
 });

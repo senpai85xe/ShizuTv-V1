@@ -647,6 +647,111 @@ export function resolveAudioLanguageOption(
   return pool.find((opt) => opt.code === code) ?? pool[0];
 }
 
+export interface SelectableAudioLanguageOption extends AudioLanguageOption {
+  confirmed: boolean;
+}
+
+/**
+ * Returns all selectable audio languages so users can explicitly choose Japanese, English,
+ * Hindi, or Spanish on the player page, while annotating which tracks were confirmed by
+ * the active source/stream metadata.
+ */
+export function buildSelectableAudioOptions(
+  sourceAudios?: AudioLanguageOption[] | null,
+  sourceLang?: string | null,
+): SelectableAudioLanguageOption[] {
+  const confirmedCodes = new Set<AudioLanguageCode>();
+  if (Array.isArray(sourceAudios)) {
+    for (const item of sourceAudios) {
+      if (item?.code) confirmedCodes.add(item.code);
+    }
+  }
+  const cleanSourceLang = typeof sourceLang === 'string' ? sourceLang.trim().toLowerCase() : '';
+  if (cleanSourceLang === 'hi' || cleanSourceLang === 'hindi') {
+    confirmedCodes.add('hi');
+  } else if (cleanSourceLang === 'es' || cleanSourceLang === 'spanish') {
+    confirmedCodes.add('es');
+  }
+  return AUDIO_LANGUAGE_OPTIONS.map((opt) => ({
+    ...opt,
+    confirmed: confirmedCodes.has(opt.code),
+  }));
+}
+
+/**
+ * Keeps non-English dub selections ('hi', 'es') intact when the user switches between
+ * dub stream servers instead of overwriting them back to 'en'.
+ */
+export function shouldAutoMatchAudioForServerChange(
+  currentAudioLang: AudioLanguageCode | string | undefined,
+  nextServerCategory: 'sub' | 'dub' | 'raw',
+): AudioLanguageCode {
+  if (nextServerCategory === 'sub') {
+    return 'ja';
+  }
+  if (nextServerCategory === 'dub') {
+    if (currentAudioLang === 'hi' || currentAudioLang === 'es' || currentAudioLang === 'en') {
+      return currentAudioLang;
+    }
+    return 'en';
+  }
+  return currentAudioLang === 'hi' || currentAudioLang === 'es' || currentAudioLang === 'en'
+    ? currentAudioLang
+    : 'ja';
+}
+
+export function sanitizeAudioLanguageCode(code?: string | null): AudioLanguageCode {
+  if (code === 'ja' || code === 'en' || code === 'hi' || code === 'es') {
+    return code;
+  }
+  return 'ja';
+}
+
+export function resolvePersistedSubtitleLang(
+  routeOrInitialSubLang?: string | null,
+  persistedSubLang?: string | null,
+): string {
+  const cleanRoute =
+    typeof routeOrInitialSubLang === 'string' ? routeOrInitialSubLang.trim() : '';
+  if (cleanRoute) return cleanRoute;
+  const cleanPersisted =
+    typeof persistedSubLang === 'string' ? persistedSubLang.trim() : '';
+  return cleanPersisted || 'en';
+}
+
+export function resolvePreferredVideoServer<
+  T extends { id: string; category?: 'sub' | 'dub' | 'raw' },
+>(params: {
+  servers: T[];
+  preferredServerId?: string | null;
+  routeServerId?: string | null;
+  desiredAudioCategory: 'sub' | 'dub';
+}): T | undefined {
+  const { servers, preferredServerId, routeServerId, desiredAudioCategory } = params;
+  if (!Array.isArray(servers) || servers.length === 0) {
+    return undefined;
+  }
+  const hasCategoryMatch = servers.some((s) => s.category === desiredAudioCategory);
+
+  const cleanRoute = typeof routeServerId === 'string' ? routeServerId.trim() : '';
+  if (cleanRoute) {
+    const routeSrv = servers.find((s) => s.id === cleanRoute);
+    if (routeSrv && (!hasCategoryMatch || routeSrv.category === desiredAudioCategory)) {
+      return routeSrv;
+    }
+  }
+
+  const cleanPref = typeof preferredServerId === 'string' ? preferredServerId.trim() : '';
+  if (cleanPref) {
+    const prefSrv = servers.find((s) => s.id === cleanPref);
+    if (prefSrv && (!hasCategoryMatch || prefSrv.category === desiredAudioCategory)) {
+      return prefSrv;
+    }
+  }
+
+  return servers.find((s) => s.category === desiredAudioCategory) ?? servers[0];
+}
+
 export type FullscreenCommentScope = 'episode' | 'series';
 
 export function getCommentsScopeKey(

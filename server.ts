@@ -11,14 +11,14 @@ import {
   ANILIST_TOKEN_URL,
   buildAniListAuthorizeUrl,
   resolveAniListRedirectUri,
-} from './src/utils/anilistOAuth';
+} from './src/utils/anilistOAuth.ts';
 import {
   isSafeExternalHttpUrl,
   parseExtensionRepoManifest,
-} from './src/utils/extensionRepoParser';
-import { resolveAnimeEpisodeStream } from './src/server/animeStreamResolver';
-import { rewriteM3u8Manifest } from './src/utils/streamResolverUtils';
-import type { ExtensionRepo, SourceInfo } from './src/types/media';
+} from './src/utils/extensionRepoParser.ts';
+import { resolveAnimeEpisodeStream } from './src/server/animeStreamResolver.ts';
+import { rewriteM3u8Manifest } from './src/utils/streamResolverUtils.ts';
+import type { ExtensionRepo, SourceInfo } from './src/types/media.ts';
 
 type WatchPartyTrack = 'H-Sub' | 'Dub';
 
@@ -1280,6 +1280,16 @@ async function startServer() {
     const categoryRaw = typeof body.category === 'string' ? body.category.toLowerCase() : 'sub';
     const category: 'sub' | 'dub' | 'raw' =
       categoryRaw === 'dub' ? 'dub' : categoryRaw === 'raw' ? 'raw' : 'sub';
+    const audioLangRaw =
+      typeof body.audioLanguage === 'string' ? body.audioLanguage.trim().toLowerCase() : '';
+    const audioLanguage: 'ja' | 'en' | 'hi' | 'es' | undefined =
+      audioLangRaw === 'ja' ||
+      audioLangRaw === 'en' ||
+      audioLangRaw === 'hi' ||
+      audioLangRaw === 'es'
+        ? audioLangRaw
+        : undefined;
+    const sourceLang = typeof body.sourceLang === 'string' ? body.sourceLang.trim() : undefined;
 
     try {
       const resolved = await resolveAnimeEpisodeStream({
@@ -1299,10 +1309,12 @@ async function startServer() {
         serverId: typeof body.serverId === 'string' ? body.serverId : undefined,
         serverName: typeof body.serverName === 'string' ? body.serverName : undefined,
         category,
+        audioLanguage,
         sourceId: typeof body.sourceId === 'string' ? body.sourceId : undefined,
         sourceName: typeof body.sourceName === 'string' ? body.sourceName : undefined,
         sourceBaseUrl:
           typeof body.sourceBaseUrl === 'string' ? body.sourceBaseUrl : undefined,
+        sourceLang,
         bypassCache: Boolean(body.bypassCache),
       });
 
@@ -1890,7 +1902,7 @@ async function startServer() {
   } else {
     const distDir = path.resolve(__dirname, 'dist');
     app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
+    app.get('/{*splat}', (_req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }

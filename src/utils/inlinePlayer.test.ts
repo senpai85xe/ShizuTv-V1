@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { resolveFallbackEpisodesCount } from '../services/sourceEngine';
 import {
   buildHlsQualityOptions,
+  buildSelectableAudioOptions,
   buildSubtitleBoxCssProps,
   clampAutoSkipDestination,
   clampEpisodeIndex,
@@ -31,7 +32,11 @@ import {
   resolveAvailableAudioOptions,
   resolveBatterySaverHlsLevel,
   resolveEffectiveStreamQuality,
+  resolvePersistedSubtitleLang,
   resolvePreferredHlsLevel,
+  resolvePreferredVideoServer,
+  sanitizeAudioLanguageCode,
+  shouldAutoMatchAudioForServerChange,
   shouldAutoStartPlayback,
   shouldHideBarsForOverlay,
   shouldShowFullscreenControls,
@@ -348,6 +353,108 @@ test('buildSubtitleBoxCssProps applies font family, weight, edge style, and opac
   assert.ok(css.fontFamily.includes('ui-rounded'));
   assert.ok(css.textShadow.includes('-1px -1px 0'));
 });
+
+test('buildSelectableAudioOptions exposes all 4 languages and marks confirmed source tracks', () => {
+  const opts = buildSelectableAudioOptions(
+    [{ code: 'ja', shortLabel: 'JP', label: 'Japanese (Original)', serverCategory: 'sub' }],
+    'hi',
+  );
+  assert.deepEqual(
+    opts.map((o) => o.code),
+    ['ja', 'en', 'hi', 'es'],
+  );
+  assert.equal(opts.find((o) => o.code === 'ja')?.confirmed, true);
+  assert.equal(opts.find((o) => o.code === 'hi')?.confirmed, true);
+  assert.equal(opts.find((o) => o.code === 'en')?.confirmed, false);
+});
+
+test('shouldAutoMatchAudioForServerChange preserves Hindi and Spanish dubs across dub server switches', () => {
+  assert.equal(shouldAutoMatchAudioForServerChange('hi', 'dub'), 'hi');
+  assert.equal(shouldAutoMatchAudioForServerChange('es', 'dub'), 'es');
+  assert.equal(shouldAutoMatchAudioForServerChange('ja', 'dub'), 'en');
+  assert.equal(shouldAutoMatchAudioForServerChange('hi', 'sub'), 'ja');
+});
+
+test('sanitizeAudioLanguageCode normalizes invalid codes back to ja while preserving valid picks', () => {
+  assert.equal(sanitizeAudioLanguageCode('hi'), 'hi');
+  assert.equal(sanitizeAudioLanguageCode('en'), 'en');
+  assert.equal(sanitizeAudioLanguageCode('es'), 'es');
+  assert.equal(sanitizeAudioLanguageCode('ja'), 'ja');
+  assert.equal(sanitizeAudioLanguageCode('fr'), 'ja');
+  assert.equal(sanitizeAudioLanguageCode(undefined), 'ja');
+});
+
+test('resolvePersistedSubtitleLang prefers explicit route value, then persisted pref, else en', () => {
+  assert.equal(resolvePersistedSubtitleLang('es', 'hi'), 'es');
+  assert.equal(resolvePersistedSubtitleLang(undefined, 'hi'), 'hi');
+  assert.equal(resolvePersistedSubtitleLang('  ', '  ja '), 'ja');
+  assert.equal(resolvePersistedSubtitleLang(undefined, undefined), 'en');
+});
+
+test('resolvePreferredVideoServer prioritizes route server, then saved per-source server matching category, then category fallback', () => {
+  const servers: Array<{ id: string; category: 'sub' | 'dub' }> = [
+    { id: 'vidstreaming-sub', category: 'sub' },
+    { id: 'megacloud-sub', category: 'sub' },
+    { id: 'vidstreaming-dub', category: 'dub' },
+    { id: 'megacloud-dub', category: 'dub' },
+  ];
+
+  // Reuses persisted server for this source when category matches
+  assert.equal(
+    resolvePreferredVideoServer({
+      servers,
+      preferredServerId: 'megacloud-sub',
+      desiredAudioCategory: 'sub',
+    })?.id,
+    'megacloud-sub',
+  );
+
+  // Route override wins over persisted preference when matching category
+  assert.equal(
+    resolvePreferredVideoServer({
+      servers,
+      preferredServerId: 'megacloud-dub',
+      routeServerId: 'vidstreaming-dub',
+      desiredAudioCategory: 'dub',
+    })?.id,
+    'vidstreaming-dub',
+  );
+
+  // When user switches desired audio language to dub, a saved sub server does not trap them on sub
+  assert.equal(
+    resolvePreferredVideoServer({
+      servers,
+      preferredServerId: 'megacloud-sub',
+      desiredAudioCategory: 'dub',
+    })?.id,
+    'vidstreaming-dub',
+  );
+
+  // Falls back safely when saved server does not exist on the newly chosen source
+  assert.equal(
+    resolvePreferredVideoServer({
+      servers,
+      preferredServerId: 'non-existent-server',
+      desiredAudioCategory: 'dub',
+    })?.id,
+    'vidstreaming-dub',
+  );
+
+  // If a source has only sub servers, a saved server still resolves cleanly even when dub is desired
+  const subOnlyServers: Array<{ id: string; category: 'sub' | 'dub' }> = [
+    { id: 'mirror-1', category: 'sub' },
+    { id: 'mirror-2', category: 'sub' },
+  ];
+  assert.equal(
+    resolvePreferredVideoServer({
+      servers: subOnlyServers,
+      preferredServerId: 'mirror-2',
+      desiredAudioCategory: 'dub',
+    })?.id,
+    'mirror-2',
+  );
+});
+
 
 
 

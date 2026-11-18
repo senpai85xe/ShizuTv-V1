@@ -4,8 +4,10 @@ import Hls from 'hls.js';
 import {
   AlertCircle,
   ArrowLeft,
+  Check,
   FastForward,
   Keyboard,
+  Languages,
   ListVideo,
   Maximize,
   Minimize,
@@ -35,11 +37,14 @@ import {
   VideoServer,
   VideoStream,
 } from '../types/media';
-import { resolveVideoServers, resolveVideoStreamAsync } from '../services/sourceEngine';
+import { INBUILT_SOURCES, resolveVideoServers, resolveVideoStreamAsync } from '../services/sourceEngine';
 import { fetchAniSkipIntervals, SkipInterval } from '../services/aniskip';
 import { clampSeekTarget, formatPlayerTime } from '../utils/detailsLayout';
 import {
+  AudioLanguageCode,
+  AudioLanguageOption,
   buildHlsQualityOptions,
+  buildSelectableAudioOptions,
   buildSubtitleBoxCssProps,
   clampAutoSkipDestination,
   findActiveSubtitleCue,
@@ -49,12 +54,17 @@ import {
   HlsQualityOption,
   isAutoSkipEligible,
   parseSubtitleText,
+  resolveAudioLanguageOption,
   resolveAvailableAudioOptions,
   resolveBatterySaverHlsLevel,
   resolveEffectiveStreamQuality,
+  resolvePersistedSubtitleLang,
+  resolvePreferredVideoServer,
+  shouldAutoMatchAudioForServerChange,
   shouldAutoStartPlayback,
   SubtitleCue,
 } from '../utils/inlinePlayer';
+import { resolveActiveSourceId } from '../utils/sourcePicker';
 import {
   computeSwipeSeekTarget,
   computeSwipeVerticalLevel,
@@ -82,6 +92,7 @@ interface PlayerLocationState {
   sourceId?: string;
   sourceName?: string;
   sourceBaseUrl?: string;
+  sourceLang?: string;
   overrideTitle?: string;
   serverId?: string;
   startTime?: number;
@@ -93,7 +104,14 @@ interface PlayerLocationState {
 export const PlayerPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { state, updatePlayerPrefs, recordHistory, upsertLibraryEntry, getLibraryEntry } = useApp();
+  const {
+    state,
+    updatePlayerPrefs,
+    setPreferredServerForSource,
+    recordHistory,
+    upsertLibraryEntry,
+    getLibraryEntry,
+  } = useApp();
   const { pipSession, enterInAppPip, closePip } = usePip();
 
   const routeState = (location.state as PlayerLocationState | null) || {};
@@ -110,13 +128,79 @@ export const PlayerPage: React.FC = () => {
   const [epIndex, setEpIndex] = useState(routeState.episodeIndex ?? 0);
   const currentEpisode = episodes[epIndex] ?? episodes[0];
 
+  const availableAnimeSources = useMemo(() => {
+    const combined = [...INBUILT_SOURCES, ...state.customSources];
+    const typeMatched = combined.filter(
+      (s) =>
+        s.mediaTypes.includes('ANIME') ||
+        s.mediaTypes.includes('MOVIE') ||
+        s.mediaTypes.includes('TV'),
+    );
+    const activeMatched = typeMatched.filter((s) =>
+      state.discoveryPrefs.activeSources.includes(s.id),
+    );
+    return activeMatched.length > 0 ? activeMatched : typeMatched;
+  }, [state.customSources, state.discoveryPrefs.activeSources]);
+
+  const activeSourceId = useMemo(
+    () =>
+      routeState.sourceId ||
+      resolveActiveSourceId({
+        availableSources: availableAnimeSources,
+        preferredSourceId: state.discoveryPrefs.preferredAnimeSourceId,
+        isManga: false,
+      }),
+    [routeState.sourceId, availableAnimeSources, state.discoveryPrefs.preferredAnimeSourceId],
+  );
+  const activeSourceMeta = useMemo(
+    () => availableAnimeSources.find((s) => s.id === activeSourceId),
+    [availableAnimeSources, activeSourceId],
+  );
+  const effectiveSourceName = routeState.sourceName ?? activeSourceMeta?.name;
+  const effectiveSourceBaseUrl = routeState.sourceBaseUrl ?? activeSourceMeta?.baseUrl;
+  const effectiveSourceLang = routeState.sourceLang ?? activeSourceMeta?.lang;
+
   const rawServers = useMemo(
-    () => resolveVideoServers(routeState.sourceId, routeState.sourceName),
-    [routeState.sourceId, routeState.sourceName],
+    () => resolveVideoServers(activeSourceId, effectiveSourceName),
+    [activeSourceId, effectiveSourceName],
   );
+  const desiredAudioCategory = resolveAudioLanguageOption(
+    state.playerPrefs.audioLanguage,
+  ).serverCategory;
+  const persistedServerIdForSource = activeSourceId
+    ? state.playerPrefs.preferredServerBySource?.[activeSourceId]
+    : undefined;
   const [selectedServer, setSelectedServer] = useState<VideoServer>(
-    () => rawServers.find((s) => s.id === routeState.serverId) ?? rawServers[0],
+    () =>
+      resolvePreferredVideoServer({
+        servers: rawServers,
+        preferredServerId: persistedServerIdForSource,
+        routeServerId: routeState.serverId,
+        desiredAudioCategory,
+      }) ?? rawServers[0],
   );
+
+  useEffect(() => {
+    if (rawServers.length === 0) return;
+    const serverInSource = rawServers.some((s) => s.id === selectedServer?.id);
+    const serverMatchesCategory = selectedServer?.category === desiredAudioCategory;
+    if (!serverInSource || !serverMatchesCategory) {
+      const nextSrv = resolvePreferredVideoServer({
+        servers: rawServers,
+        preferredServerId: persistedServerIdForSource,
+        desiredAudioCategory,
+      });
+      if (nextSrv && nextSrv.id !== selectedServer?.id) {
+        setSelectedServer(nextSrv);
+      }
+    }
+  }, [
+    rawServers,
+    desiredAudioCategory,
+    persistedServerIdForSource,
+    selectedServer?.id,
+    selectedServer?.category,
+  ]);
 
   const [stream, setStream] = useState<VideoStream | null>(null);
   const [streamLoading, setStreamLoading] = useState(true);
@@ -144,9 +228,11 @@ export const PlayerPage: React.FC = () => {
       media,
       episode: currentEpisode,
       server: selectedServer,
-      sourceId: routeState.sourceId,
-      sourceName: routeState.sourceName,
-      sourceBaseUrl: routeState.sourceBaseUrl,
+      sourceId: activeSourceId,
+      sourceName: effectiveSourceName,
+      sourceBaseUrl: effectiveSourceBaseUrl,
+      sourceLang: effectiveSourceLang,
+      audioLanguage: state.playerPrefs.audioLanguage,
       overrideTitle: routeState.overrideTitle,
       bypassCache: streamRetryNonce > 0,
       signal: controller.signal,
@@ -172,9 +258,11 @@ export const PlayerPage: React.FC = () => {
     currentEpisode.id,
     currentEpisode.number,
     selectedServer.id,
-    routeState.sourceId,
-    routeState.sourceName,
-    routeState.sourceBaseUrl,
+    activeSourceId,
+    effectiveSourceName,
+    effectiveSourceBaseUrl,
+    effectiveSourceLang,
+    state.playerPrefs.audioLanguage,
     routeState.overrideTitle,
     streamRetryNonce,
   ]);
@@ -212,8 +300,8 @@ export const PlayerPage: React.FC = () => {
   const [speed, setSpeed] = useState(state.playerPrefs.defaultSpeed || 1);
   const [showControls, setShowControls] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [activeSubLang, setActiveSubLang] = useState<string>(
-    routeState.activeSubLang || 'en',
+  const [activeSubLang, setActiveSubLang] = useState<string>(() =>
+    resolvePersistedSubtitleLang(routeState.activeSubLang, state.playerPrefs.subtitleLanguage),
   );
   const [editedCuesMap, setEditedCuesMap] = useState<Record<string, SubtitleCue[]>>(
     routeState.editedCuesMap || {},
@@ -261,6 +349,7 @@ export const PlayerPage: React.FC = () => {
   } | null>(null);
 
   const [showEpisodeDrawer, setShowEpisodeDrawer] = useState(false);
+  const [showAudioLangMenu, setShowAudioLangMenu] = useState(false);
   const [showServerMenu, setShowServerMenu] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -454,6 +543,7 @@ export const PlayerPage: React.FC = () => {
     if (
       currentlyPlaying &&
       !showEpisodeDrawer &&
+      !showAudioLangMenu &&
       !showServerMenu &&
       !showSettingsMenu &&
       !showShortcuts
@@ -525,9 +615,10 @@ export const PlayerPage: React.FC = () => {
     media,
     episodes,
     epIndex,
-    sourceId: routeState.sourceId,
-    sourceName: routeState.sourceName,
-    sourceBaseUrl: routeState.sourceBaseUrl,
+    sourceId: activeSourceId,
+    sourceName: effectiveSourceName,
+    sourceBaseUrl: effectiveSourceBaseUrl,
+    sourceLang: effectiveSourceLang,
     overrideTitle: routeState.overrideTitle,
     serverId: selectedServer.id,
     currentTime,
@@ -544,9 +635,10 @@ export const PlayerPage: React.FC = () => {
     media,
     episodes,
     epIndex,
-    sourceId: routeState.sourceId,
-    sourceName: routeState.sourceName,
-    sourceBaseUrl: routeState.sourceBaseUrl,
+    sourceId: activeSourceId,
+    sourceName: effectiveSourceName,
+    sourceBaseUrl: effectiveSourceBaseUrl,
+    sourceLang: effectiveSourceLang,
     overrideTitle: routeState.overrideTitle,
     serverId: selectedServer.id,
     currentTime,
@@ -575,9 +667,10 @@ export const PlayerPage: React.FC = () => {
       media,
       episodes,
       episodeIndex: epIndex,
-      sourceId: routeState.sourceId,
-      sourceName: routeState.sourceName,
-      sourceBaseUrl: routeState.sourceBaseUrl,
+      sourceId: activeSourceId,
+      sourceName: effectiveSourceName,
+      sourceBaseUrl: effectiveSourceBaseUrl,
+      sourceLang: effectiveSourceLang,
       overrideTitle: routeState.overrideTitle,
       serverId: selectedServer.id,
       currentTime: liveTime,
@@ -652,6 +745,7 @@ export const PlayerPage: React.FC = () => {
         sourceId: snap.sourceId,
         sourceName: snap.sourceName,
         sourceBaseUrl: snap.sourceBaseUrl,
+        sourceLang: snap.sourceLang,
         overrideTitle: snap.overrideTitle,
         serverId: snap.serverId,
         currentTime: liveTime,
@@ -715,7 +809,7 @@ export const PlayerPage: React.FC = () => {
 
   const handleStagePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
-    if (showEpisodeDrawer || showServerMenu || showSettingsMenu || showShortcuts) return;
+    if (showEpisodeDrawer || showAudioLangMenu || showServerMenu || showSettingsMenu || showShortcuts) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest('button, input, select, a, [data-no-gesture="true"]')) return;
 
@@ -816,7 +910,7 @@ export const PlayerPage: React.FC = () => {
   };
 
   const handleStageWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (showEpisodeDrawer || showServerMenu || showSettingsMenu || showShortcuts) return;
+    if (showEpisodeDrawer || showAudioLangMenu || showServerMenu || showSettingsMenu || showShortcuts) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest('[data-no-gesture="true"]')) return;
     if (Math.abs(e.deltaY) < 2) return;
@@ -1014,22 +1108,57 @@ export const PlayerPage: React.FC = () => {
     () => resolveAvailableAudioOptions(stream?.availableAudios),
     [stream?.availableAudios],
   );
+  const selectableAudioOptions = useMemo(
+    () => buildSelectableAudioOptions(stream?.availableAudios, effectiveSourceLang),
+    [stream?.availableAudios, effectiveSourceLang],
+  );
+  const activeAudioLangOption = resolveAudioLanguageOption(
+    state.playerPrefs.audioLanguage,
+    selectableAudioOptions,
+  );
   const hasDubAudio = availableAudioOptions.some((a) => a.serverCategory === 'dub');
   const servers = useMemo(() => {
     if (!stream) return rawServers;
-    const filtered = rawServers.filter((s) => s.category !== 'dub' || hasDubAudio);
+    const filtered = rawServers.filter(
+      (s) => s.category !== 'dub' || hasDubAudio || desiredAudioCategory === 'dub',
+    );
     return filtered.length > 0 ? filtered : rawServers;
-  }, [rawServers, stream, hasDubAudio]);
+  }, [rawServers, stream, hasDubAudio, desiredAudioCategory]);
 
   useEffect(() => {
     if (!stream || !selectedServer) return;
-    if (selectedServer.category === 'dub' && !hasDubAudio) {
+    if (desiredAudioCategory === 'sub' && selectedServer.category === 'dub' && !hasDubAudio) {
       const subServer = servers.find((s) => s.category === 'sub') ?? servers[0];
       if (subServer && subServer.id !== selectedServer.id) {
         setSelectedServer(subServer);
       }
     }
-  }, [stream, hasDubAudio, selectedServer, servers]);
+  }, [stream, desiredAudioCategory, hasDubAudio, selectedServer, servers]);
+
+  const handleSelectAudioOption = (opt: AudioLanguageOption) => {
+    updatePlayerPrefs({ audioLanguage: opt.code as AudioLanguageCode });
+    const matchingServer = resolvePreferredVideoServer({
+      servers,
+      preferredServerId: persistedServerIdForSource,
+      desiredAudioCategory: opt.serverCategory,
+    });
+    if (matchingServer && matchingServer.id !== selectedServer?.id) {
+      setSelectedServer(matchingServer);
+    }
+  };
+
+  const handleSelectServer = (srv: VideoServer) => {
+    setSelectedServer(srv);
+    if (activeSourceId) {
+      setPreferredServerForSource(activeSourceId, srv.id);
+    }
+    updatePlayerPrefs({
+      audioLanguage: shouldAutoMatchAudioForServerChange(
+        state.playerPrefs.audioLanguage,
+        srv.category,
+      ),
+    });
+  };
 
   const title = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
   const backdropArtwork = currentEpisode.thumbnail || media.banner || media.cover || '';
@@ -1048,7 +1177,8 @@ export const PlayerPage: React.FC = () => {
     !autoplayBlocked &&
     (autoPlay || playing || pendingResumePlayRef.current);
   const isLoadingOrBuffering = !streamError && (streamLoading || isBuffering || awaitingAutoFrame);
-  const hasActiveOverlay = showServerMenu || showSettingsMenu || showEpisodeDrawer || showShortcuts;
+  const hasActiveOverlay =
+    showAudioLangMenu || showServerMenu || showSettingsMenu || showEpisodeDrawer || showShortcuts;
   const controlsVisible =
     isLoadingOrBuffering && !hasActiveOverlay
       ? false
@@ -1154,7 +1284,7 @@ export const PlayerPage: React.FC = () => {
                   onClick={() => {
                     const idx = servers.findIndex((s) => s.id === selectedServer.id);
                     const nextSrv = servers[(idx + 1) % servers.length];
-                    if (nextSrv) setSelectedServer(nextSrv);
+                    if (nextSrv) handleSelectServer(nextSrv);
                   }}
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/12 hover:bg-white/20 border border-white/15 text-xs font-bold text-white transition-colors"
                 >
@@ -1172,7 +1302,8 @@ export const PlayerPage: React.FC = () => {
         preload="auto"
         style={brightness < 1 ? { filter: `brightness(${brightness})` } : undefined}
         onClick={() => {
-          if (showServerMenu || showSettingsMenu || showEpisodeDrawer) {
+          if (showAudioLangMenu || showServerMenu || showSettingsMenu || showEpisodeDrawer) {
+            setShowAudioLangMenu(false);
             setShowServerMenu(false);
             setShowSettingsMenu(false);
             setShowEpisodeDrawer(false);
@@ -1423,9 +1554,30 @@ export const PlayerPage: React.FC = () => {
             </span>
             <button
               type="button"
+              data-testid="player-audio-lang-btn"
+              aria-label={`Audio language: ${activeAudioLangOption.label}`}
+              onClick={() => {
+                setShowAudioLangMenu((v) => !v);
+                setShowServerMenu(false);
+                setShowSettingsMenu(false);
+                setShowEpisodeDrawer(false);
+              }}
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-full backdrop-blur-2xl border text-xs font-bold shadow-xl transition-colors ${
+                showAudioLangMenu
+                  ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
+                  : 'bg-black/55 border-white/15 hover:bg-white/15 text-white'
+              }`}
+              title={`Audio: ${activeAudioLangOption.label}`}
+            >
+              <Languages className="w-3.5 h-3.5" />
+              <span className="font-mono-tabular">{activeAudioLangOption.shortLabel}</span>
+            </button>
+            <button
+              type="button"
               aria-label="Select stream server"
               onClick={() => {
                 setShowServerMenu((v) => !v);
+                setShowAudioLangMenu(false);
                 setShowSettingsMenu(false);
                 setShowEpisodeDrawer(false);
               }}
@@ -1440,6 +1592,7 @@ export const PlayerPage: React.FC = () => {
               aria-label="Episode list"
               onClick={() => {
                 setShowEpisodeDrawer((v) => !v);
+                setShowAudioLangMenu(false);
                 setShowSettingsMenu(false);
                 setShowServerMenu(false);
               }}
@@ -1458,6 +1611,7 @@ export const PlayerPage: React.FC = () => {
               aria-label="Player settings"
               onClick={() => {
                 setShowSettingsMenu((v) => !v);
+                setShowAudioLangMenu(false);
                 setShowServerMenu(false);
                 setShowEpisodeDrawer(false);
               }}
@@ -1487,7 +1641,7 @@ export const PlayerPage: React.FC = () => {
           className={`flex items-center justify-center gap-4 sm:gap-8 transition-all duration-300 ${
             gestureSeekState
               ? 'opacity-15 scale-90 pointer-events-none'
-              : showSettingsMenu || showServerMenu || showEpisodeDrawer
+              : showAudioLangMenu || showSettingsMenu || showServerMenu || showEpisodeDrawer
                 ? 'opacity-0 scale-90 pointer-events-none'
                 : controlsVisible
                   ? 'opacity-100 scale-100 pointer-events-auto'
@@ -1804,6 +1958,59 @@ export const PlayerPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Audio Language Selector Popover */}
+      {showAudioLangMenu && (
+        <div
+          data-no-gesture="true"
+          data-testid="player-audio-lang-popover"
+          onClick={(e) => e.stopPropagation()}
+          className="sx-player-popover absolute top-16 right-4 sm:right-6 z-40 w-68 rounded-3xl bg-zinc-950/92 backdrop-blur-2xl border border-white/15 p-3 space-y-1 shadow-2xl"
+        >
+          <div className="flex items-center justify-between px-2 pb-1">
+            <span className="text-xs font-extrabold">Audio Language</span>
+            <button
+              type="button"
+              onClick={() => setShowAudioLangMenu(false)}
+              className="p-1 rounded-full hover:bg-white/10"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {selectableAudioOptions.map((opt) => {
+            const active = opt.code === activeAudioLangOption.code;
+            return (
+              <button
+                key={opt.code}
+                type="button"
+                data-testid={`player-audio-option-${opt.code}`}
+                onClick={() => {
+                  handleSelectAudioOption(opt);
+                  setShowAudioLangMenu(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-2xl text-xs font-bold transition-colors ${
+                  active
+                    ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)]'
+                    : 'text-white/90 hover:bg-white/12'
+                }`}
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className="font-mono-tabular text-[10px] opacity-80 shrink-0">
+                    {opt.shortLabel}
+                  </span>
+                  <span className="truncate">{opt.label}</span>
+                  {opt.confirmed && !active && (
+                    <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-white/12 text-white/75 shrink-0">
+                      Detected
+                    </span>
+                  )}
+                </span>
+                {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Server Selector Popover */}
       {showServerMenu && (
         <div
@@ -1825,7 +2032,7 @@ export const PlayerPage: React.FC = () => {
               key={srv.id}
               type="button"
               onClick={() => {
-                setSelectedServer(srv);
+                handleSelectServer(srv);
                 setShowServerMenu(false);
               }}
               className={`w-full text-left px-3.5 py-2.5 rounded-2xl text-xs font-bold transition-colors ${
@@ -1860,14 +2067,7 @@ export const PlayerPage: React.FC = () => {
         }}
         servers={servers}
         selectedServerId={selectedServer.id}
-        onSelectServer={(srv) => {
-          setSelectedServer(srv);
-          if (srv.category === 'dub' && hasDubAudio) {
-            updatePlayerPrefs({ audioLanguage: 'en' });
-          } else if (srv.category === 'sub') {
-            updatePlayerPrefs({ audioLanguage: 'ja' });
-          }
-        }}
+        onSelectServer={handleSelectServer}
         hlsQualityOptions={hlsQualityOptions}
         selectedHlsLevel={selectedHlsLevel}
         onSelectHlsLevel={handleSelectHlsLevel}
@@ -1878,7 +2078,10 @@ export const PlayerPage: React.FC = () => {
         }
         activeSubLang={activeSubLang}
         activeTrackLang={activeTrack?.lang}
-        onChangeSubLang={(lang) => setActiveSubLang(lang)}
+        onChangeSubLang={(lang) => {
+          setActiveSubLang(lang);
+          updatePlayerPrefs({ subtitleLanguage: lang });
+        }}
         cues={effectiveCues}
         currentTime={currentTime}
         onUpdateCues={(nextCues) =>

@@ -1,4 +1,4 @@
-import { ExtensionRepo, MediaType, SourceInfo } from '../types/media';
+import type { ExtensionRepo, MediaType, SourceInfo } from '../types/media.ts';
 
 const PRIVATE_IPV4_RE =
   /^(?:10\.|127\.|169\.254\.|172\.(?:1[6-9]|2\d|3[0-1])\.|192\.168\.|0\.)/;

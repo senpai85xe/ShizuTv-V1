@@ -28,6 +28,7 @@ import {
   DEFAULT_SUBTITLE_ANIMATION,
   DEFAULT_SUBTITLE_BACKGROUND,
   DEFAULT_SUBTITLE_SIZE,
+  sanitizeAudioLanguageCode,
   SubtitleEdgeStylePref,
   SubtitleFontFamilyPref,
   SubtitleFontWeightPref,
@@ -91,6 +92,8 @@ export interface DiscoveryPrefs {
   mode: 'tracker' | 'source';
   metadataTrackerId: TrackerType | null; // null = Auto
   activeSources: string[];
+  preferredAnimeSourceId?: string;
+  preferredMangaSourceId?: string;
 }
 
 export type VideoFitMode = 'contain' | 'cover' | 'fill';
@@ -107,6 +110,8 @@ export interface PlayerPrefs {
   ambientGlow: boolean;
   batterySaver: boolean;
   audioLanguage: AudioLanguageCode;
+  subtitleLanguage?: string;
+  preferredServerBySource?: Record<string, string>;
   defaultSpeed: number;
   videoFit: VideoFitMode;
   subtitleEnabled: boolean;
@@ -211,6 +216,17 @@ export const DEFAULT_HOME_SECTIONS: HomeSection[] = [
 const STORAGE_KEY = 'shizutv_state_v2';
 const LEGACY_STORAGE_KEY = 'shonenx_state_v2';
 
+function persistStateSync(next: PersistedState): PersistedState {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
+  return next;
+}
+
 interface PersistedState {
   themePrefs: ThemePrefs;
   uiPrefs: UiPrefs;
@@ -258,6 +274,8 @@ const DEFAULT_STATE: PersistedState = {
     mode: 'tracker',
     metadataTrackerId: null,
     activeSources: INBUILT_SOURCES.map((s) => s.id),
+    preferredAnimeSourceId: 'shonenx-hls-inbuilt',
+    preferredMangaSourceId: 'shonenx-manga-inbuilt',
   },
   homeSections: DEFAULT_HOME_SECTIONS,
   playerPrefs: {
@@ -270,6 +288,8 @@ const DEFAULT_STATE: PersistedState = {
     ambientGlow: DEFAULT_AMBIENT_ENABLED,
     batterySaver: false,
     audioLanguage: 'ja',
+    subtitleLanguage: 'en',
+    preferredServerBySource: {},
     defaultSpeed: 1.0,
     videoFit: 'contain',
     subtitleEnabled: true,
@@ -376,10 +396,37 @@ function loadInitialState(): PersistedState {
         episodeChapterStyle: resolveEpisodeChapterStyle(parsed.uiPrefs?.episodeChapterStyle),
       },
       contentPrefs: { ...DEFAULT_STATE.contentPrefs, ...(parsed.contentPrefs || {}) },
-      discoveryPrefs: { ...DEFAULT_STATE.discoveryPrefs, ...(parsed.discoveryPrefs || {}) },
+      discoveryPrefs: {
+        ...DEFAULT_STATE.discoveryPrefs,
+        ...(parsed.discoveryPrefs || {}),
+        preferredAnimeSourceId:
+          typeof parsed.discoveryPrefs?.preferredAnimeSourceId === 'string' &&
+          parsed.discoveryPrefs.preferredAnimeSourceId.trim()
+            ? parsed.discoveryPrefs.preferredAnimeSourceId.trim()
+            : DEFAULT_STATE.discoveryPrefs.preferredAnimeSourceId,
+        preferredMangaSourceId:
+          typeof parsed.discoveryPrefs?.preferredMangaSourceId === 'string' &&
+          parsed.discoveryPrefs.preferredMangaSourceId.trim()
+            ? parsed.discoveryPrefs.preferredMangaSourceId.trim()
+            : DEFAULT_STATE.discoveryPrefs.preferredMangaSourceId,
+      },
       playerPrefs: (() => {
         const stored = parsed.playerPrefs || {};
-        const merged: PlayerPrefs = { ...DEFAULT_STATE.playerPrefs, ...stored };
+        const merged: PlayerPrefs = {
+          ...DEFAULT_STATE.playerPrefs,
+          ...stored,
+          audioLanguage: sanitizeAudioLanguageCode(stored.audioLanguage),
+          subtitleLanguage:
+            typeof stored.subtitleLanguage === 'string' && stored.subtitleLanguage.trim()
+              ? stored.subtitleLanguage.trim()
+              : DEFAULT_STATE.playerPrefs.subtitleLanguage,
+          preferredServerBySource:
+            stored.preferredServerBySource &&
+            typeof stored.preferredServerBySource === 'object' &&
+            !Array.isArray(stored.preferredServerBySource)
+              ? (stored.preferredServerBySource as Record<string, string>)
+              : {},
+        };
         if (stored.playerPrefsV !== 2) {
           return {
             ...merged,
@@ -485,6 +532,8 @@ interface AppContextValue {
   // Extensions & Sources
   allSources: SourceInfo[];
   toggleSourceActive: (sourceId: string) => void;
+  setPreferredSource: (mediaCategory: 'ANIME' | 'MANGA', sourceId: string) => void;
+  setPreferredServerForSource: (sourceId: string, serverId: string) => void;
   setSourceOrder: (order: string[]) => void;
   installCatalogExtension: (source: SourceInfo) => void;
   installAllCatalogExtensions: (sources: SourceInfo[]) => number;
@@ -687,7 +736,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const updateDiscoveryPrefs = useCallback((patch: Partial<DiscoveryPrefs>) => {
-    setState((prev) => ({ ...prev, discoveryPrefs: { ...prev.discoveryPrefs, ...patch } }));
+    setState((prev) =>
+      persistStateSync({
+        ...prev,
+        discoveryPrefs: { ...prev.discoveryPrefs, ...patch },
+      }),
+    );
   }, []);
 
   const setHomeSections = useCallback((homeSections: HomeSection[]) => {
@@ -696,13 +750,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updatePlayerPrefs = useCallback((patch: Partial<PlayerPrefs>) => {
     setState((prev) => {
-      const next = { ...prev, playerPrefs: { ...prev.playerPrefs, ...patch } };
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // Ignore storage quota errors
-      }
-      return next;
+      const next: PersistedState = {
+        ...prev,
+        playerPrefs: {
+          ...prev.playerPrefs,
+          ...patch,
+          ...(patch.audioLanguage !== undefined
+            ? { audioLanguage: sanitizeAudioLanguageCode(patch.audioLanguage) }
+            : {}),
+        },
+      };
+      return persistStateSync(next);
     });
   }, []);
 
@@ -1078,11 +1136,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const next = exists
         ? prev.discoveryPrefs.activeSources.filter((s) => s !== sourceId)
         : [...prev.discoveryPrefs.activeSources, sourceId];
-      return {
+      const nextPrefAnime =
+        exists && prev.discoveryPrefs.preferredAnimeSourceId === sourceId
+          ? 'shonenx-hls-inbuilt'
+          : prev.discoveryPrefs.preferredAnimeSourceId;
+      const nextPrefManga =
+        exists && prev.discoveryPrefs.preferredMangaSourceId === sourceId
+          ? 'shonenx-manga-inbuilt'
+          : prev.discoveryPrefs.preferredMangaSourceId;
+      return persistStateSync({
         ...prev,
-        discoveryPrefs: { ...prev.discoveryPrefs, activeSources: next },
-      };
+        discoveryPrefs: {
+          ...prev.discoveryPrefs,
+          activeSources: next,
+          preferredAnimeSourceId: nextPrefAnime,
+          preferredMangaSourceId: nextPrefManga,
+        },
+      });
     });
+  }, []);
+
+  const setPreferredSource = useCallback((mediaCategory: 'ANIME' | 'MANGA', sourceId: string) => {
+    const cleanId = sourceId.trim();
+    if (!cleanId) return;
+    setState((prev) =>
+      persistStateSync({
+        ...prev,
+        discoveryPrefs: {
+          ...prev.discoveryPrefs,
+          ...(mediaCategory === 'MANGA'
+            ? { preferredMangaSourceId: cleanId }
+            : { preferredAnimeSourceId: cleanId }),
+        },
+      }),
+    );
+  }, []);
+
+  const setPreferredServerForSource = useCallback((sourceId: string, serverId: string) => {
+    const cleanSource = sourceId.trim();
+    const cleanServer = serverId.trim();
+    if (!cleanSource || !cleanServer) return;
+    setState((prev) =>
+      persistStateSync({
+        ...prev,
+        playerPrefs: {
+          ...prev.playerPrefs,
+          preferredServerBySource: {
+            ...(prev.playerPrefs.preferredServerBySource || {}),
+            [cleanSource]: cleanServer,
+          },
+        },
+      }),
+    );
   }, []);
 
   const setSourceOrder = useCallback((order: string[]) => {
@@ -1151,24 +1256,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     (sourceId: string) => {
       const isInbuilt = INBUILT_SOURCES.some((s) => s.id === sourceId);
       setState((prev) => {
+        const nextPrefAnime =
+          prev.discoveryPrefs.preferredAnimeSourceId === sourceId
+            ? 'shonenx-hls-inbuilt'
+            : prev.discoveryPrefs.preferredAnimeSourceId;
+        const nextPrefManga =
+          prev.discoveryPrefs.preferredMangaSourceId === sourceId
+            ? 'shonenx-manga-inbuilt'
+            : prev.discoveryPrefs.preferredMangaSourceId;
         if (isInbuilt) {
-          return {
+          return persistStateSync({
             ...prev,
             discoveryPrefs: {
               ...prev.discoveryPrefs,
               activeSources: prev.discoveryPrefs.activeSources.filter((id) => id !== sourceId),
+              preferredAnimeSourceId: nextPrefAnime,
+              preferredMangaSourceId: nextPrefManga,
             },
-          };
+          });
         }
-        return {
+        const nextServerMap = { ...(prev.playerPrefs.preferredServerBySource || {}) };
+        delete nextServerMap[sourceId];
+        return persistStateSync({
           ...prev,
           customSources: prev.customSources.filter((s) => s.id !== sourceId),
           sourceOrder: prev.sourceOrder.filter((id) => id !== sourceId),
+          playerPrefs: {
+            ...prev.playerPrefs,
+            preferredServerBySource: nextServerMap,
+          },
           discoveryPrefs: {
             ...prev.discoveryPrefs,
             activeSources: prev.discoveryPrefs.activeSources.filter((id) => id !== sourceId),
+            preferredAnimeSourceId: nextPrefAnime,
+            preferredMangaSourceId: nextPrefManga,
           },
-        };
+        });
       });
       addLog(
         'INFO',
@@ -1316,7 +1439,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const removedSourceIds = target
         ? new Set(prev.customSources.filter((s) => s.repoUrl === target.url).map((s) => s.id))
         : new Set<string>();
-      return {
+      return persistStateSync({
         ...prev,
         repos: prev.repos.filter((r) => r.id !== id),
         repoCatalog: target
@@ -1330,8 +1453,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           activeSources: prev.discoveryPrefs.activeSources.filter(
             (srcId) => !removedSourceIds.has(srcId),
           ),
+          preferredAnimeSourceId:
+            prev.discoveryPrefs.preferredAnimeSourceId &&
+            removedSourceIds.has(prev.discoveryPrefs.preferredAnimeSourceId)
+              ? 'shonenx-hls-inbuilt'
+              : prev.discoveryPrefs.preferredAnimeSourceId,
+          preferredMangaSourceId:
+            prev.discoveryPrefs.preferredMangaSourceId &&
+            removedSourceIds.has(prev.discoveryPrefs.preferredMangaSourceId)
+              ? 'shonenx-manga-inbuilt'
+              : prev.discoveryPrefs.preferredMangaSourceId,
         },
-      };
+      });
     });
   }, []);
 
@@ -1385,6 +1518,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         themePrefs: state.themePrefs,
         uiPrefs: state.uiPrefs,
         contentPrefs: state.contentPrefs,
+        discoveryPrefs: state.discoveryPrefs,
         homeSections: state.homeSections,
         playerPrefs: state.playerPrefs,
         readerPrefs: state.readerPrefs,
@@ -1393,6 +1527,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         watchedItems: state.watchedItems,
         bookmarkedItems: state.bookmarkedItems,
         repos: state.repos,
+        customSources: state.customSources,
       },
     };
   }, [state]);
@@ -1402,13 +1537,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if ((manifest.app !== 'ShizuTv' && manifest.app !== 'ShonenX') || !manifest.data) {
         throw new Error('Invalid ShizuTv backup manifest');
       }
-      setState((prev) => ({
-        ...prev,
-        ...manifest.data,
-        themePrefs: { ...prev.themePrefs, ...(manifest.data.themePrefs || {}) },
-        uiPrefs: { ...prev.uiPrefs, ...(manifest.data.uiPrefs || {}) },
-        contentPrefs: { ...prev.contentPrefs, ...(manifest.data.contentPrefs || {}) },
-      }));
+      setState((prev) =>
+        persistStateSync({
+          ...prev,
+          ...manifest.data,
+          themePrefs: { ...prev.themePrefs, ...(manifest.data.themePrefs || {}) },
+          uiPrefs: { ...prev.uiPrefs, ...(manifest.data.uiPrefs || {}) },
+          contentPrefs: { ...prev.contentPrefs, ...(manifest.data.contentPrefs || {}) },
+          discoveryPrefs: { ...prev.discoveryPrefs, ...(manifest.data.discoveryPrefs || {}) },
+          playerPrefs: {
+            ...prev.playerPrefs,
+            ...(manifest.data.playerPrefs || {}),
+            audioLanguage: sanitizeAudioLanguageCode(
+              manifest.data.playerPrefs?.audioLanguage ?? prev.playerPrefs.audioLanguage,
+            ),
+          },
+        }),
+      );
       addLog('INFO', 'Backup', `Restored backup from ${manifest.exportedAt}`);
     },
     [addLog],
@@ -1466,6 +1611,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     clearCompletedDownloads,
     allSources,
     toggleSourceActive,
+    setPreferredSource,
+    setPreferredServerForSource,
     setSourceOrder,
     installCatalogExtension,
     installAllCatalogExtensions,
