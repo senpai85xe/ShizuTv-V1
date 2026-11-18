@@ -6,6 +6,7 @@ import {
   AlignJustify,
   ArrowDownUp,
   ArrowLeft,
+  ArrowLeftRight,
   Bookmark,
   BookmarkCheck,
   BookmarkPlus,
@@ -13,6 +14,7 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Download,
   ExternalLink,
@@ -23,16 +25,20 @@ import {
   Layers,
   LayoutGrid,
   List,
+  Loader2,
   MessageSquare,
   Minus,
   Play,
   Plus,
+  Puzzle,
   Radio,
   RectangleHorizontal,
   RefreshCw,
   Search,
   Send,
+  Settings,
   Share2,
+  Shield,
   Sparkles,
   Star,
   ThumbsUp,
@@ -51,11 +57,18 @@ import {
   UnifiedMedia,
 } from '../types/media';
 import { fetchMediaDetails } from '../services/discoveryService';
+import { searchAniList } from '../services/anilist';
+import { searchJikan } from '../services/jikan';
 import {
   INBUILT_SOURCES,
   resolveChaptersForMedia,
   resolveEpisodesForMedia,
 } from '../services/sourceEngine';
+import {
+  filterAvailableSources,
+  formatSourceAvailabilityLabel,
+  getSourceManagerBadge,
+} from '../utils/sourcePicker';
 import { SmartImage } from '../components/SmartImage';
 import { MediaCard } from '../components/MediaCard';
 import { EpisodeChapterList } from '../components/EpisodeChapterList';
@@ -138,7 +151,7 @@ export const DetailsPage: React.FC = () => {
       episodeIndex?: number;
       startTime?: number;
       resumePlaying?: boolean;
-      activeSubLang?: 'en' | 'ja';
+      activeSubLang?: string;
       editedCuesMap?: Record<string, import('../utils/inlinePlayer').SubtitleCue[]>;
     } | null) ?? null;
   const initialMedia = navMediaState?.media;
@@ -216,9 +229,16 @@ export const DetailsPage: React.FC = () => {
   const [selectedSourceId, setSelectedSourceId] = useState<string>(
     availableSources[0]?.id || 'shonenx-hls-inbuilt',
   );
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+  const [sourcePickerQuery, setSourcePickerQuery] = useState('');
   const [matchedTitleOverride, setMatchedTitleOverride] = useState<string>('');
+  const [matchedOverrideMedia, setMatchedOverrideMedia] = useState<UnifiedMedia | null>(null);
   const [wrongTitleOpen, setWrongTitleOpen] = useState(false);
   const [wrongTitleDraft, setWrongTitleDraft] = useState('');
+  const [wrongTitleViewMode, setWrongTitleViewMode] = useState<'list' | 'grid'>('list');
+  const [wrongTitleResults, setWrongTitleResults] = useState<UnifiedMedia[]>([]);
+  const [wrongTitleSearching, setWrongTitleSearching] = useState(false);
+  const [wrongTitleSearchError, setWrongTitleSearchError] = useState<string | null>(null);
 
   const [synopsisExpanded, setSynopsisExpanded] = useState(false);
   const [trackerOpen, setTrackerOpen] = useState(false);
@@ -318,6 +338,7 @@ export const DetailsPage: React.FC = () => {
     setOnlyDownloaded(false);
     setEpFilter('');
     setMatchedTitleOverride('');
+    setMatchedOverrideMedia(null);
     if (isRouteChanged) {
       setHasPickedInlineEpisode(false);
       setInlineEpisodeIndex(0);
@@ -346,6 +367,7 @@ export const DetailsPage: React.FC = () => {
       sourceId: selectedSourceId,
       sourceName: sourceMeta?.name,
       overrideTitle: matchedTitleOverride.trim() || undefined,
+      overrideMedia: matchedOverrideMedia,
     })
       .then((eps) => {
         if (cancelled) return;
@@ -371,8 +393,73 @@ export const DetailsPage: React.FC = () => {
     media.streamingEpisodes?.length,
     selectedSourceId,
     matchedTitleOverride,
+    matchedOverrideMedia?.id,
     episodeRefreshNonce,
   ]);
+
+  // Live title search inside "Wrong Title?" modal
+  useEffect(() => {
+    if (!wrongTitleOpen) return;
+    const query = wrongTitleDraft.trim();
+    if (!query) {
+      setWrongTitleResults([]);
+      setWrongTitleSearching(false);
+      setWrongTitleSearchError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setWrongTitleSearching(true);
+    setWrongTitleSearchError(null);
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const targetSearchType: MediaType = isManga ? 'MANGA' : 'ANIME';
+        let items: UnifiedMedia[] = [];
+        try {
+          const al = await searchAniList({
+            query,
+            type: targetSearchType,
+            page: 1,
+            perPage: 12,
+          });
+          items = al.items;
+        } catch {
+          const jk = await searchJikan(query, targetSearchType, 1);
+          items = jk.items.slice(0, 12);
+        }
+        if (!cancelled) {
+          setWrongTitleResults(items);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setWrongTitleResults([]);
+          setWrongTitleSearchError(
+            err instanceof Error ? err.message : 'Unable to search titles right now.',
+          );
+        }
+      } finally {
+        if (!cancelled) setWrongTitleSearching(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [wrongTitleOpen, wrongTitleDraft, isManga]);
+
+  useEffect(() => {
+    if (!sourcePickerOpen && !wrongTitleOpen && !trailerOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (wrongTitleOpen) setWrongTitleOpen(false);
+      else if (sourcePickerOpen) setSourcePickerOpen(false);
+      else if (trailerOpen) setTrailerOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [sourcePickerOpen, wrongTitleOpen, trailerOpen]);
 
   const title = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
   useDocumentTitle(
@@ -383,6 +470,18 @@ export const DetailsPage: React.FC = () => {
   const effectiveSourceTitle = matchedTitleOverride.trim() || title;
   const activeSource =
     availableSources.find((s) => s.id === selectedSourceId) ?? availableSources[0];
+  const filteredSourcePickerList = useMemo(
+    () => filterAvailableSources(availableSources, sourcePickerQuery),
+    [availableSources, sourcePickerQuery],
+  );
+  const sourceAvailabilityLabel = formatSourceAvailabilityLabel({
+    mediaType: media.type,
+    resolving: resolvingEpisodes,
+    resolvedCount: isManga ? chapters.length : episodes.length,
+    expectedCount: isManga ? media.chapters : matchedOverrideMedia?.episodes ?? media.episodes,
+    status: matchedOverrideMedia?.status ?? media.status,
+    hasOverride: Boolean(matchedTitleOverride.trim()),
+  });
   const comments = state.comments[media.id] || [];
   const totalCount = isManga
     ? chapters.length || media.chapters || 0
@@ -622,6 +721,8 @@ export const DetailsPage: React.FC = () => {
               episodeIndex={activeInlineEpisodeIndex}
               sourceId={selectedSourceId}
               sourceName={activeSource?.name}
+              sourceBaseUrl={activeSource?.baseUrl}
+              overrideTitle={matchedTitleOverride.trim() || undefined}
               playSignal={inlinePlaySignal}
               initialTime={navMediaState?.startTime ?? null}
               initialResumePlaying={Boolean(navMediaState?.resumePlaying)}
@@ -1333,47 +1434,93 @@ export const DetailsPage: React.FC = () => {
             className={`${tabTransitionClass} space-y-4`}
           >
             {/* Source / Extension Selector Card */}
-            <section className={`${frostedCardClass} p-4 space-y-3`}>
-              <div className="flex flex-wrap items-center justify-between gap-2.5">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <span className="w-9 h-9 rounded-2xl bg-[var(--sx-on-surface)]/8 dark:bg-white/10 flex items-center justify-center shrink-0">
-                    <Sparkles className="w-4 h-4 text-[var(--sx-primary)]" />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-extrabold truncate">
-                        {activeSource?.name || 'ShizuTv Core'}
+            <section className={`${frostedCardClass} p-3.5 sm:p-4 space-y-3`}>
+              {/* Top Row: Active Extension Card + Quick Settings / Diagnose / Picker Trigger */}
+              <div className="flex items-center justify-between gap-2.5">
+                <button
+                  type="button"
+                  data-testid="details-source-select"
+                  onClick={() => {
+                    setSourcePickerQuery('');
+                    setSourcePickerOpen(true);
+                  }}
+                  className="flex items-center gap-3 min-w-0 flex-1 text-left group"
+                >
+                  <div className="relative w-11 h-11 rounded-2xl shrink-0 bg-[var(--sx-on-surface)]/8 dark:bg-white/10 border border-white/35 dark:border-white/12 flex items-center justify-center overflow-visible">
+                    {activeSource?.iconUrl ? (
+                      <img
+                        src={activeSource.iconUrl}
+                        alt={activeSource.name}
+                        className="w-full h-full object-cover rounded-2xl"
+                      />
+                    ) : (
+                      <span className="text-sm font-black text-[var(--sx-primary)]">
+                        {(activeSource?.name || 'S').slice(0, 1).toUpperCase()}
                       </span>
-                      <span className="px-2 py-0.5 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 text-[10px] font-extrabold uppercase">
+                    )}
+                    <span className="w-4 h-4 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] absolute -bottom-1 -right-1 flex items-center justify-center shadow-sm">
+                      {isManga ? (
+                        <BookOpen className="w-2.5 h-2.5" />
+                      ) : (
+                        <Play className="w-2.5 h-2.5 fill-current ml-0.5" />
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="text-xs sm:text-sm font-extrabold truncate group-hover:text-[var(--sx-primary)] transition-colors">
+                      {activeSource?.name || 'ShizuTv Core'}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/14 text-[var(--sx-primary)] text-[10px] font-extrabold">
+                        {getSourceManagerBadge(activeSource)}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-[var(--sx-on-surface)]/8 dark:bg-white/10 text-[10px] font-extrabold uppercase">
                         {activeSource?.lang || 'EN'}
                       </span>
+                      {activeSource?.isNsfw && (
+                        <span className="px-2 py-0.5 rounded-md bg-red-500/15 text-red-700 dark:text-red-300 text-[10px] font-extrabold uppercase">
+                          NSFW
+                        </span>
+                      )}
                     </div>
-                    <p className="text-[11px] text-[var(--sx-on-surface-muted)] truncate">
-                      Found: {effectiveSourceTitle}
-                      {!isManga &&
-                        (resolvingEpisodes
-                          ? ' · Fetching real episodes...'
-                          : episodes.length > 0
-                            ? ` · ${episodes.length} episodes`
-                            : '')}
-                    </p>
                   </div>
-                </div>
+                </button>
 
-                <div className="flex flex-wrap items-center gap-2 min-w-0 w-full sm:w-auto">
-                  <select
-                    aria-label="Select stream source"
-                    data-testid="details-source-select"
-                    value={selectedSourceId}
-                    onChange={(e) => setSelectedSourceId(e.target.value)}
-                    className="min-w-0 flex-1 sm:flex-initial max-w-full px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold focus:outline-none focus:border-[var(--sx-primary)] truncate"
+                <div className="flex items-center gap-1 shrink-0">
+                  {!isManga && (
+                    <button
+                      type="button"
+                      data-testid="diagnose-episodes-btn"
+                      onClick={() =>
+                        navigate('/settings/diagnostics', {
+                          state: {
+                            media: matchedOverrideMedia ?? media,
+                            sourceId: selectedSourceId,
+                            sourceName: activeSource?.name,
+                            overrideTitle: matchedTitleOverride.trim() || undefined,
+                          },
+                        })
+                      }
+                      title="Episode Fetch Diagnostics"
+                      aria-label="Diagnose episode fetch"
+                      className="w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors"
+                    >
+                      <Shield className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    data-testid="source-settings-btn"
+                    onClick={() => navigate('/settings/extensions')}
+                    title="Extension & Source Settings"
+                    aria-label="Source settings"
+                    className="w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors"
                   >
-                    {availableSources.map((src) => (
-                      <option key={src.id} value={src.id}>
-                        {src.name}
-                      </option>
-                    ))}
-                  </select>
+                    <Settings className="w-3.5 h-3.5" />
+                  </button>
+
                   {!isManga && (
                     <button
                       type="button"
@@ -1382,46 +1529,56 @@ export const DetailsPage: React.FC = () => {
                       onClick={() => setEpisodeRefreshNonce((n) => n + 1)}
                       title="Refresh episode list"
                       aria-label="Refresh episode list"
-                      className="shrink-0 w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors disabled:opacity-50"
+                      className="w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors disabled:opacity-50"
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${resolvingEpisodes ? 'animate-spin' : ''}`} />
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${resolvingEpisodes ? 'animate-spin' : ''}`}
+                      />
                     </button>
                   )}
-                  {!isManga && (
-                    <button
-                      type="button"
-                      data-testid="diagnose-episodes-btn"
-                      onClick={() =>
-                        navigate('/settings/diagnostics', {
-                          state: {
-                            media,
-                            sourceId: selectedSourceId,
-                            sourceName: activeSource?.name,
-                            overrideTitle: matchedTitleOverride.trim() || undefined,
-                          },
-                        })
-                      }
-                      title="Open Episode Fetch Diagnostics"
-                      aria-label="Diagnose episode fetch"
-                      className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold hover:border-[var(--sx-primary)] transition-colors"
-                    >
-                      <Activity className="w-3 h-3 text-[var(--sx-primary)]" />
-                      <span>Diagnose</span>
-                    </button>
-                  )}
+
                   <button
                     type="button"
-                    data-testid="wrong-title-btn"
+                    data-testid="open-source-picker-btn"
                     onClick={() => {
-                      setWrongTitleDraft(effectiveSourceTitle);
-                      setWrongTitleOpen(true);
+                      setSourcePickerQuery('');
+                      setSourcePickerOpen(true);
                     }}
-                    className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold hover:border-[var(--sx-primary)] transition-colors"
+                    title="Change source"
+                    aria-label="Change source"
+                    className="w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors"
                   >
-                    <Wrench className="w-3 h-3" />
-                    <span>Wrong Title?</span>
+                    <ChevronDown className="w-4 h-4" />
                   </button>
                 </div>
+              </div>
+
+              {/* Bottom Row: Matched Title, Source Availability & Wrong Title Button */}
+              <div className="pt-2.5 border-t border-[var(--sx-outline)] flex flex-wrap items-center justify-between gap-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-extrabold truncate">
+                    Found: {effectiveSourceTitle}
+                  </p>
+                  <p
+                    data-testid="source-availability-text"
+                    className="text-[11px] font-semibold text-[var(--sx-on-surface-muted)] truncate tabular-nums mt-0.5"
+                  >
+                    {sourceAvailabilityLabel}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  data-testid="wrong-title-btn"
+                  onClick={() => {
+                    setWrongTitleDraft(effectiveSourceTitle);
+                    setWrongTitleOpen(true);
+                  }}
+                  className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold hover:border-[var(--sx-primary)] transition-colors"
+                >
+                  <ArrowLeftRight className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
+                  <span>Wrong Title?</span>
+                </button>
               </div>
             </section>
 
@@ -2183,92 +2340,413 @@ export const DetailsPage: React.FC = () => {
             : modalContent;
         })()}
 
-      {/* Wrong Title / Alternate Source Match Modal */}
+      {/* Select Anime / Manga Source Bottom Sheet Modal */}
+      {sourcePickerOpen &&
+        (() => {
+          const modalContent = (
+            <div
+              className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-md p-0 sm:p-4 sx-backdrop-enter"
+              onClick={() => setSourcePickerOpen(false)}
+              role="dialog"
+              aria-modal="true"
+              aria-label={isManga ? 'Select Manga Source' : 'Select Anime Source'}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full sm:max-w-lg max-h-[82vh] flex flex-col bg-[var(--sx-surface-container)]/92 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 space-y-4 shadow-2xl sx-sheet-enter"
+              >
+                <div className="w-10 h-1 rounded-full bg-[var(--sx-on-surface-muted)]/30 mx-auto shrink-0 sm:hidden" />
+
+                <div className="flex items-center justify-between gap-3 shrink-0">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Puzzle className="w-5 h-5 text-[var(--sx-primary)] shrink-0" />
+                    <h2 className="text-base sm:text-lg font-extrabold truncate">
+                      {isManga ? 'Select Manga Source' : 'Select Anime Source'}
+                    </h2>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="px-2.5 py-1 rounded-full bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-[11px] font-extrabold tabular-nums">
+                      {availableSources.length} installed
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSourcePickerOpen(false)}
+                      aria-label="Close source selector"
+                      className="p-1.5 rounded-full hover:bg-[var(--sx-surface-high)]"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Search Sources Input */}
+                <div className="relative shrink-0">
+                  <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    data-testid="source-picker-search"
+                    value={sourcePickerQuery}
+                    onChange={(e) => setSourcePickerQuery(e.target.value)}
+                    placeholder="Search sources..."
+                    autoFocus
+                    className="w-full pl-10 pr-9 py-2.5 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-semibold outline-none focus:border-[var(--sx-primary)]"
+                  />
+                  {sourcePickerQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSourcePickerQuery('')}
+                      aria-label="Clear source search"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Source List */}
+                <div
+                  data-testid="source-picker-list"
+                  className="flex-1 overflow-y-auto space-y-2 pr-0.5"
+                >
+                  {filteredSourcePickerList.length === 0 ? (
+                    <div className="py-8 text-center text-xs text-[var(--sx-on-surface-muted)]">
+                      No installed sources match "{sourcePickerQuery}".
+                    </div>
+                  ) : (
+                    filteredSourcePickerList.map((src) => {
+                      const isSelected = src.id === selectedSourceId;
+                      return (
+                        <button
+                          key={src.id}
+                          type="button"
+                          data-testid={`source-picker-item-${src.id}`}
+                          onClick={() => {
+                            setSelectedSourceId(src.id);
+                            setSourcePickerOpen(false);
+                          }}
+                          className={`w-full p-3 rounded-2xl border flex items-center justify-between gap-3 text-left transition-all ${
+                            isSelected
+                              ? 'bg-[var(--sx-primary)]/10 border-[var(--sx-primary)] shadow-sm'
+                              : 'bg-[var(--sx-surface-high)]/65 border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className="relative w-11 h-11 rounded-2xl shrink-0 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] flex items-center justify-center">
+                              {src.iconUrl ? (
+                                <img
+                                  src={src.iconUrl}
+                                  alt={src.name}
+                                  className="w-full h-full object-cover rounded-2xl"
+                                />
+                              ) : (
+                                <span className="text-sm font-black text-[var(--sx-primary)]">
+                                  {src.name.slice(0, 1).toUpperCase()}
+                                </span>
+                              )}
+                              <span className="w-4 h-4 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] absolute -bottom-1 -right-1 flex items-center justify-center">
+                                {isManga ? (
+                                  <BookOpen className="w-2.5 h-2.5" />
+                                ) : (
+                                  <Play className="w-2.5 h-2.5 fill-current ml-0.5" />
+                                )}
+                              </span>
+                            </div>
+
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="text-sm font-extrabold truncate">{src.name}</div>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/14 text-[var(--sx-primary)] text-[10px] font-extrabold">
+                                  {getSourceManagerBadge(src)}
+                                </span>
+                                <span className="px-2 py-0.5 rounded-md bg-[var(--sx-surface-container)] text-[10px] font-extrabold uppercase">
+                                  {src.lang}
+                                </span>
+                                {src.isNsfw && (
+                                  <span className="px-2 py-0.5 rounded-md bg-red-500/15 text-red-700 dark:text-red-300 text-[10px] font-extrabold uppercase">
+                                    NSFW
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <span
+                            className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 border transition-colors ${
+                              isSelected
+                                ? 'bg-[var(--sx-primary)] border-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                                : 'border-[var(--sx-outline)] text-transparent'
+                            }`}
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Footer Shortcut to Manage Extensions */}
+                <div className="pt-2 border-t border-[var(--sx-outline)] flex items-center justify-between gap-2 shrink-0">
+                  <span className="text-[11px] text-[var(--sx-on-surface-muted)]">
+                    Need more sources? Add Aniyomi / Mangayomi repos.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSourcePickerOpen(false);
+                      navigate('/settings/extensions');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    <span>Extensions</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+          return typeof document !== 'undefined'
+            ? createPortal(modalContent, document.body)
+            : modalContent;
+        })()}
+
+      {/* Wrong Title / Source Title Search Modal */}
       {wrongTitleOpen &&
         (() => {
+          const aliasChips = Array.from(
+            new Set(
+              [
+                media.title.english,
+                media.title.romaji,
+                media.title.native,
+                ...(media.synonyms || []).slice(0, 3),
+              ]
+                .map((t) => (typeof t === 'string' ? t.trim() : ''))
+                .filter(Boolean),
+            ),
+          );
+
           const modalContent = (
             <div
               className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-md p-0 sm:p-4 sx-backdrop-enter"
               onClick={() => setWrongTitleOpen(false)}
               role="dialog"
               aria-modal="true"
-              aria-label="Fix Matched Source Title"
+              aria-label="Search Matched Source Title"
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="w-full sm:max-w-md bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl sx-sheet-enter"
+                className="w-full sm:max-w-lg max-h-[84vh] flex flex-col bg-[var(--sx-surface-container)]/92 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 space-y-3.5 shadow-2xl sx-sheet-enter"
               >
-                <div className="flex items-center justify-between">
-                  <h2 className="text-base font-extrabold">Fix Matched Title</h2>
+                <div className="w-10 h-1 rounded-full bg-[var(--sx-on-surface-muted)]/30 mx-auto shrink-0 sm:hidden" />
+
+                {/* Top Search Bar + List/Grid Layout Toggle (matching reference) */}
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="relative flex-1 min-w-0">
+                    <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      data-testid="wrong-title-search-input"
+                      value={wrongTitleDraft}
+                      onChange={(e) => setWrongTitleDraft(e.target.value)}
+                      placeholder={`Search title on ${activeSource?.name || 'source'}...`}
+                      autoFocus
+                      className="w-full pl-10 pr-9 py-2.5 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-semibold outline-none focus:border-[var(--sx-primary)]"
+                    />
+                    {wrongTitleSearching ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-[var(--sx-primary)] absolute right-3 top-1/2 -translate-y-1/2" />
+                    ) : (
+                      wrongTitleDraft && (
+                        <button
+                          type="button"
+                          onClick={() => setWrongTitleDraft('')}
+                          aria-label="Clear title search"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )
+                    )}
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => setWrongTitleOpen(false)}
-                    className="p-2 rounded-full hover:bg-[var(--sx-surface-high)]"
+                    data-testid="wrong-title-view-toggle"
+                    onClick={() =>
+                      setWrongTitleViewMode((m) => (m === 'list' ? 'grid' : 'list'))
+                    }
+                    title={
+                      wrongTitleViewMode === 'list' ? 'Switch to grid view' : 'Switch to list view'
+                    }
+                    aria-label="Toggle title results layout"
+                    className="w-10 h-10 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] flex items-center justify-center shrink-0 hover:border-[var(--sx-primary)] transition-colors"
                   >
-                    <X className="w-5 h-5" />
+                    {wrongTitleViewMode === 'list' ? (
+                      <LayoutGrid className="w-4 h-4 text-[var(--sx-primary)]" />
+                    ) : (
+                      <List className="w-4 h-4 text-[var(--sx-primary)]" />
+                    )}
                   </button>
                 </div>
-                <p className="text-xs text-[var(--sx-on-surface-muted)]">
-                  Override the search query used by{' '}
-                  <span className="font-bold text-[var(--sx-on-surface)]">
-                    {activeSource?.name}
-                  </span>{' '}
-                  or pick one of the known titles below.
-                </p>
 
-                <input
-                  type="text"
-                  value={wrongTitleDraft}
-                  onChange={(e) => setWrongTitleDraft(e.target.value)}
-                  placeholder="Enter alternate anime title..."
-                  className="w-full px-4 py-2.5 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-semibold focus:outline-none focus:border-[var(--sx-primary)]"
-                />
+                {/* Quick Known Aliases */}
+                {aliasChips.length > 0 && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 shrink-0">
+                    {aliasChips.map((cand, idx) => (
+                      <button
+                        key={`${cand}-${idx}`}
+                        type="button"
+                        onClick={() => setWrongTitleDraft(cand)}
+                        className="px-2.5 py-1 rounded-full bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-[11px] font-bold whitespace-nowrap hover:border-[var(--sx-primary)] transition-colors"
+                      >
+                        {cand}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
-                <div className="flex flex-wrap gap-1.5">
-                  {Array.from(
-                    new Set(
-                      [
-                        media.title.english,
-                        media.title.romaji,
-                        media.title.native,
-                        ...(media.synonyms || []).slice(0, 3),
-                      ]
-                        .map((t) => (typeof t === 'string' ? t.trim() : ''))
-                        .filter(Boolean),
-                    ),
-                  ).map((cand, idx) => (
-                    <button
-                      key={`${cand}-${idx}`}
-                      type="button"
-                      onClick={() => setWrongTitleDraft(cand)}
-                      className="px-2.5 py-1 rounded-full bg-[var(--sx-surface-high)] text-[11px] font-bold hover:text-[var(--sx-primary)] transition-colors"
-                    >
-                      {cand}
-                    </button>
-                  ))}
+                {/* Search Results List / Grid */}
+                <div
+                  data-testid="wrong-title-results"
+                  className="flex-1 overflow-y-auto rounded-2xl bg-[var(--sx-surface-high)]/45 border border-[var(--sx-outline)]"
+                >
+                  {wrongTitleSearching && wrongTitleResults.length === 0 ? (
+                    <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-[var(--sx-on-surface-muted)]">
+                      <Loader2 className="w-5 h-5 animate-spin text-[var(--sx-primary)]" />
+                      <span>Searching "{wrongTitleDraft}"...</span>
+                    </div>
+                  ) : wrongTitleSearchError ? (
+                    <div className="p-6 text-center text-xs text-red-700 dark:text-red-300">
+                      {wrongTitleSearchError}
+                    </div>
+                  ) : wrongTitleResults.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-[var(--sx-on-surface-muted)]">
+                      {wrongTitleDraft.trim()
+                        ? `No titles matched "${wrongTitleDraft.trim()}". Try Romaji or Japanese title.`
+                        : 'Type an anime title to search matching entries.'}
+                    </div>
+                  ) : wrongTitleViewMode === 'list' ? (
+                    <div className="divide-y divide-[var(--sx-outline)]">
+                      {wrongTitleResults.map((item) => {
+                        const itemTitle = getPreferredTitle(
+                          item.title,
+                          state.contentPrefs.titlePreference,
+                        );
+                        const metaParts = [
+                          item.format,
+                          item.year ? String(item.year) : null,
+                          item.episodes
+                            ? `${item.episodes} eps`
+                            : item.chapters
+                              ? `${item.chapters} ch`
+                              : null,
+                        ].filter(Boolean);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            data-testid={`wrong-title-result-${item.id}`}
+                            onClick={() => {
+                              setMatchedOverrideMedia(item);
+                              setMatchedTitleOverride(itemTitle);
+                              setWrongTitleOpen(false);
+                            }}
+                            className="w-full p-3 flex items-center gap-3 text-left hover:bg-[var(--sx-primary)]/8 transition-colors"
+                          >
+                            <SmartImage
+                              src={item.cover}
+                              alt={itemTitle}
+                              fallbackTitle={itemTitle}
+                              className="w-12 h-16 rounded-xl shrink-0"
+                            />
+                            <div className="min-w-0 flex-1 space-y-0.5">
+                              <p className="text-xs sm:text-sm font-extrabold line-clamp-2">
+                                {itemTitle}
+                              </p>
+                              {metaParts.length > 0 && (
+                                <p className="text-[11px] text-[var(--sx-on-surface-muted)] tabular-nums truncate">
+                                  {metaParts.join(' · ')}
+                                </p>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-2.5">
+                      {wrongTitleResults.map((item) => {
+                        const itemTitle = getPreferredTitle(
+                          item.title,
+                          state.contentPrefs.titlePreference,
+                        );
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            data-testid={`wrong-title-result-${item.id}`}
+                            onClick={() => {
+                              setMatchedOverrideMedia(item);
+                              setMatchedTitleOverride(itemTitle);
+                              setWrongTitleOpen(false);
+                            }}
+                            className="text-left group space-y-1.5 p-1.5 rounded-xl hover:bg-[var(--sx-primary)]/10 transition-colors"
+                          >
+                            <div className="relative aspect-[2/3] rounded-xl overflow-hidden border border-[var(--sx-outline)] bg-[var(--sx-surface-container)]">
+                              <SmartImage
+                                src={item.cover}
+                                alt={itemTitle}
+                                fallbackTitle={itemTitle}
+                                className="w-full h-full group-hover:scale-105 transition-transform duration-200"
+                              />
+                              {(item.episodes || item.chapters) && (
+                                <span className="absolute bottom-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-sm text-white text-[10px] font-bold tabular-nums shadow-sm">
+                                  {item.episodes ? `${item.episodes} eps` : `${item.chapters} ch`}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs font-bold line-clamp-2 leading-snug">
+                              {itemTitle}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex justify-end gap-2 pt-2 border-t border-[var(--sx-outline)]">
+                <div className="flex items-center justify-between gap-2 pt-1 shrink-0">
                   <button
                     type="button"
                     onClick={() => {
                       setMatchedTitleOverride('');
+                      setMatchedOverrideMedia(null);
                       setWrongTitleOpen(false);
                     }}
-                    className="px-4 py-2 rounded-full bg-[var(--sx-surface-high)] text-xs font-bold"
+                    className="px-4 py-2 rounded-full bg-[var(--sx-surface-high)] text-xs font-bold hover:border-[var(--sx-primary)] border border-[var(--sx-outline)]"
                   >
-                    Reset
+                    Reset Match
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMatchedTitleOverride(wrongTitleDraft.trim());
-                      setWrongTitleOpen(false);
-                    }}
-                    className="px-5 py-2 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-extrabold"
-                  >
-                    Apply Match
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setWrongTitleOpen(false)}
+                      className="px-3.5 py-2 rounded-full bg-[var(--sx-surface-high)] text-xs font-bold"
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMatchedOverrideMedia(null);
+                        setMatchedTitleOverride(wrongTitleDraft.trim());
+                        setWrongTitleOpen(false);
+                      }}
+                      className="px-4 py-2 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-extrabold"
+                    >
+                      Apply Query
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

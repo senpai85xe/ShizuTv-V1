@@ -8,6 +8,9 @@ export interface PipSessionState {
   episodes: UnifiedEpisode[];
   episodeIndex: number;
   sourceId?: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  overrideTitle?: string;
   serverId?: string;
   currentTime: number;
   duration: number;
@@ -15,7 +18,7 @@ export interface PipSessionState {
   speed: number;
   muted: boolean;
   volume: number;
-  activeSubLang: 'en' | 'ja';
+  activeSubLang: string;
   editedCuesMap?: Record<string, SubtitleCue[]>;
 }
 

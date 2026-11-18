@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { resolveFallbackEpisodesCount } from '../services/sourceEngine';
 import {
   buildHlsQualityOptions,
+  buildSubtitleBoxCssProps,
   clampEpisodeIndex,
   computeAutoSkipTarget,
   computeFullscreenRotationStage,
@@ -17,15 +18,18 @@ import {
   getNextVideoFitMode,
   getVideoFitBadgeLabel,
   getVideoFitClass,
+  parseSubtitleSegments,
   parseSubtitleText,
   PLAYBACK_SPEED_OPTIONS,
   resolveAudioLanguageOption,
+  resolveAvailableAudioOptions,
   resolveBatterySaverHlsLevel,
   resolveEffectiveStreamQuality,
   resolvePreferredHlsLevel,
   shouldAutoStartPlayback,
   shouldHideBarsForOverlay,
   shouldShowFullscreenControls,
+  stripSubtitleTags,
 } from './inlinePlayer';
 
 test('clampEpisodeIndex clamps negative, NaN, and overflowing indices safely', () => {
@@ -254,5 +258,72 @@ test('Battery Saver caps stream quality and selects <=480p HLS levels', () => {
   ];
   assert.equal(resolveBatterySaverHlsLevel(highOnlyLevels, '1080p', true), 0);
 });
+
+test('parseSubtitleText cleans VTT blocks/ASS tags/entities and parseSubtitleSegments preserves italics', () => {
+  const vtt = `WEBVTT
+Kind: captions
+
+NOTE Ignore this block
+
+STYLE
+::cue { color: yellow; }
+
+1
+00:00:05.000 --> 00:00:08.500 align:center
+<i>It all began</i> &amp; more
+
+2
+00:00:06.000 --> 00:00:08.000
+{\\an8}<c.yellow>HERO SIGN</c>
+`;
+  const cues = parseSubtitleText(vtt);
+  assert.equal(cues.length, 2);
+  assert.equal(cues[0].text, '<i>It all began</i> & more');
+  assert.equal(cues[1].text, 'HERO SIGN');
+  assert.equal(stripSubtitleTags(cues[0].text), 'It all began & more');
+
+  const segments = parseSubtitleSegments(cues[0].text);
+  assert.deepEqual(segments, [
+    { text: 'It all began', italic: true, bold: false, underline: false },
+    { text: ' & more', italic: false, bold: false, underline: false },
+  ]);
+
+  const activeMerged = findActiveSubtitleCue(cues, 6.5, 0);
+  assert.equal(activeMerged?.text, '<i>It all began</i> & more\nHERO SIGN');
+});
+
+test('resolveAvailableAudioOptions returns only source-confirmed tracks and falls back safely', () => {
+  const subOnly = resolveAvailableAudioOptions(undefined);
+  assert.deepEqual(subOnly.map((a) => a.code), ['ja']);
+
+  const subAndDub = resolveAvailableAudioOptions([
+    { code: 'ja', shortLabel: 'JP', label: 'Japanese (Original)', serverCategory: 'sub' },
+    { code: 'en', shortLabel: 'EN', label: 'English (Dub)', serverCategory: 'dub' },
+  ]);
+  assert.deepEqual(subAndDub.map((a) => a.code), ['ja', 'en']);
+  assert.equal(resolveAudioLanguageOption('hi', subAndDub).code, 'ja');
+  assert.equal(resolveAudioLanguageOption('en', subAndDub).code, 'en');
+});
+
+test('buildSubtitleBoxCssProps applies font family, weight, edge style, and opacity', () => {
+  const css = buildSubtitleBoxCssProps(
+    {
+      subtitleColor: '#67e8f9',
+      subtitleBackground: true,
+      subtitleBgOpacity: 50,
+      subtitleFontFamily: 'rounded',
+      subtitleFontWeight: 'extrabold',
+      subtitleEdgeStyle: 'outline',
+    },
+    22,
+  );
+  assert.equal(css.fontSize, '22px');
+  assert.equal(css.color, '#67e8f9');
+  assert.equal(css.fontWeight, 800);
+  assert.equal(css.backgroundColor, 'rgba(0, 0, 0, 0.50)');
+  assert.ok(css.fontFamily.includes('ui-rounded'));
+  assert.ok(css.textShadow.includes('-1px -1px 0'));
+});
+
 
 

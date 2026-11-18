@@ -64,20 +64,6 @@ export const INBUILT_SOURCES: SourceInfo[] = [
   },
 ];
 
-// Public creative-commons / reference HLS & MP4 streams for verified browser playback
-const SAMPLE_STREAMS = [
-  {
-    url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-    quality: '1080p HLS',
-    isHls: true,
-  },
-  {
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-    quality: '720p MP4',
-    isHls: false,
-  },
-];
-
 const aniZipCache = new Map<string, { expires: number; data: AniZipMappingsResponse }>();
 
 interface AniZipFetchOutcome {
@@ -187,6 +173,7 @@ export interface ResolveEpisodesOptions {
   sourceId?: string;
   sourceName?: string;
   overrideTitle?: string;
+  overrideMedia?: UnifiedMedia | null;
   bypassCache?: boolean;
   recordTrace?: boolean;
 }
@@ -200,7 +187,16 @@ export async function resolveEpisodesWithDiagnostics(
   const overrideQuery = options?.overrideTitle?.trim();
   let overrideMatched = false;
 
-  if (overrideQuery) {
+  if (options?.overrideMedia && options.overrideMedia.id) {
+    overrideMatched = true;
+    targetMedia = {
+      ...options.overrideMedia,
+      streamingEpisodes:
+        options.overrideMedia.id === media.id
+          ? options.overrideMedia.streamingEpisodes ?? media.streamingEpisodes
+          : options.overrideMedia.streamingEpisodes,
+    };
+  } else if (overrideQuery) {
     try {
       const anilistMatches = await searchAniList({
         query: overrideQuery,
@@ -462,7 +458,12 @@ export async function resolveEpisodesWithDiagnostics(
 
 export async function resolveEpisodesForMedia(
   media: UnifiedMedia,
-  options?: { sourceId?: string; sourceName?: string; overrideTitle?: string },
+  options?: {
+    sourceId?: string;
+    sourceName?: string;
+    overrideTitle?: string;
+    overrideMedia?: UnifiedMedia | null;
+  },
 ): Promise<UnifiedEpisode[]> {
   const { episodes } = await resolveEpisodesWithDiagnostics(media, options);
   return episodes;
@@ -493,66 +494,86 @@ export function resolveVideoServers(sourceId?: string, sourceName?: string): Vid
   if (sourceId && sourceId.startsWith('ext-')) {
     const label = sourceName ? `${sourceName.slice(0, 18)}` : 'Extension';
     return [
-      { id: 'primary-hls', name: `${label} · HD (Sub)`, category: 'sub' },
-      { id: 'direct-mp4', name: `${label} · Direct MP4`, category: 'sub' },
-      { id: 'dub-hls', name: `${label} · Dub`, category: 'dub' },
+      { id: 'hd-1-sub', name: `${label} · HD-1 (Sub)`, category: 'sub' },
+      { id: 'hd-2-sub', name: `${label} · HD-2 (Sub)`, category: 'sub' },
+      { id: 'hd-1-dub', name: `${label} · HD-1 (Dub)`, category: 'dub' },
     ];
   }
   return [
-    { id: 'primary-hls', name: 'Adaptive HLS (Auto)', category: 'sub' },
-    { id: 'direct-mp4', name: 'Direct MP4 Fallback', category: 'sub' },
-    { id: 'dub-hls', name: 'English Dub Mirror', category: 'dub' },
+    { id: 'hd-1-sub', name: 'HD-1 (Sub)', category: 'sub' },
+    { id: 'hd-2-sub', name: 'HD-2 (Sub)', category: 'sub' },
+    { id: 'hd-1-dub', name: 'HD-1 (Dub)', category: 'dub' },
   ];
 }
 
-export function resolveVideoStream(
-  media: UnifiedMedia,
-  episode: UnifiedEpisode,
-  server: VideoServer,
-): VideoStream {
-  const sample = server.id === 'direct-mp4' ? SAMPLE_STREAMS[1] : SAMPLE_STREAMS[0];
-  const title = media.title.english || media.title.romaji || 'Anime';
+export interface ResolveVideoStreamParams {
+  media: UnifiedMedia;
+  episode: UnifiedEpisode;
+  server: VideoServer;
+  sourceId?: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  overrideTitle?: string;
+  bypassCache?: boolean;
+  signal?: AbortSignal;
+}
 
-  return {
-    url: sample.url,
-    quality: sample.quality,
-    isHls: sample.isHls,
-    serverName: server.name,
-    subtitles: [
-      {
-        lang: 'en',
-        label: 'English (VTT)',
-        cues: [
-          {
-            start: 1,
-            end: 6,
-            text: `${title} — Episode ${episode.number}: ${episode.title}`,
-          },
-          {
-            start: 7,
-            end: 13,
-            text: `[${server.name}] Adaptive stream initialized via ShizuTv Web Engine`,
-          },
-          {
-            start: 14,
-            end: 20,
-            text: 'Use Space to play/pause, Left/Right to seek, and F for fullscreen.',
-          },
-        ],
+export async function resolveVideoStreamAsync(
+  params: ResolveVideoStreamParams,
+): Promise<VideoStream> {
+  const {
+    media,
+    episode,
+    server,
+    sourceId,
+    sourceName,
+    sourceBaseUrl,
+    overrideTitle,
+    bypassCache,
+    signal,
+  } = params;
+
+  const response = await fetch('/api/stream/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      mediaId: media.id,
+      titles: {
+        overrideTitle: overrideTitle?.trim() || null,
+        english: media.title?.english ?? null,
+        romaji: media.title?.romaji ?? null,
+        native: media.title?.native ?? null,
+        synonyms: media.synonyms ?? null,
       },
-      {
-        lang: 'ja',
-        label: 'Japanese (Original)',
-        cues: [
-          {
-            start: 1,
-            end: 6,
-            text: `${media.title.native || title} 第${episode.number}話`,
-          },
-        ],
-      },
-    ],
-  };
+      format: media.format ?? null,
+      episodeNumber: episode.number,
+      serverId: server.id,
+      serverName: server.name,
+      category: server.category,
+      sourceId,
+      sourceName,
+      sourceBaseUrl,
+      bypassCache: Boolean(bypassCache),
+    }),
+  });
+
+  if (!response.ok) {
+    let errMessage = `Failed to resolve episode stream (HTTP ${response.status}).`;
+    try {
+      const errData = (await response.json()) as { message?: string };
+      if (errData?.message) errMessage = errData.message;
+    } catch {
+      // Ignore JSON parse error
+    }
+    throw new Error(errMessage);
+  }
+
+  const data = (await response.json()) as VideoStream;
+  if (!data?.url) {
+    throw new Error('Resolved stream payload did not include a playable URL.');
+  }
+  return data;
 }
 
 /**

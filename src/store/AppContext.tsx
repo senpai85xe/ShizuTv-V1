@@ -24,6 +24,9 @@ import {
   AudioLanguageCode,
   DEFAULT_AMBIENT_ENABLED,
   DEFAULT_AUTO_PIP_ENABLED,
+  SubtitleEdgeStylePref,
+  SubtitleFontFamilyPref,
+  SubtitleFontWeightPref,
 } from '../utils/inlinePlayer';
 import {
   DEFAULT_EPISODE_CHAPTER_STYLE,
@@ -44,6 +47,7 @@ import {
   NavBarStyle,
 } from '../data/themePresets';
 import { INBUILT_SOURCES } from '../services/sourceEngine';
+import { sortSourcesByOrder } from '../utils/extensionsManager';
 import { fetchAniListViewer, saveAniListMediaEntry } from '../services/anilist';
 import {
   clearAniListServerCookieSession,
@@ -105,6 +109,11 @@ export interface PlayerPrefs {
   subtitleColor: string;
   subtitleOffsetSeconds: number;
   subtitlePosition: SubtitlePosition;
+  subtitleFontFamily: SubtitleFontFamilyPref;
+  subtitleFontWeight: SubtitleFontWeightPref;
+  subtitleEdgeStyle: SubtitleEdgeStylePref;
+  subtitleBgOpacity: number;
+  subtitleBottomOffset: number;
 }
 
 export interface ReaderPrefs {
@@ -211,7 +220,9 @@ interface PersistedState {
   history: HistoryEntry[];
   downloads: DownloadTask[];
   repos: ExtensionRepo[];
+  repoCatalog: SourceInfo[];
   customSources: SourceInfo[];
+  sourceOrder: string[];
   comments: Record<string, CommentEntry[]>;
   onboardingDone: boolean;
 }
@@ -257,6 +268,11 @@ const DEFAULT_STATE: PersistedState = {
     subtitleColor: '#ffffff',
     subtitleOffsetSeconds: 0,
     subtitlePosition: 'bottom',
+    subtitleFontFamily: 'sans',
+    subtitleFontWeight: 'bold',
+    subtitleEdgeStyle: 'shadow',
+    subtitleBgOpacity: 75,
+    subtitleBottomOffset: 0,
   },
   readerPrefs: {
     mode: 'webtoon',
@@ -287,7 +303,9 @@ const DEFAULT_STATE: PersistedState = {
   history: [],
   downloads: [],
   repos: [],
+  repoCatalog: [],
   customSources: [],
+  sourceOrder: [],
   comments: {},
   onboardingDone: true,
 };
@@ -316,11 +334,19 @@ function loadInitialState(): PersistedState {
     const parsedCustomSources = Array.isArray(parsed.customSources)
       ? (parsed.customSources as SourceInfo[])
       : DEFAULT_STATE.customSources;
+    const parsedRepoCatalog = Array.isArray(parsed.repoCatalog)
+      ? (parsed.repoCatalog as SourceInfo[])
+      : DEFAULT_STATE.repoCatalog;
+    const parsedSourceOrder = Array.isArray(parsed.sourceOrder)
+      ? (parsed.sourceOrder as string[])
+      : DEFAULT_STATE.sourceOrder;
     return {
       ...DEFAULT_STATE,
       ...parsed,
       repos: parsedRepos,
+      repoCatalog: parsedRepoCatalog,
       customSources: parsedCustomSources,
+      sourceOrder: parsedSourceOrder,
       anilistToken: resolvedAnilistToken ?? null,
       themePrefs: { ...DEFAULT_STATE.themePrefs, ...(parsed.themePrefs || {}) },
       uiPrefs: {
@@ -406,10 +432,15 @@ interface AppContextValue {
   // Extensions & Sources
   allSources: SourceInfo[];
   toggleSourceActive: (sourceId: string) => void;
+  setSourceOrder: (order: string[]) => void;
+  installCatalogExtension: (source: SourceInfo) => void;
+  installAllCatalogExtensions: (sources: SourceInfo[]) => number;
+  uninstallExtension: (sourceId: string) => void;
   addExtensionRepo: (
     url: string,
     manager: ExtensionRepo['manager'],
     name?: string,
+    options?: { autoInstall?: boolean; mediaType?: 'ANIME' | 'MANGA' | 'NOVEL' },
   ) => Promise<{ repo: ExtensionRepo; addedCount: number }>;
   refreshExtensionRepo: (repoId: string) => Promise<{ addedCount: number }>;
   removeExtensionRepo: (id: string) => void;
@@ -860,8 +891,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const allSources = useMemo(
-    () => [...INBUILT_SOURCES, ...state.customSources],
-    [state.customSources],
+    () => sortSourcesByOrder([...INBUILT_SOURCES, ...state.customSources], state.sourceOrder),
+    [state.customSources, state.sourceOrder],
   );
 
   const toggleSourceActive = useCallback((sourceId: string) => {
@@ -877,11 +908,108 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, []);
 
+  const setSourceOrder = useCallback((order: string[]) => {
+    setState((prev) => ({
+      ...prev,
+      sourceOrder: order,
+    }));
+  }, []);
+
+  const installCatalogExtension = useCallback(
+    (source: SourceInfo) => {
+      setState((prev) => {
+        const existsInbuilt = INBUILT_SOURCES.some((s) => s.id === source.id);
+        const existsCustom = prev.customSources.some((s) => s.id === source.id);
+        const nextCustom =
+          existsInbuilt || existsCustom
+            ? prev.customSources
+            : [...prev.customSources, source];
+        const nextActive = prev.discoveryPrefs.activeSources.includes(source.id)
+          ? prev.discoveryPrefs.activeSources
+          : [...prev.discoveryPrefs.activeSources, source.id];
+        return {
+          ...prev,
+          customSources: nextCustom,
+          discoveryPrefs: { ...prev.discoveryPrefs, activeSources: nextActive },
+        };
+      });
+      addLog('INFO', 'Extensions', `Installed extension "${source.name}" (${source.lang.toUpperCase()})`);
+    },
+    [addLog],
+  );
+
+  const installAllCatalogExtensions = useCallback(
+    (sources: SourceInfo[]): number => {
+      if (sources.length === 0) return 0;
+      let installedCount = 0;
+      setState((prev) => {
+        const existingIds = new Set([
+          ...INBUILT_SOURCES.map((s) => s.id),
+          ...prev.customSources.map((s) => s.id),
+        ]);
+        const newItems = sources.filter((s) => !existingIds.has(s.id));
+        installedCount = newItems.length;
+        const allowNsfw = prev.contentPrefs.adultContentMode !== 'safe';
+        const autoEnable = newItems
+          .filter((s) => allowNsfw || !s.isNsfw)
+          .map((s) => s.id);
+        return {
+          ...prev,
+          customSources: [...prev.customSources, ...newItems],
+          discoveryPrefs: {
+            ...prev.discoveryPrefs,
+            activeSources: Array.from(
+              new Set([...prev.discoveryPrefs.activeSources, ...autoEnable]),
+            ),
+          },
+        };
+      });
+      addLog('INFO', 'Extensions', `Batch installed ${sources.length} catalog extensions`);
+      return installedCount || sources.length;
+    },
+    [addLog],
+  );
+
+  const uninstallExtension = useCallback(
+    (sourceId: string) => {
+      const isInbuilt = INBUILT_SOURCES.some((s) => s.id === sourceId);
+      setState((prev) => {
+        if (isInbuilt) {
+          return {
+            ...prev,
+            discoveryPrefs: {
+              ...prev.discoveryPrefs,
+              activeSources: prev.discoveryPrefs.activeSources.filter((id) => id !== sourceId),
+            },
+          };
+        }
+        return {
+          ...prev,
+          customSources: prev.customSources.filter((s) => s.id !== sourceId),
+          sourceOrder: prev.sourceOrder.filter((id) => id !== sourceId),
+          discoveryPrefs: {
+            ...prev.discoveryPrefs,
+            activeSources: prev.discoveryPrefs.activeSources.filter((id) => id !== sourceId),
+          },
+        };
+      });
+      addLog(
+        'INFO',
+        'Extensions',
+        isInbuilt
+          ? `Disabled inbuilt source "${sourceId}"`
+          : `Uninstalled extension "${sourceId}"`,
+      );
+    },
+    [addLog],
+  );
+
   const addExtensionRepo = useCallback(
     async (
       url: string,
       manager: ExtensionRepo['manager'],
       name?: string,
+      options?: { autoInstall?: boolean; mediaType?: 'ANIME' | 'MANGA' | 'NOVEL' },
     ): Promise<{ repo: ExtensionRepo; addedCount: number }> => {
       const cleanUrl = url.trim();
       if (!cleanUrl) {
@@ -920,11 +1048,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const importedSources = payload.sources;
       const allowNsfw = state.contentPrefs.adultContentMode !== 'safe';
+      const shouldAutoInstall = options?.autoInstall === true;
       const newRepo: ExtensionRepo = {
         id: `repo-${Date.now()}`,
         name: resolvedName,
         url: cleanUrl,
         manager: resolvedManager,
+        mediaType: options?.mediaType,
         addedAt: new Date().toISOString(),
       };
 
@@ -935,35 +1065,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ...existingRepo,
               name: resolvedName,
               manager: resolvedManager,
+              mediaType: options?.mediaType ?? existingRepo.mediaType,
             }
           : newRepo;
 
-        const removedSourceIds = new Set(
-          prev.customSources.filter((s) => s.repoUrl === cleanUrl).map((s) => s.id),
-        );
-        const remainingSources = prev.customSources.filter((s) => s.repoUrl !== cleanUrl);
-        const existingSourceIds = new Set([
-          ...INBUILT_SOURCES.map((s) => s.id),
-          ...remainingSources.map((s) => s.id),
-        ]);
-        const uniqueImported = importedSources.filter((s) => !existingSourceIds.has(s.id));
+        const remainingCatalog = prev.repoCatalog.filter((s) => s.repoUrl !== cleanUrl);
+        const importedById = new Map(importedSources.map((s) => [s.id, s]));
 
-        const autoEnabledIds = uniqueImported
-          .filter((s) => allowNsfw || !s.isNsfw)
-          .map((s) => s.id);
-        const nextActiveSources = Array.from(
-          new Set([
-            ...prev.discoveryPrefs.activeSources.filter((id) => !removedSourceIds.has(id)),
-            ...autoEnabledIds,
-          ]),
+        // Update any already-installed custom sources from this repo with refreshed metadata
+        const updatedCustom = prev.customSources.map((src) =>
+          src.repoUrl === cleanUrl && importedById.has(src.id)
+            ? importedById.get(src.id)!
+            : src,
         );
+
+        let nextCustom = updatedCustom;
+        let nextActiveSources = prev.discoveryPrefs.activeSources;
+
+        if (shouldAutoInstall) {
+          const existingIds = new Set([
+            ...INBUILT_SOURCES.map((s) => s.id),
+            ...updatedCustom.map((s) => s.id),
+          ]);
+          const newInstall = importedSources.filter((s) => !existingIds.has(s.id));
+          nextCustom = [...updatedCustom, ...newInstall];
+          const autoEnabledIds = newInstall
+            .filter((s) => allowNsfw || !s.isNsfw)
+            .map((s) => s.id);
+          nextActiveSources = Array.from(new Set([...nextActiveSources, ...autoEnabledIds]));
+        }
 
         return {
           ...prev,
           repos: existingRepo
             ? prev.repos.map((r) => (r.url === cleanUrl ? upsertedRepo : r))
             : [upsertedRepo, ...prev.repos],
-          customSources: [...remainingSources, ...uniqueImported],
+          repoCatalog: [...remainingCatalog, ...importedSources],
+          customSources: nextCustom,
           discoveryPrefs: {
             ...prev.discoveryPrefs,
             activeSources: nextActiveSources,
@@ -974,7 +1112,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addLog(
         'INFO',
         'Extensions',
-        `Imported ${importedSources.length} real sources from ${resolvedName} (${resolvedManager})`,
+        `Loaded ${importedSources.length} catalog sources from ${resolvedName} (${resolvedManager})`,
       );
       return { repo: newRepo, addedCount: importedSources.length };
     },
@@ -987,7 +1125,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!target) {
         throw new Error('Repository not found.');
       }
-      const result = await addExtensionRepo(target.url, target.manager, target.name);
+      const result = await addExtensionRepo(target.url, target.manager, target.name, {
+        mediaType: target.mediaType,
+      });
       return { addedCount: result.addedCount };
     },
     [addExtensionRepo, state.repos],
@@ -1002,6 +1142,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         ...prev,
         repos: prev.repos.filter((r) => r.id !== id),
+        repoCatalog: target
+          ? prev.repoCatalog.filter((s) => s.repoUrl !== target.url)
+          : prev.repoCatalog,
         customSources: target
           ? prev.customSources.filter((s) => s.repoUrl !== target.url)
           : prev.customSources,
@@ -1140,6 +1283,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     clearCompletedDownloads,
     allSources,
     toggleSourceActive,
+    setSourceOrder,
+    installCatalogExtension,
+    installAllCatalogExtensions,
+    uninstallExtension,
     addExtensionRepo,
     refreshExtensionRepo,
     removeExtensionRepo,

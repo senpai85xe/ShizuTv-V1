@@ -1,6 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Play, Search, X } from 'lucide-react';
+import {
+  Grid3X3,
+  Image as ImageIcon,
+  LayoutGrid,
+  LayoutList,
+  List,
+  Play,
+  Search,
+  X,
+} from 'lucide-react';
+import { useApp } from '../store/AppContext';
+import { EpisodeChapterStyle } from '../data/themePresets';
 import { UnifiedEpisode } from '../types/media';
+import {
+  EPISODE_CHAPTER_STYLE_ORDER,
+  formatEpisodeMetaLine,
+} from '../utils/episodeChapterStyle';
 
 interface PlayerEpisodeDrawerProps {
   open: boolean;
@@ -13,6 +28,22 @@ interface PlayerEpisodeDrawerProps {
 
 const POPUP_CHUNK_SIZE = 50;
 
+const STYLE_LABELS: Record<EpisodeChapterStyle, string> = {
+  classic: 'Classic',
+  grid: 'Grid',
+  box: 'Box',
+  compact: 'Compact',
+  cover: 'Cover',
+};
+
+const STYLE_ICONS: Record<EpisodeChapterStyle, React.ComponentType<{ className?: string }>> = {
+  classic: LayoutList,
+  grid: LayoutGrid,
+  box: Grid3X3,
+  compact: List,
+  cover: ImageIcon,
+};
+
 export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
   open,
   episodes,
@@ -21,8 +52,11 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
   onSelectEpisode,
   onClose,
 }) => {
+  const { state, updateUiPrefs } = useApp();
   const [query, setQuery] = useState('');
   const [chunkIndex, setChunkIndex] = useState(0);
+
+  const activeStyle: EpisodeChapterStyle = state.uiPrefs.episodeChapterStyle || 'classic';
 
   const chunks = useMemo(() => {
     if (episodes.length <= POPUP_CHUNK_SIZE) return [];
@@ -62,6 +96,32 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
 
   if (!open) return null;
 
+  const isWideStyle = activeStyle === 'grid' || activeStyle === 'cover';
+
+  const listContainerClass = (() => {
+    if (activeStyle === 'box') {
+      return compact
+        ? 'p-2.5 grid grid-cols-5 sm:grid-cols-6 gap-1.5 content-start'
+        : 'p-3.5 grid grid-cols-4 sm:grid-cols-5 gap-2 content-start';
+    }
+    if (activeStyle === 'grid') {
+      return compact
+        ? 'p-2 grid grid-cols-2 sm:grid-cols-3 gap-2 content-start'
+        : 'p-3 grid grid-cols-2 gap-2.5 content-start';
+    }
+    if (activeStyle === 'compact') {
+      return 'm-2.5 rounded-2xl border border-white/10 bg-white/5 divide-y divide-white/10 overflow-hidden';
+    }
+    if (activeStyle === 'cover') {
+      return compact
+        ? 'p-2 grid grid-cols-1 sm:grid-cols-2 gap-2 content-start'
+        : 'p-3 space-y-2';
+    }
+    return compact
+      ? 'p-2 grid grid-cols-2 sm:grid-cols-3 gap-1.5 content-start'
+      : 'p-3 space-y-1.5';
+  })();
+
   return (
     <div
       data-no-gesture="true"
@@ -84,11 +144,12 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
         aria-modal="true"
         aria-label="Episode List"
         data-testid="player-episode-drawer"
+        data-ep-style={activeStyle}
         onClick={(e) => e.stopPropagation()}
-        className={`sx-player-drawer-enter relative z-10 flex flex-col overflow-hidden bg-zinc-950/75 backdrop-blur-2xl backdrop-saturate-150 border border-white/20 ring-1 ring-inset ring-white/10 shadow-[0_24px_60px_rgba(0,0,0,0.65)] text-white ${
+        className={`sx-player-drawer-enter relative z-10 flex flex-col overflow-hidden bg-zinc-950/82 backdrop-blur-2xl backdrop-saturate-150 border border-white/20 ring-1 ring-inset ring-white/10 shadow-[0_24px_60px_rgba(0,0,0,0.65)] text-white transition-[max-width] duration-200 ${
           compact
             ? 'w-full h-full rounded-2xl'
-            : 'w-full max-w-[360px] max-h-[min(78%,520px)] sm:mt-10 sm:mb-12 rounded-3xl'
+            : `${isWideStyle ? 'w-full max-w-[420px]' : 'w-full max-w-[368px]'} max-h-[min(80%,560px)] sm:mt-10 sm:mb-12 rounded-3xl`
         }`}
       >
         {/* Header + Search Row */}
@@ -107,7 +168,7 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
             </h3>
           </div>
 
-          <div className="flex items-center gap-1.5 flex-1 justify-end min-w-0 max-w-[54%] sm:max-w-[60%]">
+          <div className="flex items-center gap-1.5 flex-1 justify-end min-w-0 max-w-[56%] sm:max-w-[62%]">
             <div className="relative flex-1 min-w-[74px] max-w-[180px]">
               <Search className="w-3 h-3 text-white/55 absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input
@@ -131,6 +192,36 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
+        </div>
+
+        {/* Interactive Episode Style Switcher Bar */}
+        <div
+          data-testid="drawer-ep-style-bar"
+          className={`flex items-center gap-1 overflow-x-auto no-scrollbar border-b border-white/10 bg-white/[0.03] shrink-0 ${
+            compact ? 'px-2.5 py-1.5' : 'px-3.5 py-2'
+          }`}
+        >
+          {EPISODE_CHAPTER_STYLE_ORDER.map((styleId) => {
+            const Icon = STYLE_ICONS[styleId];
+            const selected = activeStyle === styleId;
+            return (
+              <button
+                key={styleId}
+                type="button"
+                data-testid={`drawer-ep-style-${styleId}`}
+                aria-pressed={selected}
+                onClick={() => updateUiPrefs({ episodeChapterStyle: styleId })}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold whitespace-nowrap transition-all shrink-0 ${
+                  selected
+                    ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] shadow-sm'
+                    : 'bg-white/8 text-white/75 hover:bg-white/16 hover:text-white'
+                }`}
+              >
+                <Icon className="w-3 h-3 shrink-0" />
+                <span>{STYLE_LABELS[styleId]}</span>
+              </button>
+            );
+          })}
         </div>
 
         {/* Chunk Selector when > 50 episodes */}
@@ -161,49 +252,189 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
         )}
 
         {/* Episode Items */}
-        <div
-          className={`flex-1 overflow-y-auto ${
-            compact
-              ? 'p-2 grid grid-cols-2 sm:grid-cols-3 gap-1.5 content-start'
-              : 'p-3 space-y-1.5'
-          }`}
-        >
+        <div className={`flex-1 overflow-y-auto ${activeStyle === 'compact' ? 'py-1' : ''}`}>
           {visibleEpisodes.length === 0 ? (
-            <p className="col-span-full py-6 text-center text-xs text-white/60 font-semibold">
+            <p className="py-8 px-4 text-center text-xs text-white/60 font-semibold">
               No episodes match &ldquo;{query}&rdquo;
             </p>
           ) : (
-            visibleEpisodes.map((ep, idx) => {
-              const realIdx = episodes.findIndex((item) => item.id === ep.id);
-              const isActive = realIdx === activeIndex;
-              return (
-                <button
-                  key={ep.id}
-                  type="button"
-                  data-testid={`drawer-ep-${ep.number}`}
-                  onClick={() => {
-                    onSelectEpisode(realIdx >= 0 ? realIdx : 0);
-                    onClose();
-                  }}
-                  style={{ animationDelay: `${Math.min(idx, 12) * 16}ms` }}
-                  className={`sx-card-animate w-full flex items-center justify-between gap-2 rounded-xl text-left transition-all border ${
-                    compact ? 'px-2.5 py-1.5' : 'px-3 py-2.5'
-                  } ${
-                    isActive
-                      ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-transparent shadow-md font-extrabold'
-                      : 'bg-white/8 hover:bg-white/16 border-white/10 text-white/90'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-[11px] font-mono-tabular font-black shrink-0 opacity-90">
-                      {ep.number}
-                    </span>
-                    <span className="text-[11px] font-semibold truncate">{ep.title}</span>
-                  </div>
-                  {isActive && <Play className="w-3 h-3 fill-current shrink-0" />}
-                </button>
-              );
-            })
+            <div className={listContainerClass}>
+              {visibleEpisodes.map((ep, idx) => {
+                const realIdx = episodes.findIndex((item) => item.id === ep.id);
+                const isActive = realIdx === activeIndex;
+                const handlePick = () => {
+                  onSelectEpisode(realIdx >= 0 ? realIdx : 0);
+                  onClose();
+                };
+
+                if (activeStyle === 'box') {
+                  return (
+                    <button
+                      key={ep.id}
+                      type="button"
+                      data-testid={`drawer-ep-${ep.number}`}
+                      title={`EP ${ep.number}: ${ep.title}`}
+                      aria-label={`Episode ${ep.number}: ${ep.title}`}
+                      onClick={handlePick}
+                      style={{ animationDelay: `${Math.min(idx, 12) * 12}ms` }}
+                      className={`sx-card-animate aspect-square rounded-xl flex flex-col items-center justify-center gap-0.5 border text-center transition-all ${
+                        isActive
+                          ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-transparent shadow-md font-black'
+                          : 'bg-white/8 hover:bg-white/18 border-white/12 text-white font-extrabold'
+                      }`}
+                    >
+                      <span className="text-xs font-mono-tabular leading-none">{ep.number}</span>
+                      {isActive && <Play className="w-2.5 h-2.5 fill-current" />}
+                    </button>
+                  );
+                }
+
+                if (activeStyle === 'grid') {
+                  return (
+                    <button
+                      key={ep.id}
+                      type="button"
+                      data-testid={`drawer-ep-${ep.number}`}
+                      onClick={handlePick}
+                      style={{ animationDelay: `${Math.min(idx, 12) * 14}ms` }}
+                      className={`sx-card-animate group rounded-2xl overflow-hidden text-left border transition-all flex flex-col ${
+                        isActive
+                          ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-transparent shadow-md'
+                          : 'bg-white/8 hover:bg-white/14 border-white/12 text-white'
+                      }`}
+                    >
+                      <div className="relative aspect-video w-full bg-black/50 overflow-hidden">
+                        {ep.thumbnail ? (
+                          <img
+                            src={ep.thumbnail}
+                            alt=""
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-white/10 to-white/5 text-xs font-black text-white/40">
+                            EP {ep.number}
+                          </div>
+                        )}
+                        <div className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-black/80 to-transparent" />
+                        <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded-md bg-black/75 text-[9.5px] font-mono-tabular font-black text-white">
+                          EP {ep.number}
+                        </span>
+                        {isActive && (
+                          <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] flex items-center justify-center shadow">
+                            <Play className="w-2.5 h-2.5 fill-current ml-0.5" />
+                          </span>
+                        )}
+                      </div>
+                      <div className="p-2 min-w-0">
+                        <p className="text-[11px] font-bold leading-snug line-clamp-2">
+                          {ep.title}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                }
+
+                if (activeStyle === 'cover') {
+                  return (
+                    <button
+                      key={ep.id}
+                      type="button"
+                      data-testid={`drawer-ep-${ep.number}`}
+                      onClick={handlePick}
+                      style={{ animationDelay: `${Math.min(idx, 12) * 14}ms` }}
+                      className={`sx-card-animate w-full flex items-center gap-2.5 p-2 rounded-2xl text-left border transition-all ${
+                        isActive
+                          ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-transparent shadow-md'
+                          : 'bg-white/8 hover:bg-white/15 border-white/12 text-white'
+                      }`}
+                    >
+                      <div className="relative w-24 aspect-video rounded-xl overflow-hidden bg-black/50 shrink-0">
+                        {ep.thumbnail ? (
+                          <img
+                            src={ep.thumbnail}
+                            alt=""
+                            loading="lazy"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-white/10 text-[10px] font-black text-white/50">
+                            EP {ep.number}
+                          </div>
+                        )}
+                        {isActive && (
+                          <span className="absolute inset-0 bg-black/45 flex items-center justify-center">
+                            <Play className="w-4 h-4 fill-white text-white" />
+                          </span>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11.5px] font-extrabold truncate">
+                          {ep.number}. {ep.title}
+                        </p>
+                        <p
+                          className={`text-[10px] mt-0.5 truncate ${
+                            isActive ? 'opacity-85' : 'text-white/60'
+                          }`}
+                        >
+                          {formatEpisodeMetaLine(ep)}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                }
+
+                if (activeStyle === 'compact') {
+                  return (
+                    <button
+                      key={ep.id}
+                      type="button"
+                      data-testid={`drawer-ep-${ep.number}`}
+                      onClick={handlePick}
+                      className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left transition-colors ${
+                        isActive
+                          ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] font-extrabold'
+                          : 'hover:bg-white/10 text-white/90'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="text-[11px] font-mono-tabular font-black w-7 shrink-0 opacity-85">
+                          {ep.number}
+                        </span>
+                        <span className="text-[11px] font-semibold truncate">{ep.title}</span>
+                      </div>
+                      {isActive && <Play className="w-3 h-3 fill-current shrink-0" />}
+                    </button>
+                  );
+                }
+
+                // Classic default row
+                return (
+                  <button
+                    key={ep.id}
+                    type="button"
+                    data-testid={`drawer-ep-${ep.number}`}
+                    onClick={handlePick}
+                    style={{ animationDelay: `${Math.min(idx, 12) * 16}ms` }}
+                    className={`sx-card-animate w-full flex items-center justify-between gap-2 rounded-xl text-left transition-all border ${
+                      compact ? 'px-2.5 py-1.5' : 'px-3 py-2.5'
+                    } ${
+                      isActive
+                        ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-transparent shadow-md font-extrabold'
+                        : 'bg-white/8 hover:bg-white/16 border-white/10 text-white/90'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[11px] font-mono-tabular font-black shrink-0 opacity-90">
+                        {ep.number}
+                      </span>
+                      <span className="text-[11px] font-semibold truncate">{ep.title}</span>
+                    </div>
+                    {isActive && <Play className="w-3 h-3 fill-current shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
           )}
         </div>
       </div>

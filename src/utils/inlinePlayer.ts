@@ -238,6 +238,129 @@ export function resolveBatterySaverHlsLevel(
   return lowestIdx;
 }
 
+export interface SubtitleTextSegment {
+  text: string;
+  italic?: boolean;
+  bold?: boolean;
+  underline?: boolean;
+}
+
+const HTML_NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  rsquo: '’',
+  lsquo: '‘',
+  rdquo: '”',
+  ldquo: '“',
+  ndash: '–',
+  mdash: '—',
+  hellip: '…',
+};
+
+export function decodeHtmlEntities(input: string): string {
+  return String(input || '').replace(
+    /&(#x?[0-9a-f]+|[a-z]+);/gi,
+    (full, entity: string) => {
+      const lower = entity.toLowerCase();
+      if (lower.startsWith('#x')) {
+        const code = Number.parseInt(lower.slice(2), 16);
+        return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : full;
+      }
+      if (lower.startsWith('#')) {
+        const code = Number.parseInt(lower.slice(1), 10);
+        return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : full;
+      }
+      return HTML_NAMED_ENTITIES[lower] ?? full;
+    },
+  );
+}
+
+export function cleanRawSubtitleCueText(raw: string): string {
+  return String(raw || '')
+    // Normalize explicit line breaks
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/\\N/g, '\n')
+    // Strip ASS/SSA override blocks like {\an8} {\pos(x,y)}
+    .replace(/\{[^}]*\}/g, '')
+    // Strip WebVTT inline timestamps like <00:01:02.500>
+    .replace(/<\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?>/g, '')
+    // Strip furigana <rt>...</rt> / <rp>...</rp> noise inside <ruby>
+    .replace(/<rt[^>]*>[\s\S]*?<\/rt>/gi, '')
+    .replace(/<rp[^>]*>[\s\S]*?<\/rp>/gi, '')
+    // Remove unsupported inline tags while preserving <i>, <b>, <u> formatting tags
+    .replace(/<(?!\/?(?:i|b|u)\b)[^>]+>/gi, '')
+    // Normalize tag casing
+    .replace(/<(\/?)(i|b|u)\b[^>]*>/gi, (_m, slash: string, tag: string) => `<${slash}${tag.toLowerCase()}>`)
+    // Decode HTML entities without corrupting <i>/<b>/<u> tags
+    .replace(/&(?!(?:lt|gt);)(#x?[0-9a-f]+|[a-z]+);/gi, (m) => decodeHtmlEntities(m))
+    // Clean excess horizontal spaces per line while preserving intentional newlines
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+export function stripSubtitleTags(raw: string): string {
+  return decodeHtmlEntities(
+    cleanRawSubtitleCueText(raw).replace(/<\/?(?:i|b|u)>/gi, ''),
+  ).trim();
+}
+
+export function parseSubtitleSegments(raw: string): SubtitleTextSegment[] {
+  const cleaned = cleanRawSubtitleCueText(raw);
+  if (!cleaned) return [];
+
+  const segments: SubtitleTextSegment[] = [];
+  let italic = false;
+  let bold = false;
+  let underline = false;
+
+  const tokenRe = /(<\/?(?:i|b|u)>)/gi;
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+
+  const pushText = (chunk: string) => {
+    const decoded = decodeHtmlEntities(chunk);
+    if (!decoded) return;
+    const prev = segments[segments.length - 1];
+    if (
+      prev &&
+      Boolean(prev.italic) === italic &&
+      Boolean(prev.bold) === bold &&
+      Boolean(prev.underline) === underline
+    ) {
+      prev.text += decoded;
+    } else {
+      segments.push({ text: decoded, italic, bold, underline });
+    }
+  };
+
+  while ((match = tokenRe.exec(cleaned)) !== null) {
+    if (match.index > lastIdx) {
+      pushText(cleaned.slice(lastIdx, match.index));
+    }
+    const token = match[1].toLowerCase();
+    if (token === '<i>') italic = true;
+    else if (token === '</i>') italic = false;
+    else if (token === '<b>') bold = true;
+    else if (token === '</b>') bold = false;
+    else if (token === '<u>') underline = true;
+    else if (token === '</u>') underline = false;
+    lastIdx = tokenRe.lastIndex;
+  }
+
+  if (lastIdx < cleaned.length) {
+    pushText(cleaned.slice(lastIdx));
+  }
+
+  return segments.length > 0 ? segments : [{ text: stripSubtitleTags(cleaned) }];
+}
+
 export function findActiveSubtitleCue(
   cues: SubtitleCue[] | undefined,
   currentTime: number,
@@ -247,7 +370,23 @@ export function findActiveSubtitleCue(
     return null;
   }
   const shiftedTime = currentTime - (Number.isFinite(offsetSeconds) ? offsetSeconds : 0);
-  return cues.find((c) => shiftedTime >= c.start && shiftedTime <= c.end) ?? null;
+  const matching = cues.filter((c) => shiftedTime >= c.start && shiftedTime <= c.end);
+  if (matching.length === 0) return null;
+  if (matching.length === 1) return matching[0];
+
+  const uniqueLines: string[] = [];
+  for (const cue of matching) {
+    const txt = String(cue.text || '').trim();
+    if (txt && !uniqueLines.includes(txt)) {
+      uniqueLines.push(txt);
+    }
+  }
+  if (uniqueLines.length === 0) return null;
+  return {
+    start: Math.min(...matching.map((c) => c.start)),
+    end: Math.max(...matching.map((c) => c.end)),
+    text: uniqueLines.join('\n'),
+  };
 }
 
 function parseTimestampToSeconds(raw: string): number {
@@ -264,7 +403,7 @@ function parseTimestampToSeconds(raw: string): number {
 }
 
 export function parseSubtitleText(raw: string): SubtitleCue[] {
-  const trimmed = raw.trim();
+  const trimmed = raw.replace(/^\uFEFF/, '').trim();
   if (!trimmed) return [];
 
   const blocks = trimmed.replace(/\r\n/g, '\n').split(/\n\s*\n/);
@@ -276,7 +415,15 @@ export function parseSubtitleText(raw: string): SubtitleCue[] {
       .map((l) => l.trim())
       .filter(Boolean);
     if (lines.length === 0) continue;
-    if (lines[0].toUpperCase().startsWith('WEBVTT')) continue;
+    const headerUpper = lines[0].toUpperCase();
+    if (
+      headerUpper.startsWith('WEBVTT') ||
+      headerUpper.startsWith('NOTE') ||
+      headerUpper.startsWith('STYLE') ||
+      headerUpper.startsWith('REGION')
+    ) {
+      continue;
+    }
 
     const timingLineIdx = lines.findIndex((l) => l.includes('-->'));
     if (timingLineIdx >= 0) {
@@ -284,7 +431,7 @@ export function parseSubtitleText(raw: string): SubtitleCue[] {
       const endStr = (endStrRaw || '').trim().split(/\s+/)[0];
       const start = parseTimestampToSeconds(startStr);
       const end = Math.max(start + 0.5, parseTimestampToSeconds(endStr));
-      const text = lines.slice(timingLineIdx + 1).join('\n').trim();
+      const text = cleanRawSubtitleCueText(lines.slice(timingLineIdx + 1).join('\n'));
       if (text) {
         cues.push({ start, end, text });
       }
@@ -296,13 +443,95 @@ export function parseSubtitleText(raw: string): SubtitleCue[] {
   // Fallback: treat each non-empty line as a sequential 4-second subtitle cue
   const fallbackLines = trimmed
     .split('\n')
-    .map((l) => l.trim())
+    .map((l) => cleanRawSubtitleCueText(l))
     .filter(Boolean);
   return fallbackLines.map((text, idx) => ({
     start: idx * 4,
     end: idx * 4 + 3.8,
     text,
   }));
+}
+
+export type SubtitleFontFamilyPref = 'sans' | 'rounded' | 'serif' | 'mono';
+export type SubtitleFontWeightPref = 'medium' | 'bold' | 'extrabold';
+export type SubtitleEdgeStylePref = 'shadow' | 'outline' | 'glow' | 'none';
+
+export interface SubtitleVisualStyleInput {
+  subtitleSize?: number;
+  subtitleColor?: string;
+  subtitleBackground?: boolean;
+  subtitleBgOpacity?: number;
+  subtitleFontFamily?: SubtitleFontFamilyPref;
+  subtitleFontWeight?: SubtitleFontWeightPref;
+  subtitleEdgeStyle?: SubtitleEdgeStylePref;
+  subtitleBottomOffset?: number;
+}
+
+export function getSubtitleFontFamilyCss(family?: SubtitleFontFamilyPref): string {
+  switch (family) {
+    case 'rounded':
+      return '"Nunito", "Quicksand", "Varela Round", ui-rounded, system-ui, sans-serif';
+    case 'serif':
+      return '"Georgia", "Merriweather", ui-serif, serif';
+    case 'mono':
+      return '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace';
+    case 'sans':
+    default:
+      return '"Inter", "Plus Jakarta Sans", system-ui, sans-serif';
+  }
+}
+
+export function getSubtitleFontWeightValue(weight?: SubtitleFontWeightPref): number {
+  switch (weight) {
+    case 'medium':
+      return 600;
+    case 'extrabold':
+      return 800;
+    case 'bold':
+    default:
+      return 700;
+  }
+}
+
+export function getSubtitleTextShadowCss(edge?: SubtitleEdgeStylePref): string {
+  switch (edge) {
+    case 'outline':
+      return '-1px -1px 0 rgba(0,0,0,0.95), 1px -1px 0 rgba(0,0,0,0.95), -1px 1px 0 rgba(0,0,0,0.95), 1px 1px 0 rgba(0,0,0,0.95), 0 2px 4px rgba(0,0,0,0.85)';
+    case 'glow':
+      return '0 0 8px rgba(0,0,0,0.95), 0 0 16px rgba(0,0,0,0.85), 0 2px 6px rgba(0,0,0,0.9)';
+    case 'none':
+      return 'none';
+    case 'shadow':
+    default:
+      return '0 2px 5px rgba(0,0,0,0.92), 0 1px 2px rgba(0,0,0,0.9)';
+  }
+}
+
+export function buildSubtitleBoxCssProps(
+  prefs: SubtitleVisualStyleInput,
+  fontSizePx: number,
+): {
+  fontSize: string;
+  color: string;
+  fontFamily: string;
+  fontWeight: number;
+  textShadow: string;
+  backgroundColor: string;
+} {
+  const opacityPct =
+    typeof prefs.subtitleBgOpacity === 'number' && Number.isFinite(prefs.subtitleBgOpacity)
+      ? Math.max(0, Math.min(100, prefs.subtitleBgOpacity))
+      : 75;
+  const bgAlpha = prefs.subtitleBackground === false ? 0 : opacityPct / 100;
+
+  return {
+    fontSize: `${fontSizePx}px`,
+    color: prefs.subtitleColor || '#ffffff',
+    fontFamily: getSubtitleFontFamilyCss(prefs.subtitleFontFamily),
+    fontWeight: getSubtitleFontWeightValue(prefs.subtitleFontWeight),
+    textShadow: getSubtitleTextShadowCss(prefs.subtitleEdgeStyle),
+    backgroundColor: bgAlpha > 0 ? `rgba(0, 0, 0, ${bgAlpha.toFixed(2)})` : 'transparent',
+  };
 }
 
 export const DEFAULT_AMBIENT_ENABLED = false;
@@ -324,12 +553,31 @@ export const AUDIO_LANGUAGE_OPTIONS: AudioLanguageOption[] = [
   { code: 'es', shortLabel: 'ES', label: 'Spanish (Dub)', serverCategory: 'dub' },
 ];
 
+export function resolveAvailableAudioOptions(
+  sourceAudios?: AudioLanguageOption[] | null,
+): AudioLanguageOption[] {
+  if (!Array.isArray(sourceAudios) || sourceAudios.length === 0) {
+    // Only advertise confirmed Original track until source metadata reports extra dubs
+    return [AUDIO_LANGUAGE_OPTIONS[0]];
+  }
+  const deduped: AudioLanguageOption[] = [];
+  for (const opt of sourceAudios) {
+    if (opt && !deduped.some((d) => d.code === opt.code)) {
+      deduped.push(opt);
+    }
+  }
+  return deduped.length > 0 ? deduped : [AUDIO_LANGUAGE_OPTIONS[0]];
+}
+
 export function resolveAudioLanguageOption(
   code?: string | null,
+  availableOptions?: AudioLanguageOption[] | null,
 ): AudioLanguageOption {
-  return (
-    AUDIO_LANGUAGE_OPTIONS.find((opt) => opt.code === code) ?? AUDIO_LANGUAGE_OPTIONS[0]
-  );
+  const pool =
+    Array.isArray(availableOptions) && availableOptions.length > 0
+      ? availableOptions
+      : AUDIO_LANGUAGE_OPTIONS;
+  return pool.find((opt) => opt.code === code) ?? pool[0];
 }
 
 export type FullscreenCommentScope = 'episode' | 'series';

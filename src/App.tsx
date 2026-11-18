@@ -20,12 +20,12 @@ import { DownloadsPage } from './pages/DownloadsPage';
 import { ContinueHistoryPage } from './pages/ContinueHistoryPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { EpisodeDiagnosticsPage } from './pages/EpisodeDiagnosticsPage';
+import { ExtensionsPage } from './pages/ExtensionsPage';
 import {
   AboutSettingsPage,
   BackupSettingsPage,
   ContentSettingsPage,
   DiscordSettingsPage,
-  ExtensionsSettingsPage,
   HomeSectionsSettingsPage,
   LogsSettingsPage,
   PlayerSettingsPage,
@@ -96,7 +96,7 @@ export const App: React.FC = () => {
                   <Route path="/settings/ui" element={<UiSettingsPage />} />
                   <Route path="/settings/home" element={<HomeSectionsSettingsPage />} />
                   <Route path="/settings/tracking" element={<TrackingSettingsPage />} />
-                  <Route path="/settings/extensions" element={<ExtensionsSettingsPage />} />
+                  <Route path="/settings/extensions" element={<ExtensionsPage />} />
                   <Route path="/settings/player" element={<PlayerSettingsPage />} />
                   <Route path="/settings/reader" element={<ReaderSettingsPage />} />
                   <Route path="/settings/content" element={<ContentSettingsPage />} />

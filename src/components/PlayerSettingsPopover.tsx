@@ -8,6 +8,7 @@ import {
   PictureInPicture2,
   Plus,
   RotateCcw,
+  Server,
   SlidersHorizontal,
   Sparkles,
   Subtitles,
@@ -24,13 +25,20 @@ import {
   VideoFitMode,
   VideoQualityPref,
 } from '../store/AppContext';
+import { VideoServer } from '../types/media';
 import {
+  buildSubtitleBoxCssProps,
   HlsQualityOption,
   parseSubtitleText,
   resolveEffectiveStreamQuality,
+  stripSubtitleTags,
   SubtitleCue,
+  SubtitleEdgeStylePref,
+  SubtitleFontFamilyPref,
+  SubtitleFontWeightPref,
 } from '../utils/inlinePlayer';
 import { formatPlayerTime } from '../utils/detailsLayout';
+import { SubtitleFormattedText } from './SubtitleFormattedText';
 
 export type PlayerSettingsTab = 'playback' | 'quality' | 'subtitles';
 
@@ -48,7 +56,10 @@ interface PlayerSettingsPopoverProps {
   onChangeSpeed: (speed: number) => void;
   muted: boolean;
   onToggleMute: () => void;
-  // Quality
+  // Quality & Server
+  servers?: VideoServer[];
+  selectedServerId?: string;
+  onSelectServer?: (server: VideoServer) => void;
   hlsQualityOptions: HlsQualityOption[];
   selectedHlsLevel: number;
   onSelectHlsLevel: (levelIndex: number, qualityLabel?: VideoQualityPref) => void;
@@ -77,6 +88,27 @@ const SUBTITLE_COLORS = [
   { id: '#67e8f9', label: 'Cyan' },
   { id: '#86efac', label: 'Mint' },
   { id: '#fca5a5', label: 'Coral' },
+  { id: '#f0abfc', label: 'Lavender' },
+];
+
+const SUBTITLE_FONT_FAMILIES: Array<{ id: SubtitleFontFamilyPref; label: string }> = [
+  { id: 'sans', label: 'Sans' },
+  { id: 'rounded', label: 'Round' },
+  { id: 'serif', label: 'Serif' },
+  { id: 'mono', label: 'Mono' },
+];
+
+const SUBTITLE_FONT_WEIGHTS: Array<{ id: SubtitleFontWeightPref; label: string }> = [
+  { id: 'medium', label: 'Med' },
+  { id: 'bold', label: 'Bold' },
+  { id: 'extrabold', label: 'Heavy' },
+];
+
+const SUBTITLE_EDGE_STYLES: Array<{ id: SubtitleEdgeStylePref; label: string }> = [
+  { id: 'shadow', label: 'Shadow' },
+  { id: 'outline', label: 'Outline' },
+  { id: 'glow', label: 'Glow' },
+  { id: 'none', label: 'Clean' },
 ];
 
 const STANDARD_QUALITIES: VideoQualityPref[] = ['auto', '1080p', '720p', '480p', '360p'];
@@ -90,6 +122,9 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
   onChangeSpeed,
   muted,
   onToggleMute,
+  servers,
+  selectedServerId,
+  onSelectServer,
   hlsQualityOptions,
   selectedHlsLevel,
   onSelectHlsLevel,
@@ -165,8 +200,8 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
         portalInline
           ? 'relative z-10 w-full max-w-[360px] max-h-[min(80vh,520px)]'
           : compact
-            ? 'absolute z-50 top-11 right-2.5 w-[min(20rem,calc(100%-1.25rem))] max-h-[min(72vh,400px)]'
-            : 'absolute z-50 top-14 right-3 sm:right-5 w-80 sm:w-96 max-w-[calc(100%-1.5rem)] max-h-[76vh]'
+            ? 'absolute z-50 top-12 right-2.5 w-[min(20rem,calc(100%-1.25rem))] max-h-[min(74vh,420px)]'
+            : 'absolute z-50 top-16 sm:top-[4.25rem] right-3 sm:right-5 w-80 sm:w-96 max-w-[calc(100%-1.5rem)] max-h-[75vh]'
       }`}
     >
       {/* Tab Header */}
@@ -474,6 +509,36 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
         {/* ==================== TAB 2: QUALITY & STREAM ==================== */}
         {activeTab === 'quality' && (
           <div className="space-y-3">
+            {servers && servers.length > 0 && onSelectServer && (
+              <div data-testid="settings-server-section">
+                <p className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-white/55 mb-1.5">
+                  <Server className="w-3 h-3" />
+                  <span>Stream Server</span>
+                </p>
+                <div className="space-y-1">
+                  {servers.map((srv) => {
+                    const active = selectedServerId === srv.id;
+                    return (
+                      <button
+                        key={srv.id}
+                        type="button"
+                        data-testid={`settings-server-option-${srv.id}`}
+                        onClick={() => onSelectServer(srv)}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-bold transition-colors ${
+                          active
+                            ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)]'
+                            : 'bg-white/8 text-white hover:bg-white/15'
+                        }`}
+                      >
+                        <span className="truncate">{srv.name}</span>
+                        {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {playerPrefs.batterySaver && (
               <div
                 data-testid="quality-battery-saver-note"
@@ -622,13 +687,55 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
               </div>
             </div>
 
-            {/* Font Size & Background */}
-            <div className="space-y-2 bg-white/5 rounded-xl p-2.5 border border-white/10">
+            {/* Live Subtitle Preview */}
+            <div
+              data-testid="subtitle-style-preview"
+              className="rounded-xl bg-gradient-to-br from-zinc-900 via-slate-900 to-zinc-800 border border-white/12 p-3 flex items-center justify-center min-h-[54px]"
+            >
+              <span
+                style={buildSubtitleBoxCssProps(
+                  playerPrefs,
+                  Math.max(12, Math.min(playerPrefs.subtitleSize, 20)),
+                )}
+                className={`px-3 py-1 rounded-xl text-center leading-snug whitespace-pre-line ${
+                  playerPrefs.subtitleBackground ? 'backdrop-blur-md border border-white/10' : ''
+                }`}
+              >
+                <SubtitleFormattedText text="<i>It all began</i> at UA High!" />
+              </span>
+            </div>
+
+            {/* Font Size, Font Style, Edge & Color */}
+            <div className="space-y-2.5 bg-white/5 rounded-xl p-2.5 border border-white/10">
               <div className="flex items-center justify-between text-[11px] font-bold">
                 <span>Font Size</span>
-                <span className="font-mono-tabular text-[var(--sx-player-accent)]">
-                  {playerPrefs.subtitleSize}px
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono-tabular text-[var(--sx-player-accent)]">
+                    {playerPrefs.subtitleSize}px
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="sub-reset-style-btn"
+                    onClick={() =>
+                      onUpdatePrefs({
+                        subtitleSize: 18,
+                        subtitleColor: '#ffffff',
+                        subtitleBackground: true,
+                        subtitlePosition: 'bottom',
+                        subtitleFontFamily: 'sans',
+                        subtitleFontWeight: 'bold',
+                        subtitleEdgeStyle: 'shadow',
+                        subtitleBgOpacity: 75,
+                        subtitleBottomOffset: 0,
+                      })
+                    }
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white/10 hover:bg-white/20 text-[9.5px] font-bold text-white/80"
+                    title="Reset subtitle style"
+                  >
+                    <RotateCcw className="w-2.5 h-2.5" />
+                    <span>Reset</span>
+                  </button>
+                </div>
               </div>
               <input
                 type="range"
@@ -641,7 +748,89 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                 className="w-full accent-[var(--sx-player-accent)] cursor-pointer"
               />
 
-              <div className="flex items-center justify-between pt-1">
+              {/* Font Family */}
+              <div className="space-y-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/55">
+                  Font Style
+                </span>
+                <div className="grid grid-cols-4 gap-1">
+                  {SUBTITLE_FONT_FAMILIES.map((f) => {
+                    const active = (playerPrefs.subtitleFontFamily || 'sans') === f.id;
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        data-testid={`sub-font-${f.id}`}
+                        onClick={() => onUpdatePrefs({ subtitleFontFamily: f.id })}
+                        className={`py-1 rounded-lg text-[10px] font-bold transition-colors ${
+                          active
+                            ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)]'
+                            : 'bg-white/10 text-white/80 hover:bg-white/20'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Font Weight */}
+              <div className="space-y-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/55">
+                  Weight
+                </span>
+                <div className="grid grid-cols-3 gap-1">
+                  {SUBTITLE_FONT_WEIGHTS.map((w) => {
+                    const active = (playerPrefs.subtitleFontWeight || 'bold') === w.id;
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        data-testid={`sub-weight-${w.id}`}
+                        onClick={() => onUpdatePrefs({ subtitleFontWeight: w.id })}
+                        className={`py-1 rounded-lg text-[10px] font-bold transition-colors ${
+                          active
+                            ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)]'
+                            : 'bg-white/10 text-white/80 hover:bg-white/20'
+                        }`}
+                      >
+                        {w.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Edge / Outline Style */}
+              <div className="space-y-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/55">
+                  Text Edge
+                </span>
+                <div className="grid grid-cols-4 gap-1">
+                  {SUBTITLE_EDGE_STYLES.map((edge) => {
+                    const active = (playerPrefs.subtitleEdgeStyle || 'shadow') === edge.id;
+                    return (
+                      <button
+                        key={edge.id}
+                        type="button"
+                        data-testid={`sub-edge-${edge.id}`}
+                        onClick={() => onUpdatePrefs({ subtitleEdgeStyle: edge.id })}
+                        className={`py-1 rounded-lg text-[10px] font-bold transition-colors ${
+                          active
+                            ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)]'
+                            : 'bg-white/10 text-white/80 hover:bg-white/20'
+                        }`}
+                      >
+                        {edge.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Color Swatches */}
+              <div className="flex items-center justify-between pt-0.5">
                 <span className="text-[11px] font-bold">Color</span>
                 <div className="flex items-center gap-1.5">
                   {SUBTITLE_COLORS.map((c) => (
@@ -661,7 +850,8 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center justify-between gap-2 pt-1">
+              {/* Backdrop Box Toggle & Opacity Slider */}
+              <div className="flex items-center justify-between gap-2 pt-0.5">
                 <button
                   type="button"
                   onClick={() =>
@@ -673,7 +863,7 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                       : 'bg-white/10 text-white/75'
                   }`}
                 >
-                  Backdrop: {playerPrefs.subtitleBackground ? 'Box' : 'Outline'}
+                  Backdrop: {playerPrefs.subtitleBackground ? 'Box' : 'Off'}
                 </button>
                 <button
                   type="button"
@@ -688,6 +878,46 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                 >
                   Pos: {playerPrefs.subtitlePosition}
                 </button>
+              </div>
+
+              {playerPrefs.subtitleBackground && (
+                <div className="space-y-1 pt-0.5">
+                  <div className="flex items-center justify-between text-[10.5px] font-bold">
+                    <span className="text-white/75">Backdrop Opacity</span>
+                    <span className="font-mono-tabular text-[var(--sx-player-accent)]">
+                      {playerPrefs.subtitleBgOpacity ?? 75}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label="Subtitle backdrop opacity"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={playerPrefs.subtitleBgOpacity ?? 75}
+                    onChange={(e) => onUpdatePrefs({ subtitleBgOpacity: Number(e.target.value) })}
+                    className="w-full accent-[var(--sx-player-accent)] cursor-pointer"
+                  />
+                </div>
+              )}
+
+              <div className="space-y-1 pt-0.5">
+                <div className="flex items-center justify-between text-[10.5px] font-bold">
+                  <span className="text-white/75">Vertical Offset</span>
+                  <span className="font-mono-tabular text-[var(--sx-player-accent)]">
+                    +{playerPrefs.subtitleBottomOffset ?? 0}px
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  aria-label="Subtitle vertical offset"
+                  min={0}
+                  max={40}
+                  step={2}
+                  value={playerPrefs.subtitleBottomOffset ?? 0}
+                  onChange={(e) => onUpdatePrefs({ subtitleBottomOffset: Number(e.target.value) })}
+                  className="w-full accent-[var(--sx-player-accent)] cursor-pointer"
+                />
               </div>
             </div>
 
@@ -841,7 +1071,7 @@ export const PlayerSettingsPopover: React.FC<PlayerSettingsPopoverProps> = ({
                         type="text"
                         aria-label={`Subtitle line ${idx + 1}`}
                         data-testid={`sub-cue-input-${idx}`}
-                        value={cue.text}
+                        value={stripSubtitleTags(cue.text)}
                         onChange={(e) => handleCueTextChange(idx, e.target.value)}
                         className="w-full bg-black/45 border border-white/10 rounded-lg px-2 py-1 text-[11px] font-medium text-white focus:outline-none focus:border-[var(--sx-player-accent)]"
                       />

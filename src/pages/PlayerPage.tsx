@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Hls from 'hls.js';
 import {
+  AlertCircle,
   ArrowLeft,
   FastForward,
   Keyboard,
@@ -12,6 +13,7 @@ import {
   PictureInPicture2,
   Play,
   RectangleHorizontal,
+  RefreshCw,
   RotateCcw,
   RotateCw,
   Server,
@@ -31,15 +33,19 @@ import {
   UnifiedEpisode,
   UnifiedMedia,
   VideoServer,
+  VideoStream,
 } from '../types/media';
-import { resolveVideoServers, resolveVideoStream } from '../services/sourceEngine';
+import { resolveVideoServers, resolveVideoStreamAsync } from '../services/sourceEngine';
 import { fetchAniSkipIntervals, SkipInterval } from '../services/aniskip';
 import { clampSeekTarget, formatPlayerTime } from '../utils/detailsLayout';
 import {
   buildHlsQualityOptions,
+  buildSubtitleBoxCssProps,
   findActiveSubtitleCue,
   getVideoFitClass,
   HlsQualityOption,
+  parseSubtitleText,
+  resolveAvailableAudioOptions,
   resolveBatterySaverHlsLevel,
   resolveEffectiveStreamQuality,
   shouldAutoStartPlayback,
@@ -58,6 +64,7 @@ import {
 } from '../utils/pipPlayer';
 import { PlayerEpisodeDrawer } from '../components/PlayerEpisodeDrawer';
 import { PlayerSettingsPopover } from '../components/PlayerSettingsPopover';
+import { SubtitleFormattedText } from '../components/SubtitleFormattedText';
 import {
   EpisodeChangeDirection,
   getEpisodeBadgeTransitionClass,
@@ -69,10 +76,13 @@ interface PlayerLocationState {
   episodes?: UnifiedEpisode[];
   episodeIndex?: number;
   sourceId?: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  overrideTitle?: string;
   serverId?: string;
   startTime?: number;
   resumePlaying?: boolean;
-  activeSubLang?: 'en' | 'ja';
+  activeSubLang?: string;
   editedCuesMap?: Record<string, SubtitleCue[]>;
 }
 
@@ -96,14 +106,72 @@ export const PlayerPage: React.FC = () => {
   const [epIndex, setEpIndex] = useState(routeState.episodeIndex ?? 0);
   const currentEpisode = episodes[epIndex] ?? episodes[0];
 
-  const servers = useMemo(() => resolveVideoServers(routeState.sourceId), [routeState.sourceId]);
+  const rawServers = useMemo(
+    () => resolveVideoServers(routeState.sourceId, routeState.sourceName),
+    [routeState.sourceId, routeState.sourceName],
+  );
   const [selectedServer, setSelectedServer] = useState<VideoServer>(
-    () => servers.find((s) => s.id === routeState.serverId) ?? servers[0],
+    () => rawServers.find((s) => s.id === routeState.serverId) ?? rawServers[0],
   );
-  const stream = useMemo(
-    () => resolveVideoStream(media, currentEpisode, selectedServer),
-    [media, currentEpisode, selectedServer],
-  );
+
+  const [stream, setStream] = useState<VideoStream | null>(null);
+  const [streamLoading, setStreamLoading] = useState(true);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamRetryNonce, setStreamRetryNonce] = useState(0);
+  const [mirrorIndex, setMirrorIndex] = useState(0);
+  const [fetchedCuesMap, setFetchedCuesMap] = useState<Record<string, SubtitleCue[]>>({});
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setStream(null);
+    setStreamLoading(true);
+    setStreamError(null);
+    setMirrorIndex(0);
+    setHasVideoFrame(false);
+    setPlaying(false);
+
+    resolveVideoStreamAsync({
+      media,
+      episode: currentEpisode,
+      server: selectedServer,
+      sourceId: routeState.sourceId,
+      sourceName: routeState.sourceName,
+      sourceBaseUrl: routeState.sourceBaseUrl,
+      overrideTitle: routeState.overrideTitle,
+      bypassCache: streamRetryNonce > 0,
+      signal: controller.signal,
+    })
+      .then((resolved) => {
+        if (controller.signal.aborted) return;
+        setStream(resolved);
+        setStreamLoading(false);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setStream(null);
+        setStreamLoading(false);
+        setStreamError(
+          err instanceof Error ? err.message : 'Unable to resolve an active episode stream.',
+        );
+      });
+
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    media.id,
+    currentEpisode.id,
+    currentEpisode.number,
+    selectedServer.id,
+    routeState.sourceId,
+    routeState.sourceName,
+    routeState.sourceBaseUrl,
+    routeState.overrideTitle,
+    streamRetryNonce,
+  ]);
+
+  const activeMirror = stream?.mirrors?.[mirrorIndex] ?? null;
+  const activeStreamUrl = activeMirror?.url || stream?.url || '';
+  const activeStreamIsHls = activeMirror ? activeMirror.isHls : Boolean(stream?.isHls);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -128,7 +196,7 @@ export const PlayerPage: React.FC = () => {
   const [speed, setSpeed] = useState(state.playerPrefs.defaultSpeed || 1);
   const [showControls, setShowControls] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [activeSubLang, setActiveSubLang] = useState<'en' | 'ja'>(
+  const [activeSubLang, setActiveSubLang] = useState<string>(
     routeState.activeSubLang || 'en',
   );
   const [editedCuesMap, setEditedCuesMap] = useState<Record<string, SubtitleCue[]>>(
@@ -197,13 +265,17 @@ export const PlayerPage: React.FC = () => {
   // Attach HLS or native MP4 stream — strictly respects persisted autoPlay preference and PiP restore timestamp
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !activeStreamUrl) {
+      if (video && video.getAttribute('src')) {
+        video.removeAttribute('src');
+        video.load();
+      }
+      return;
+    }
 
     let cancelled = false;
     const resumeAt = pendingStartTimeRef.current;
     const resumePlay = pendingResumePlayRef.current;
-    pendingStartTimeRef.current = null;
-    pendingResumePlayRef.current = false;
 
     setHasVideoFrame(false);
     setPlaying(false);
@@ -217,6 +289,10 @@ export const PlayerPage: React.FC = () => {
 
     const applyInitialStreamState = () => {
       if (cancelled) return;
+      if (pendingStartTimeRef.current === resumeAt) {
+        pendingStartTimeRef.current = null;
+        pendingResumePlayRef.current = false;
+      }
       if (resumeAt && resumeAt > 0.5) {
         try {
           video.currentTime = resumeAt;
@@ -232,14 +308,23 @@ export const PlayerPage: React.FC = () => {
       }
     };
 
+    const advanceMirrorOrError = (reason: string) => {
+      if (cancelled) return;
+      if (stream?.mirrors && mirrorIndex + 1 < stream.mirrors.length) {
+        setMirrorIndex((i) => i + 1);
+      } else {
+        setStreamError(reason);
+      }
+    };
+
     let hls: Hls | null = null;
-    if (stream.isHls && Hls.isSupported()) {
+    if (activeStreamIsHls && Hls.isSupported()) {
       hls = new Hls({ enableWorker: true });
       hlsRef.current = hls;
-      hls.loadSource(stream.url);
+      hls.loadSource(activeStreamUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (!hls) return;
+        if (!hls || cancelled) return;
         setHlsQualityOptions(buildHlsQualityOptions(hls.levels));
         const preferredLevel = resolveBatterySaverHlsLevel(
           hls.levels,
@@ -250,9 +335,19 @@ export const PlayerPage: React.FC = () => {
         setSelectedHlsLevel(preferredLevel);
         applyInitialStreamState();
       });
+      let recoveredMedia = false;
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data?.fatal || cancelled) return;
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recoveredMedia && hls) {
+          recoveredMedia = true;
+          hls.recoverMediaError();
+          return;
+        }
+        advanceMirrorOrError('Stream mirror failed to buffer. Try retrying or switching server.');
+      });
     } else {
       hlsRef.current = null;
-      video.src = stream.url;
+      video.src = activeStreamUrl;
       video.addEventListener('loadedmetadata', applyInitialStreamState, { once: true });
       if (video.readyState >= 1) {
         applyInitialStreamState();
@@ -266,7 +361,7 @@ export const PlayerPage: React.FC = () => {
       if (hlsRef.current === hls) hlsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream.url, stream.isHls, currentEpisode.id]);
+  }, [activeStreamUrl, activeStreamIsHls, currentEpisode.id]);
 
   // Dynamically apply Battery Saver 480p cap on active HLS streams
   useEffect(() => {
@@ -392,6 +487,9 @@ export const PlayerPage: React.FC = () => {
     episodes,
     epIndex,
     sourceId: routeState.sourceId,
+    sourceName: routeState.sourceName,
+    sourceBaseUrl: routeState.sourceBaseUrl,
+    overrideTitle: routeState.overrideTitle,
     serverId: selectedServer.id,
     currentTime,
     duration,
@@ -408,6 +506,9 @@ export const PlayerPage: React.FC = () => {
     episodes,
     epIndex,
     sourceId: routeState.sourceId,
+    sourceName: routeState.sourceName,
+    sourceBaseUrl: routeState.sourceBaseUrl,
+    overrideTitle: routeState.overrideTitle,
     serverId: selectedServer.id,
     currentTime,
     duration,
@@ -436,6 +537,9 @@ export const PlayerPage: React.FC = () => {
       episodes,
       episodeIndex: epIndex,
       sourceId: routeState.sourceId,
+      sourceName: routeState.sourceName,
+      sourceBaseUrl: routeState.sourceBaseUrl,
+      overrideTitle: routeState.overrideTitle,
       serverId: selectedServer.id,
       currentTime: liveTime,
       duration: liveDuration,
@@ -507,6 +611,9 @@ export const PlayerPage: React.FC = () => {
         episodes: snap.episodes,
         episodeIndex: snap.epIndex,
         sourceId: snap.sourceId,
+        sourceName: snap.sourceName,
+        sourceBaseUrl: snap.sourceBaseUrl,
+        overrideTitle: snap.overrideTitle,
         serverId: snap.serverId,
         currentTime: liveTime,
         duration: liveDuration,
@@ -720,8 +827,37 @@ export const PlayerPage: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  // Active AniSkip interval
-  const activeSkip = skipIntervals.find(
+  const mergedSkipIntervals = useMemo<SkipInterval[]>(() => {
+    const base = [...skipIntervals];
+    if (
+      stream?.intro &&
+      stream.intro.end > stream.intro.start &&
+      !base.some((s) => s.skipType === 'op')
+    ) {
+      base.push({
+        skipId: 'stream-intro',
+        skipType: 'op',
+        startTime: stream.intro.start,
+        endTime: stream.intro.end,
+      });
+    }
+    if (
+      stream?.outro &&
+      stream.outro.end > stream.outro.start &&
+      !base.some((s) => s.skipType === 'ed')
+    ) {
+      base.push({
+        skipId: 'stream-outro',
+        skipType: 'ed',
+        startTime: stream.outro.start,
+        endTime: stream.outro.end,
+      });
+    }
+    return base;
+  }, [skipIntervals, stream?.intro, stream?.outro]);
+
+  // Active AniSkip / stream intro-outro interval
+  const activeSkip = mergedSkipIntervals.find(
     (s) => currentTime >= s.startTime && currentTime < s.endTime - 0.5,
   );
 
@@ -736,13 +872,42 @@ export const PlayerPage: React.FC = () => {
     }
   }, [activeSkip, state.playerPrefs.autoSkipOp, state.playerPrefs.autoSkipEd]);
 
-  // Active subtitle cue with live edits & sync offset
+  // Active subtitle cue with live edits, remote VTT loading & sync offset
   const trackKey = `${currentEpisode.id}:${activeSubLang}`;
-  const activeTrack = stream.subtitles?.find((s) => s.lang === activeSubLang);
+  const activeTrack =
+    stream?.subtitles?.find((s) => s.lang === activeSubLang) ??
+    (activeSubLang === 'en' ? stream?.subtitles?.[0] : undefined);
+  const activeTrackUrl = activeTrack?.url;
+  const activeTrackLangKey = activeTrack ? `${currentEpisode.id}:${activeTrack.lang}` : trackKey;
+
+  useEffect(() => {
+    if (!activeTrackUrl) return;
+    if (activeTrack?.cues && activeTrack.cues.length > 0) return;
+    if (fetchedCuesMap[activeTrackLangKey]) return;
+
+    let cancelled = false;
+    fetch(activeTrackUrl)
+      .then((res) => (res.ok ? res.text() : ''))
+      .then((rawText) => {
+        if (cancelled || !rawText.trim()) return;
+        const parsed = parseSubtitleText(rawText);
+        if (parsed.length > 0) {
+          setFetchedCuesMap((prev) => ({ ...prev, [activeTrackLangKey]: parsed }));
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTrackUrl, activeTrack?.cues, activeTrackLangKey, fetchedCuesMap]);
+
   const effectiveCues: SubtitleCue[] = useMemo(() => {
     if (editedCuesMap[trackKey]) return editedCuesMap[trackKey];
-    return activeTrack?.cues ?? [];
-  }, [editedCuesMap, trackKey, activeTrack]);
+    if (activeTrack?.cues && activeTrack.cues.length > 0) return activeTrack.cues;
+    if (fetchedCuesMap[activeTrackLangKey]) return fetchedCuesMap[activeTrackLangKey];
+    return [];
+  }, [editedCuesMap, trackKey, activeTrack, fetchedCuesMap, activeTrackLangKey]);
 
   const activeCue = subtitlesOn
     ? findActiveSubtitleCue(
@@ -751,6 +916,27 @@ export const PlayerPage: React.FC = () => {
         state.playerPrefs.subtitleOffsetSeconds || 0,
       )
     : null;
+
+  const availableAudioOptions = useMemo(
+    () => resolveAvailableAudioOptions(stream?.availableAudios),
+    [stream?.availableAudios],
+  );
+  const hasDubAudio = availableAudioOptions.some((a) => a.serverCategory === 'dub');
+  const servers = useMemo(() => {
+    if (!stream) return rawServers;
+    const filtered = rawServers.filter((s) => s.category !== 'dub' || hasDubAudio);
+    return filtered.length > 0 ? filtered : rawServers;
+  }, [rawServers, stream, hasDubAudio]);
+
+  useEffect(() => {
+    if (!stream || !selectedServer) return;
+    if (selectedServer.category === 'dub' && !hasDubAudio) {
+      const subServer = servers.find((s) => s.category === 'sub') ?? servers[0];
+      if (subServer && subServer.id !== selectedServer.id) {
+        setSelectedServer(subServer);
+      }
+    }
+  }, [stream, hasDubAudio, selectedServer, servers]);
 
   const title = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
   const backdropArtwork = currentEpisode.thumbnail || media.banner || media.cover || '';
@@ -811,7 +997,7 @@ export const PlayerPage: React.FC = () => {
           }`}
         />
       )}
-      {!hasVideoFrame && (
+      {!hasVideoFrame && !streamError && (
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 overflow-hidden z-[1]"
@@ -826,7 +1012,49 @@ export const PlayerPage: React.FC = () => {
           <div className="sx-buffering-shimmer w-1/2 h-full bg-gradient-to-r from-transparent via-white/15 to-transparent skew-x-[-20deg]" />
           <div className="absolute top-20 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/15 text-[11px] font-bold text-white/90 shadow-lg">
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--sx-player-accent)] animate-ping" />
-            <span>Preparing EP {currentEpisode.number}...</span>
+            <span>
+              {streamLoading
+                ? `Resolving EP ${currentEpisode.number} stream...`
+                : `Buffering EP ${currentEpisode.number}...`}
+            </span>
+          </div>
+        </div>
+      )}
+      {streamError && (
+        <div
+          data-no-gesture="true"
+          data-testid="player-stream-error"
+          className="absolute inset-0 z-30 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md text-center"
+        >
+          <div className="max-w-sm rounded-3xl bg-zinc-950/92 border border-white/15 px-5 py-4 shadow-2xl space-y-3">
+            <div className="inline-flex items-center gap-2 text-xs font-extrabold text-amber-300">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>Stream Unavailable</span>
+            </div>
+            <p className="text-xs text-white/80 leading-relaxed">{streamError}</p>
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setStreamRetryNonce((n) => n + 1)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-xs font-extrabold shadow"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Retry</span>
+              </button>
+              {servers.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idx = servers.findIndex((s) => s.id === selectedServer.id);
+                    const nextSrv = servers[(idx + 1) % servers.length];
+                    if (nextSrv) setSelectedServer(nextSrv);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/12 hover:bg-white/20 border border-white/15 text-xs font-bold text-white transition-colors"
+                >
+                  <span>Switch Server</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -864,6 +1092,14 @@ export const PlayerPage: React.FC = () => {
         }}
         onLoadedData={() => setHasVideoFrame(true)}
         onPlaying={() => setHasVideoFrame(true)}
+        onError={() => {
+          if (!activeStreamUrl) return;
+          if (stream?.mirrors && mirrorIndex + 1 < stream.mirrors.length) {
+            setMirrorIndex((i) => i + 1);
+          } else {
+            setStreamError('Video playback failed on this server. Try retrying or switching servers.');
+          }
+        }}
         onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
         onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
         onEnded={() => {
@@ -969,6 +1205,16 @@ export const PlayerPage: React.FC = () => {
       {/* Custom Subtitle Overlay */}
       {activeCue && (
         <div
+          style={{
+            transform:
+              (state.playerPrefs.subtitleBottomOffset || 0) > 0
+                ? `translateY(${
+                    state.playerPrefs.subtitlePosition === 'top'
+                      ? state.playerPrefs.subtitleBottomOffset
+                      : -(state.playerPrefs.subtitleBottomOffset || 0)
+                  }px)`
+                : undefined,
+          }}
           className={`pointer-events-none absolute inset-x-6 flex justify-center z-20 transition-all duration-200 ${
             state.playerPrefs.subtitlePosition === 'top'
               ? 'top-20'
@@ -979,17 +1225,12 @@ export const PlayerPage: React.FC = () => {
         >
           <p
             key={activeCue.text}
-            style={{
-              fontSize: `${state.playerPrefs.subtitleSize}px`,
-              color: state.playerPrefs.subtitleColor || '#ffffff',
-            }}
-            className={`sx-player-subtitle-enter px-4 py-1.5 rounded-2xl text-center font-bold max-w-3xl leading-snug transition-all duration-200 ${
-              state.playerPrefs.subtitleBackground
-                ? 'bg-black/72 backdrop-blur-md border border-white/10'
-                : 'drop-shadow-[0_2px_6px_rgba(0,0,0,0.95)]'
+            style={buildSubtitleBoxCssProps(state.playerPrefs, state.playerPrefs.subtitleSize)}
+            className={`sx-player-subtitle-enter px-4 py-1.5 rounded-2xl text-center max-w-3xl leading-snug whitespace-pre-line transition-all duration-200 ${
+              state.playerPrefs.subtitleBackground ? 'backdrop-blur-md border border-white/10' : ''
             }`}
           >
-            {activeCue.text}
+            <SubtitleFormattedText text={activeCue.text} />
           </p>
         </div>
       )}
@@ -1461,16 +1702,26 @@ export const PlayerPage: React.FC = () => {
             return !m;
           });
         }}
+        servers={servers}
+        selectedServerId={selectedServer.id}
+        onSelectServer={(srv) => {
+          setSelectedServer(srv);
+          if (srv.category === 'dub' && hasDubAudio) {
+            updatePlayerPrefs({ audioLanguage: 'en' });
+          } else if (srv.category === 'sub') {
+            updatePlayerPrefs({ audioLanguage: 'ja' });
+          }
+        }}
         hlsQualityOptions={hlsQualityOptions}
         selectedHlsLevel={selectedHlsLevel}
         onSelectHlsLevel={handleSelectHlsLevel}
         subtitleTracks={
-          stream.subtitles?.map((s) => ({ lang: s.lang, label: s.label })) || [
+          stream?.subtitles?.map((s) => ({ lang: s.lang, label: s.label })) || [
             { lang: 'en', label: 'English' },
           ]
         }
         activeSubLang={activeSubLang}
-        onChangeSubLang={(lang) => setActiveSubLang(lang === 'ja' ? 'ja' : 'en')}
+        onChangeSubLang={(lang) => setActiveSubLang(lang)}
         cues={effectiveCues}
         currentTime={currentTime}
         onUpdateCues={(nextCues) =>

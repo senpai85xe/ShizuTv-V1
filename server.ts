@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -15,6 +16,8 @@ import {
   isSafeExternalHttpUrl,
   parseExtensionRepoManifest,
 } from './src/utils/extensionRepoParser';
+import { resolveAnimeEpisodeStream } from './src/server/animeStreamResolver';
+import { rewriteM3u8Manifest } from './src/utils/streamResolverUtils';
 import type { ExtensionRepo, SourceInfo } from './src/types/media';
 
 type WatchPartyTrack = 'H-Sub' | 'Dub';
@@ -1150,6 +1153,8 @@ async function startServer() {
       managerRaw === 'aniyomi' ||
       managerRaw === 'mangayomi' ||
       managerRaw === 'cloudstream' ||
+      managerRaw === 'legado' ||
+      managerRaw === 'lnreader' ||
       managerRaw === 'shonenx'
         ? managerRaw
         : undefined
@@ -1263,6 +1268,181 @@ async function startServer() {
             ? `Failed to fetch repository manifest: ${err.message}`
             : 'Network error fetching repository manifest.',
       });
+    }
+  });
+
+  app.post('/api/stream/resolve', async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawTitles = (body.titles ?? {}) as Record<string, unknown>;
+    const episodeNumberRaw = Number(body.episodeNumber);
+    const episodeNumber =
+      Number.isFinite(episodeNumberRaw) && episodeNumberRaw > 0 ? episodeNumberRaw : 1;
+    const categoryRaw = typeof body.category === 'string' ? body.category.toLowerCase() : 'sub';
+    const category: 'sub' | 'dub' | 'raw' =
+      categoryRaw === 'dub' ? 'dub' : categoryRaw === 'raw' ? 'raw' : 'sub';
+
+    try {
+      const resolved = await resolveAnimeEpisodeStream({
+        mediaId: typeof body.mediaId === 'string' ? body.mediaId : 'unknown',
+        titles: {
+          overrideTitle:
+            typeof rawTitles.overrideTitle === 'string' ? rawTitles.overrideTitle : null,
+          english: typeof rawTitles.english === 'string' ? rawTitles.english : null,
+          romaji: typeof rawTitles.romaji === 'string' ? rawTitles.romaji : null,
+          native: typeof rawTitles.native === 'string' ? rawTitles.native : null,
+          synonyms: Array.isArray(rawTitles.synonyms)
+            ? rawTitles.synonyms.filter((s): s is string => typeof s === 'string')
+            : null,
+        },
+        format: typeof body.format === 'string' ? body.format : null,
+        episodeNumber,
+        serverId: typeof body.serverId === 'string' ? body.serverId : undefined,
+        serverName: typeof body.serverName === 'string' ? body.serverName : undefined,
+        category,
+        sourceId: typeof body.sourceId === 'string' ? body.sourceId : undefined,
+        sourceName: typeof body.sourceName === 'string' ? body.sourceName : undefined,
+        sourceBaseUrl:
+          typeof body.sourceBaseUrl === 'string' ? body.sourceBaseUrl : undefined,
+        bypassCache: Boolean(body.bypassCache),
+      });
+
+      res.json(resolved);
+    } catch (err) {
+      res.status(404).json({
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Unable to resolve an active stream for this episode.',
+      });
+    }
+  });
+
+  app.get('/api/stream/proxy', async (req, res) => {
+    const targetUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    const rawReferer =
+      typeof req.query.referer === 'string' ? req.query.referer.trim() : '';
+
+    if (!isSafeExternalHttpUrl(targetUrl)) {
+      res.status(400).json({ message: 'Invalid stream target URL.' });
+      return;
+    }
+
+    const safeReferer = isSafeExternalHttpUrl(rawReferer) ? rawReferer : undefined;
+    const headers: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      Accept: '*/*',
+    };
+    if (safeReferer) {
+      headers.Referer = safeReferer;
+      try {
+        headers.Origin = new URL(safeReferer).origin;
+      } catch {
+        // Ignore origin parse errors
+      }
+    }
+    if (typeof req.headers.range === 'string' && req.headers.range.trim()) {
+      headers.Range = req.headers.range;
+    }
+
+    try {
+      const upstream = await fetch(targetUrl, {
+        headers,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000),
+      });
+
+      const finalUrl = upstream.url || targetUrl;
+      if (!isSafeExternalHttpUrl(finalUrl)) {
+        res.status(403).json({ message: 'Redirect target blocked.' });
+        return;
+      }
+
+      const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
+      const pathnameLower = (() => {
+        try {
+          return new URL(finalUrl).pathname.toLowerCase();
+        } catch {
+          return finalUrl.toLowerCase();
+        }
+      })();
+
+      const isM3u8 =
+        contentType.includes('mpegurl') || pathnameLower.endsWith('.m3u8');
+      const isVtt = contentType.includes('text/vtt') || pathnameLower.endsWith('.vtt');
+
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
+
+      if (!upstream.ok && upstream.status !== 206) {
+        const errBody = await upstream.text().catch(() => '');
+        res.status(upstream.status).send(errBody.slice(0, 400));
+        return;
+      }
+
+      if (isM3u8) {
+        const rawManifest = await upstream.text();
+        const rewritten = rewriteM3u8Manifest(
+          rawManifest,
+          finalUrl,
+          '/api/stream/proxy',
+          safeReferer,
+        );
+        res.status(200);
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(rewritten);
+        return;
+      }
+
+      if (isVtt) {
+        const vttText = await upstream.text();
+        res.status(200);
+        res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.send(vttText);
+        return;
+      }
+
+      res.status(upstream.status);
+      if (contentType) {
+        res.setHeader('Content-Type', contentType);
+      } else {
+        res.setHeader('Content-Type', 'application/octet-stream');
+      }
+      const passthroughHeaders = [
+        'content-length',
+        'content-range',
+        'accept-ranges',
+        'cache-control',
+      ];
+      for (const hName of passthroughHeaders) {
+        const val = upstream.headers.get(hName);
+        if (val) res.setHeader(hName, val);
+      }
+
+      if (upstream.body) {
+        const nodeStream = Readable.fromWeb(
+          upstream.body as Parameters<typeof Readable.fromWeb>[0],
+        );
+        nodeStream.on('error', () => {
+          if (!res.headersSent) res.status(502).end();
+          else res.end();
+        });
+        req.on('close', () => {
+          nodeStream.destroy();
+        });
+        nodeStream.pipe(res);
+      } else {
+        const buf = Buffer.from(await upstream.arrayBuffer());
+        res.send(buf);
+      }
+    } catch (err) {
+      if (!res.headersSent) {
+        res.status(502).json({
+          message: err instanceof Error ? err.message : 'Stream proxy fetch failed.',
+        });
+      }
     }
   });
 

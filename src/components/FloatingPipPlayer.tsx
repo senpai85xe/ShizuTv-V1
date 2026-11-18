@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import {
+  AlertCircle,
   Maximize2,
   Pause,
   PictureInPicture2,
   Play,
+  RefreshCw,
   SkipBack,
   SkipForward,
   Volume2,
@@ -13,13 +15,17 @@ import {
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { usePip } from '../store/PipContext';
-import { getPreferredTitle } from '../types/media';
-import { resolveVideoServers, resolveVideoStream } from '../services/sourceEngine';
+import { getPreferredTitle, VideoStream } from '../types/media';
+import { resolveVideoServers, resolveVideoStreamAsync } from '../services/sourceEngine';
 import {
+  buildSubtitleBoxCssProps,
   findActiveSubtitleCue,
   formatScrubberPercent,
   getEpisodeNavigationState,
+  parseSubtitleText,
+  SubtitleCue,
 } from '../utils/inlinePlayer';
+import { SubtitleFormattedText } from './SubtitleFormattedText';
 import { formatPlayerTime } from '../utils/detailsLayout';
 import {
   canUseNativePictureInPicture,
@@ -109,18 +115,77 @@ export const FloatingPipPlayer: React.FC = () => {
   }, [pipSession]);
 
   const servers = useMemo(
-    () => resolveVideoServers(pipSession?.sourceId),
-    [pipSession?.sourceId],
+    () => resolveVideoServers(pipSession?.sourceId, pipSession?.sourceName),
+    [pipSession?.sourceId, pipSession?.sourceName],
   );
   const activeServer = useMemo(() => {
     if (!pipSession?.serverId) return servers[0];
     return servers.find((s) => s.id === pipSession.serverId) ?? servers[0];
   }, [servers, pipSession?.serverId]);
 
-  const stream = useMemo(() => {
-    if (!pipSession || !currentEpisode) return null;
-    return resolveVideoStream(pipSession.media, currentEpisode, activeServer);
-  }, [pipSession, currentEpisode, activeServer]);
+  const [stream, setStream] = useState<VideoStream | null>(null);
+  const [streamLoading, setStreamLoading] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamRetryNonce, setStreamRetryNonce] = useState(0);
+  const [mirrorIndex, setMirrorIndex] = useState(0);
+  const [fetchedCuesMap, setFetchedCuesMap] = useState<Record<string, SubtitleCue[]>>({});
+
+  useEffect(() => {
+    if (!pipSession || !currentEpisode) {
+      setStream(null);
+      setStreamLoading(false);
+      setStreamError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    setStream(null);
+    setStreamLoading(true);
+    setStreamError(null);
+    setMirrorIndex(0);
+
+    resolveVideoStreamAsync({
+      media: pipSession.media,
+      episode: currentEpisode,
+      server: activeServer,
+      sourceId: pipSession.sourceId,
+      sourceName: pipSession.sourceName,
+      sourceBaseUrl: pipSession.sourceBaseUrl,
+      overrideTitle: pipSession.overrideTitle,
+      bypassCache: streamRetryNonce > 0,
+      signal: controller.signal,
+    })
+      .then((resolved) => {
+        if (controller.signal.aborted) return;
+        setStream(resolved);
+        setStreamLoading(false);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setStream(null);
+        setStreamLoading(false);
+        setStreamError(
+          err instanceof Error ? err.message : 'Unable to resolve episode stream.',
+        );
+      });
+
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    pipSession?.media.id,
+    currentEpisode?.id,
+    currentEpisode?.number,
+    activeServer.id,
+    pipSession?.sourceId,
+    pipSession?.sourceName,
+    pipSession?.sourceBaseUrl,
+    pipSession?.overrideTitle,
+    streamRetryNonce,
+  ]);
+
+  const activeMirror = stream?.mirrors?.[mirrorIndex] ?? null;
+  const activeStreamUrl = activeMirror?.url || stream?.url || '';
+  const activeStreamIsHls = activeMirror ? activeMirror.isHls : Boolean(stream?.isHls);
 
   const scheduleHideHud = (currentlyPlaying: boolean) => {
     setShowHud(true);
@@ -138,17 +203,19 @@ export const FloatingPipPlayer: React.FC = () => {
 
   // Attach HLS/MP4 stream and restore exact timestamp
   useEffect(() => {
-    if (!pipSession || !currentEpisode || !stream) return;
+    if (!pipSession || !currentEpisode || !activeStreamUrl) return;
     const video = videoRef.current;
     if (!video) return;
 
     setNativePipAvailable(canUseNativePictureInPicture(document, video));
 
+    let cancelled = false;
     const startTime = Math.max(0, pipSession.currentTime || 0);
     const shouldPlay = pipSession.playing;
     let restored = false;
 
     const applyResumeState = () => {
+      if (cancelled) return;
       if (!restored && startTime > 0.5) {
         try {
           video.currentTime = startTime;
@@ -165,16 +232,35 @@ export const FloatingPipPlayer: React.FC = () => {
       }
     };
 
+    const advanceMirrorOrError = (reason: string) => {
+      if (cancelled) return;
+      if (stream?.mirrors && mirrorIndex + 1 < stream.mirrors.length) {
+        setMirrorIndex((i) => i + 1);
+      } else {
+        setStreamError(reason);
+      }
+    };
+
     let hls: Hls | null = null;
-    if (stream.isHls && Hls.isSupported()) {
+    if (activeStreamIsHls && Hls.isSupported()) {
       hls = new Hls({ enableWorker: true });
       hlsRef.current = hls;
-      hls.loadSource(stream.url);
+      hls.loadSource(activeStreamUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, applyResumeState);
+      let recoveredMedia = false;
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data?.fatal || cancelled) return;
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recoveredMedia && hls) {
+          recoveredMedia = true;
+          hls.recoverMediaError();
+          return;
+        }
+        advanceMirrorOrError('PiP stream failed.');
+      });
     } else {
       hlsRef.current = null;
-      video.src = stream.url;
+      video.src = activeStreamUrl;
       const onMeta = () => applyResumeState();
       video.addEventListener('loadedmetadata', onMeta, { once: true });
       if (video.readyState >= 1) {
@@ -188,6 +274,7 @@ export const FloatingPipPlayer: React.FC = () => {
     video.addEventListener('leavepictureinpicture', onLeaveNative);
 
     return () => {
+      cancelled = true;
       video.removeEventListener('enterpictureinpicture', onEnterNative);
       video.removeEventListener('leavepictureinpicture', onLeaveNative);
       if (hls) hls.destroy();
@@ -195,7 +282,40 @@ export const FloatingPipPlayer: React.FC = () => {
     };
     // Re-attach only when episode, stream url, or active session media changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pipSession?.media.id, currentEpisode?.id, stream?.url]);
+  }, [pipSession?.media.id, currentEpisode?.id, activeStreamUrl]);
+
+  // Fetch remote WebVTT subtitle track if needed
+  const pipTrackLang = pipSession?.activeSubLang || 'en';
+  const pipActiveTrack =
+    stream?.subtitles?.find((s) => s.lang === pipTrackLang) ??
+    (pipTrackLang === 'en' ? stream?.subtitles?.[0] : undefined);
+  const pipTrackUrl = pipActiveTrack?.url;
+  const pipTrackLangKey =
+    currentEpisode && pipActiveTrack
+      ? `${currentEpisode.id}:${pipActiveTrack.lang}`
+      : '';
+
+  useEffect(() => {
+    if (!pipTrackUrl || !pipTrackLangKey) return;
+    if (pipActiveTrack?.cues && pipActiveTrack.cues.length > 0) return;
+    if (fetchedCuesMap[pipTrackLangKey]) return;
+
+    let cancelled = false;
+    fetch(pipTrackUrl)
+      .then((res) => (res.ok ? res.text() : ''))
+      .then((rawText) => {
+        if (cancelled || !rawText.trim()) return;
+        const parsed = parseSubtitleText(rawText);
+        if (parsed.length > 0) {
+          setFetchedCuesMap((prev) => ({ ...prev, [pipTrackLangKey]: parsed }));
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pipTrackUrl, pipActiveTrack?.cues, pipTrackLangKey, fetchedCuesMap]);
 
   // Update MediaSession metadata & transport controls when supported
   useEffect(() => {
@@ -228,7 +348,7 @@ export const FloatingPipPlayer: React.FC = () => {
     setPipEpisodeIndex,
   ]);
 
-  if (!pipSession || !currentEpisode || !stream) {
+  if (!pipSession || !currentEpisode) {
     return null;
   }
 
@@ -238,8 +358,12 @@ export const FloatingPipPlayer: React.FC = () => {
   const progressPct = formatScrubberPercent(pipSession.currentTime, effectiveDuration);
 
   const trackKey = `${currentEpisode.id}:${pipSession.activeSubLang}`;
-  const activeTrack = stream.subtitles?.find((s) => s.lang === pipSession.activeSubLang);
-  const cues = pipSession.editedCuesMap?.[trackKey] ?? activeTrack?.cues ?? [];
+  const cues =
+    pipSession.editedCuesMap?.[trackKey] ??
+    (pipActiveTrack?.cues && pipActiveTrack.cues.length > 0
+      ? pipActiveTrack.cues
+      : fetchedCuesMap[pipTrackLangKey]) ??
+    [];
   const activeCue = state.playerPrefs.subtitleEnabled
     ? findActiveSubtitleCue(
         cues,
@@ -249,7 +373,7 @@ export const FloatingPipPlayer: React.FC = () => {
     : null;
 
   const activePos = dragPos ?? cornerPos;
-  const hudVisible = showHud || !pipSession.playing;
+  const hudVisible = showHud || !pipSession.playing || streamLoading || Boolean(streamError);
 
   const togglePlay = () => {
     const v = videoRef.current;
@@ -438,14 +562,53 @@ export const FloatingPipPlayer: React.FC = () => {
             setShowHud(true);
           }
         }}
+        onError={() => {
+          if (!activeStreamUrl) return;
+          if (stream?.mirrors && mirrorIndex + 1 < stream.mirrors.length) {
+            setMirrorIndex((i) => i + 1);
+          } else {
+            setStreamError('PiP stream failed.');
+          }
+        }}
         className="w-full h-full object-contain bg-black pointer-events-none"
       />
+
+      {streamLoading && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/55">
+          <span className="px-2.5 py-1 rounded-full bg-black/75 border border-white/15 text-[10px] font-bold text-white/90">
+            Resolving stream...
+          </span>
+        </div>
+      )}
+
+      {streamError && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 bg-black/80 px-3 text-center">
+          <div className="inline-flex items-center gap-1 text-[10px] font-extrabold text-amber-300">
+            <AlertCircle className="w-3.5 h-3.5" />
+            <span>{streamError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setStreamRetryNonce((n) => n + 1);
+            }}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-[10px] font-extrabold"
+          >
+            <RefreshCw className="w-3 h-3" />
+            <span>Retry</span>
+          </button>
+        </div>
+      )}
 
       {/* Mini Subtitle Cue (positioned clear of bottom timestamp when HUD is visible) */}
       {activeCue && !hudVisible && (
         <div className="pointer-events-none absolute inset-x-2 bottom-2.5 z-10 flex justify-center">
-          <p className="px-2 py-0.5 rounded-md bg-black/75 text-[10px] font-bold text-center text-white line-clamp-2 leading-tight">
-            {activeCue.text}
+          <p
+            style={buildSubtitleBoxCssProps(state.playerPrefs, 10)}
+            className="px-2 py-0.5 rounded-md text-center line-clamp-2 whitespace-pre-line leading-tight"
+          >
+            <SubtitleFormattedText text={activeCue.text} />
           </p>
         </div>
       )}

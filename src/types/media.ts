@@ -126,11 +126,30 @@ export interface VideoServer {
   category: 'sub' | 'dub' | 'raw';
 }
 
+export interface AvailableAudioTrack {
+  code: 'ja' | 'en' | 'hi' | 'es';
+  shortLabel: string;
+  label: string;
+  serverCategory: 'sub' | 'dub';
+}
+
 export interface VideoStream {
   url: string;
   quality: string;
   isHls: boolean;
   serverName: string;
+  provider?: string;
+  matchedTitle?: string;
+  matchedEpisode?: number;
+  intro?: { start: number; end: number } | null;
+  outro?: { start: number; end: number } | null;
+  availableAudios?: AvailableAudioTrack[];
+  mirrors?: Array<{
+    url: string;
+    quality: string;
+    isHls: boolean;
+    serverName: string;
+  }>;
   subtitles?: Array<{
     lang: string;
     label: string;
@@ -246,7 +265,8 @@ export interface ExtensionRepo {
   id: string;
   name: string;
   url: string;
-  manager: 'aniyomi' | 'mangayomi' | 'cloudstream' | 'shonenx';
+  manager: 'aniyomi' | 'mangayomi' | 'cloudstream' | 'legado' | 'lnreader' | 'shonenx';
+  mediaType?: 'ANIME' | 'MANGA' | 'NOVEL';
   addedAt: string;
 }
 

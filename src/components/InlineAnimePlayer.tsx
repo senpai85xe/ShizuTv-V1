@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Hls from 'hls.js';
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowRight,
   Captions,
@@ -20,6 +21,7 @@ import {
   PictureInPicture2,
   Play,
   Radio,
+  RefreshCw,
   RotateCcw,
   RotateCw,
   Scaling,
@@ -37,14 +39,16 @@ import {
   UnifiedEpisode,
   UnifiedMedia,
   VideoServer,
+  VideoStream,
 } from '../types/media';
-import { resolveVideoServers, resolveVideoStream } from '../services/sourceEngine';
+import { resolveVideoServers, resolveVideoStreamAsync } from '../services/sourceEngine';
 import { fetchAniSkipIntervals, SkipInterval } from '../services/aniskip';
 import { clampSeekTarget, formatPlayerTime } from '../utils/detailsLayout';
 import {
-  AUDIO_LANGUAGE_OPTIONS,
   AudioLanguageCode,
+  AudioLanguageOption,
   buildHlsQualityOptions,
+  buildSubtitleBoxCssProps,
   clampEpisodeIndex,
   computeAutoSkipTarget,
   computeFullscreenRotationStage,
@@ -57,8 +61,10 @@ import {
   getVideoFitBadgeLabel,
   getVideoFitClass,
   HlsQualityOption,
+  parseSubtitleText,
   PLAYBACK_SPEED_OPTIONS,
   resolveAudioLanguageOption,
+  resolveAvailableAudioOptions,
   resolveBatterySaverHlsLevel,
   shouldAutoStartPlayback,
   shouldHideBarsForOverlay,
@@ -84,6 +90,7 @@ import {
 import { PlayerEpisodeDrawer } from './PlayerEpisodeDrawer';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
 import { PlayerCommentsModal } from './PlayerCommentsModal';
+import { SubtitleFormattedText } from './SubtitleFormattedText';
 import {
   CreateWatchRoomModal,
   CreateWatchRoomPayload,
@@ -141,10 +148,12 @@ interface InlineAnimePlayerProps {
   episodeIndex: number;
   sourceId?: string;
   sourceName?: string;
+  sourceBaseUrl?: string;
+  overrideTitle?: string;
   playSignal?: number;
   initialTime?: number | null;
   initialResumePlaying?: boolean;
-  initialSubLang?: 'en' | 'ja';
+  initialSubLang?: string;
   initialEditedCuesMap?: Record<string, SubtitleCue[]>;
   watchPartyMode?: InlineWatchPartyMode;
   onChangeEpisodeIndex: (nextIndex: number) => void;
@@ -156,6 +165,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   episodeIndex,
   sourceId,
   sourceName,
+  sourceBaseUrl,
+  overrideTitle,
   playSignal = 0,
   initialTime = null,
   initialResumePlaying = false,
@@ -183,22 +194,80 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     [safeIndex, episodes.length],
   );
 
-  const servers = useMemo(
+  const rawServers = useMemo(
     () => resolveVideoServers(sourceId, sourceName),
     [sourceId, sourceName],
   );
-  const [selectedServer, setSelectedServer] = useState<VideoServer>(servers[0]);
+  const [selectedServer, setSelectedServer] = useState<VideoServer>(() => {
+    const initCategory = resolveAudioLanguageOption(state.playerPrefs.audioLanguage).serverCategory;
+    return rawServers.find((s) => s.category === initCategory) ?? rawServers[0];
+  });
 
   useEffect(() => {
-    if (servers.length > 0 && !servers.some((s) => s.id === selectedServer?.id)) {
-      setSelectedServer(servers[0]);
+    if (rawServers.length > 0 && !rawServers.some((s) => s.id === selectedServer?.id)) {
+      setSelectedServer(rawServers[0]);
     }
-  }, [servers, selectedServer]);
+  }, [rawServers, selectedServer]);
 
-  const stream = useMemo(
-    () => resolveVideoStream(media, currentEpisode, selectedServer || servers[0]),
-    [media, currentEpisode, selectedServer, servers],
-  );
+  const [stream, setStream] = useState<VideoStream | null>(null);
+  const [streamLoading, setStreamLoading] = useState(true);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamRetryNonce, setStreamRetryNonce] = useState(0);
+  const [mirrorIndex, setMirrorIndex] = useState(0);
+  const [fetchedCuesMap, setFetchedCuesMap] = useState<Record<string, SubtitleCue[]>>({});
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const serverToUse = selectedServer || rawServers[0];
+    setStream(null);
+    setStreamLoading(true);
+    setStreamError(null);
+    setMirrorIndex(0);
+    setHasVideoFrame(false);
+    setPlaying(false);
+
+    resolveVideoStreamAsync({
+      media,
+      episode: currentEpisode,
+      server: serverToUse,
+      sourceId,
+      sourceName,
+      sourceBaseUrl,
+      overrideTitle,
+      bypassCache: streamRetryNonce > 0,
+      signal: controller.signal,
+    })
+      .then((resolved) => {
+        if (controller.signal.aborted) return;
+        setStream(resolved);
+        setStreamLoading(false);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setStream(null);
+        setStreamLoading(false);
+        setStreamError(
+          err instanceof Error ? err.message : 'Unable to resolve an active episode stream.',
+        );
+      });
+
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    media.id,
+    currentEpisode.id,
+    currentEpisode.number,
+    selectedServer?.id,
+    sourceId,
+    sourceName,
+    sourceBaseUrl,
+    overrideTitle,
+    streamRetryNonce,
+  ]);
+
+  const activeMirror = stream?.mirrors?.[mirrorIndex] ?? null;
+  const activeStreamUrl = activeMirror?.url || stream?.url || '';
+  const activeStreamIsHls = activeMirror ? activeMirror.isHls : Boolean(stream?.isHls);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -227,7 +296,20 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
 
   const ambientEnabled = state.playerPrefs.ambientGlow;
   const effectiveAmbientEnabled = ambientEnabled && !state.playerPrefs.batterySaver;
-  const activeAudioLangOption = resolveAudioLanguageOption(state.playerPrefs.audioLanguage);
+  const availableAudioOptions = useMemo(
+    () => resolveAvailableAudioOptions(stream?.availableAudios),
+    [stream?.availableAudios],
+  );
+  const hasDubAudio = availableAudioOptions.some((a) => a.serverCategory === 'dub');
+  const availableServers = useMemo(() => {
+    if (!stream) return rawServers;
+    const filtered = rawServers.filter((s) => s.category !== 'dub' || hasDubAudio);
+    return filtered.length > 0 ? filtered : rawServers;
+  }, [rawServers, stream, hasDubAudio]);
+  const activeAudioLangOption = resolveAudioLanguageOption(
+    state.playerPrefs.audioLanguage,
+    availableAudioOptions,
+  );
   const [playing, setPlaying] = useState(false);
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -236,7 +318,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const [muted, setMuted] = useState(false);
   const [brightness, setBrightness] = useState(1);
   const [speed, setSpeed] = useState(state.playerPrefs.defaultSpeed || 1);
-  const [activeSubLang, setActiveSubLang] = useState<'en' | 'ja'>(initialSubLang);
+  const [activeSubLang, setActiveSubLang] = useState<string>(initialSubLang);
   const [editedCuesMap, setEditedCuesMap] = useState<Record<string, SubtitleCue[]>>(
     initialEditedCuesMap ?? {},
   );
@@ -326,13 +408,32 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   };
 
   useEffect(() => {
-    const targetCategory = activeAudioLangOption.serverCategory;
+    if (!stream || !selectedServer) return;
+    if (selectedServer.category === 'dub' && !hasDubAudio) {
+      const subServer = availableServers.find((s) => s.category === 'sub') ?? availableServers[0];
+      if (subServer && subServer.id !== selectedServer.id) {
+        setSelectedServer(subServer);
+      }
+    }
+  }, [stream, hasDubAudio, selectedServer, availableServers]);
+
+  const handleSelectAudioOption = (opt: AudioLanguageOption) => {
+    updatePlayerPrefs({ audioLanguage: opt.code as AudioLanguageCode });
     const matchingServer =
-      servers.find((s) => s.category === targetCategory) ?? servers[0];
+      availableServers.find((s) => s.category === opt.serverCategory) ?? availableServers[0];
     if (matchingServer && matchingServer.id !== selectedServer?.id) {
       setSelectedServer(matchingServer);
     }
-  }, [activeAudioLangOption.serverCategory, servers, selectedServer?.id]);
+  };
+
+  const handleSelectServer = (srv: VideoServer) => {
+    setSelectedServer(srv);
+    if (srv.category === 'dub' && hasDubAudio) {
+      updatePlayerPrefs({ audioLanguage: 'en' });
+    } else if (srv.category === 'sub') {
+      updatePlayerPrefs({ audioLanguage: 'ja' });
+    }
+  };
 
   useEffect(() => {
     const onFsChange = () => {
@@ -460,7 +561,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   // Load HLS or MP4 video stream
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !activeStreamUrl) {
+      if (video && video.getAttribute('src')) {
+        video.removeAttribute('src');
+        video.load();
+      }
+      return;
+    }
 
     let cancelled = false;
     const resumeAt = pendingStartTimeRef.current;
@@ -500,11 +607,20 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       }
     };
 
+    const advanceMirrorOrError = (reason: string) => {
+      if (cancelled) return;
+      if (stream?.mirrors && mirrorIndex + 1 < stream.mirrors.length) {
+        setMirrorIndex((i) => i + 1);
+      } else {
+        setStreamError(reason);
+      }
+    };
+
     let hls: Hls | null = null;
-    if (stream.isHls && Hls.isSupported()) {
+    if (activeStreamIsHls && Hls.isSupported()) {
       hls = new Hls({ enableWorker: true });
       hlsRef.current = hls;
-      hls.loadSource(stream.url);
+      hls.loadSource(activeStreamUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (!hls || cancelled) return;
@@ -519,9 +635,19 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
         setSelectedHlsLevel(preferredLevel);
         applyInitialStreamState();
       });
+      let recoveredMedia = false;
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data?.fatal || cancelled) return;
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recoveredMedia && hls) {
+          recoveredMedia = true;
+          hls.recoverMediaError();
+          return;
+        }
+        advanceMirrorOrError('Stream mirror failed to buffer. Try retrying or switching server.');
+      });
     } else {
       hlsRef.current = null;
-      video.src = stream.url;
+      video.src = activeStreamUrl;
       video.addEventListener('loadedmetadata', applyInitialStreamState, { once: true });
       if (video.readyState >= 1) {
         applyInitialStreamState();
@@ -535,14 +661,15 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       if (hlsRef.current === hls) hlsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream.url, stream.isHls, currentEpisode.id]);
+  }, [activeStreamUrl, activeStreamIsHls, currentEpisode.id]);
 
   // Respond to explicit play triggers (e.g., episode click or Start Watching CTA while already mounted)
   useEffect(() => {
     if (playSignal <= 0 || playSignal <= prevPlaySignalRef.current) return;
     prevPlaySignalRef.current = playSignal;
+    pendingResumePlayRef.current = true;
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !activeStreamUrl) return;
     video.play().catch(() => {});
     scheduleHideControls(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -666,8 +793,37 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, currentEpisode.number]);
 
+  const mergedSkipIntervals = useMemo<SkipInterval[]>(() => {
+    const base = [...skipIntervals];
+    if (
+      stream?.intro &&
+      stream.intro.end > stream.intro.start &&
+      !base.some((s) => s.skipType === 'op')
+    ) {
+      base.push({
+        skipId: 'stream-intro',
+        skipType: 'op',
+        startTime: stream.intro.start,
+        endTime: stream.intro.end,
+      });
+    }
+    if (
+      stream?.outro &&
+      stream.outro.end > stream.outro.start &&
+      !base.some((s) => s.skipType === 'ed')
+    ) {
+      base.push({
+        skipId: 'stream-outro',
+        skipType: 'ed',
+        startTime: stream.outro.start,
+        endTime: stream.outro.end,
+      });
+    }
+    return base;
+  }, [skipIntervals, stream?.intro, stream?.outro]);
+
   // Auto-skip OP/ED when enabled
-  const autoSkipTarget = computeAutoSkipTarget(currentTime, skipIntervals, autoSkip);
+  const autoSkipTarget = computeAutoSkipTarget(currentTime, mergedSkipIntervals, autoSkip);
   useEffect(() => {
     if (autoSkipTarget !== null && videoRef.current) {
       videoRef.current.currentTime = autoSkipTarget;
@@ -675,16 +831,45 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     }
   }, [autoSkipTarget]);
 
-  const activeSkip = skipIntervals.find(
+  const activeSkip = mergedSkipIntervals.find(
     (s) => currentTime >= s.startTime && currentTime < s.endTime - 0.5,
   );
 
   const trackKey = `${currentEpisode.id}:${activeSubLang}`;
-  const activeTrack = stream.subtitles?.find((s) => s.lang === activeSubLang);
+  const activeTrack =
+    stream?.subtitles?.find((s) => s.lang === activeSubLang) ??
+    (activeSubLang === 'en' ? stream?.subtitles?.[0] : undefined);
+  const activeTrackUrl = activeTrack?.url;
+  const activeTrackLangKey = activeTrack ? `${currentEpisode.id}:${activeTrack.lang}` : trackKey;
+
+  useEffect(() => {
+    if (!activeTrackUrl) return;
+    if (activeTrack?.cues && activeTrack.cues.length > 0) return;
+    if (fetchedCuesMap[activeTrackLangKey]) return;
+
+    let cancelled = false;
+    fetch(activeTrackUrl)
+      .then((res) => (res.ok ? res.text() : ''))
+      .then((rawText) => {
+        if (cancelled || !rawText.trim()) return;
+        const parsed = parseSubtitleText(rawText);
+        if (parsed.length > 0) {
+          setFetchedCuesMap((prev) => ({ ...prev, [activeTrackLangKey]: parsed }));
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTrackUrl, activeTrack?.cues, activeTrackLangKey, fetchedCuesMap]);
+
   const effectiveCues: SubtitleCue[] = useMemo(() => {
     if (editedCuesMap[trackKey]) return editedCuesMap[trackKey];
-    return activeTrack?.cues ?? [];
-  }, [editedCuesMap, trackKey, activeTrack]);
+    if (activeTrack?.cues && activeTrack.cues.length > 0) return activeTrack.cues;
+    if (fetchedCuesMap[activeTrackLangKey]) return fetchedCuesMap[activeTrackLangKey];
+    return [];
+  }, [editedCuesMap, trackKey, activeTrack, fetchedCuesMap, activeTrackLangKey]);
 
   const activeCue = subtitlesOn
     ? findActiveSubtitleCue(
@@ -746,6 +931,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     episodes,
     safeIndex,
     sourceId,
+    sourceName,
+    sourceBaseUrl,
+    overrideTitle,
     serverId: selectedServer?.id,
     currentTime,
     duration,
@@ -761,6 +949,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     episodes,
     safeIndex,
     sourceId,
+    sourceName,
+    sourceBaseUrl,
+    overrideTitle,
     serverId: selectedServer?.id,
     currentTime,
     duration,
@@ -808,6 +999,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
         episodes: snap.episodes,
         episodeIndex: snap.safeIndex,
         sourceId: snap.sourceId,
+        sourceName: snap.sourceName,
+        sourceBaseUrl: snap.sourceBaseUrl,
+        overrideTitle: snap.overrideTitle,
         serverId: snap.serverId,
         currentTime: liveTime,
         duration: liveDur,
@@ -850,6 +1044,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       episodes,
       episodeIndex: safeIndex,
       sourceId,
+      sourceName,
+      sourceBaseUrl,
+      overrideTitle,
       serverId: selectedServer?.id,
       currentTime: liveTime,
       duration: liveDur,
@@ -1539,10 +1736,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               />
             </>
           )}
-          {!hasVideoFrame && !isFullscreen && (
+          {!hasVideoFrame && !streamError && (
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 overflow-hidden"
+              className="pointer-events-none absolute inset-0 overflow-hidden z-[5]"
             >
               <div
                 className="absolute inset-0 opacity-55"
@@ -1554,7 +1751,53 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               <div className="sx-buffering-shimmer w-1/2 h-full bg-gradient-to-r from-transparent via-white/15 to-transparent skew-x-[-20deg]" />
               <div className="absolute bottom-11 sm:bottom-14 left-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/15 text-[10px] font-bold text-white/90 shadow-lg">
                 <span className="w-1.5 h-1.5 rounded-full bg-[var(--sx-player-accent)] animate-ping" />
-                <span>Preparing EP {currentEpisode.number}...</span>
+                <span>
+                  {streamLoading
+                    ? `Resolving EP ${currentEpisode.number} stream...`
+                    : `Buffering EP ${currentEpisode.number}...`}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {streamError && (
+            <div
+              data-no-gesture="true"
+              data-testid="inline-player-error"
+              onClick={(e) => e.stopPropagation()}
+              className="absolute inset-0 z-30 flex flex-col items-center justify-center p-4 bg-black/75 backdrop-blur-md text-center gap-3"
+            >
+              <div className="max-w-sm rounded-2xl bg-zinc-950/90 border border-white/15 px-4 py-3.5 shadow-2xl space-y-2.5">
+                <div className="inline-flex items-center gap-1.5 text-xs font-extrabold text-amber-300">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Stream Unavailable</span>
+                </div>
+                <p className="text-[11px] text-white/80 leading-relaxed">{streamError}</p>
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    data-testid="inline-player-retry-btn"
+                    onClick={() => setStreamRetryNonce((n) => n + 1)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-[11px] font-extrabold shadow hover:opacity-95 transition-opacity"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Retry</span>
+                  </button>
+                  {availableServers.length > 1 && (
+                    <button
+                      type="button"
+                      data-testid="inline-player-switch-server-btn"
+                      onClick={() => {
+                        const curIdx = availableServers.findIndex((s) => s.id === selectedServer?.id);
+                        const nextSrv = availableServers[(curIdx + 1) % availableServers.length];
+                        if (nextSrv) handleSelectServer(nextSrv);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/12 hover:bg-white/20 border border-white/15 text-[11px] font-bold text-white transition-colors"
+                    >
+                      <span>Switch Server</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -1583,6 +1826,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             }}
             onLoadedData={() => setHasVideoFrame(true)}
             onPlaying={() => setHasVideoFrame(true)}
+            onError={() => {
+              if (!activeStreamUrl) return;
+              if (stream?.mirrors && mirrorIndex + 1 < stream.mirrors.length) {
+                setMirrorIndex((i) => i + 1);
+              } else {
+                setStreamError('Video playback failed on this server. Try retrying or switching servers.');
+              }
+            }}
             onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
             onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
             onEnded={() => {
@@ -1755,35 +2006,43 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           {activeCue && (
             <div
               data-testid="inline-player-subtitle-overlay"
+              style={{
+                transform:
+                  (state.playerPrefs.subtitleBottomOffset || 0) > 0
+                    ? `translateY(${
+                        state.playerPrefs.subtitlePosition === 'top'
+                          ? state.playerPrefs.subtitleBottomOffset
+                          : -(state.playerPrefs.subtitleBottomOffset || 0)
+                      }px)`
+                    : undefined,
+              }}
               className={`pointer-events-none absolute inset-x-3 sm:inset-x-5 flex justify-center z-20 transition-all duration-200 ${
                 state.playerPrefs.subtitlePosition === 'top'
-                  ? 'top-14 sm:top-16'
+                  ? 'top-16 sm:top-18'
                   : topAndBottomVisible
                     ? isFullscreen
-                      ? 'bottom-32 sm:bottom-36'
-                      : 'bottom-[44px] sm:bottom-14'
+                      ? 'bottom-36 sm:bottom-40'
+                      : 'bottom-[46px] sm:bottom-14'
                     : 'bottom-4 sm:bottom-7'
               }`}
             >
               <p
                 key={activeCue.text}
-                style={{
-                  fontSize: `${
-                    isFullscreen
-                      ? state.playerPrefs.subtitleSize
-                      : Math.min(state.playerPrefs.subtitleSize, 10)
-                  }px`,
-                  color: state.playerPrefs.subtitleColor || '#ffffff',
-                }}
-                className={`sx-player-subtitle-enter px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-xl text-center font-bold max-w-[94%] sm:max-w-lg leading-tight sm:leading-snug ${
-                  !isFullscreen && controlsVisible ? 'line-clamp-1 sm:line-clamp-2' : 'line-clamp-2'
+                style={buildSubtitleBoxCssProps(
+                  state.playerPrefs,
+                  isFullscreen
+                    ? state.playerPrefs.subtitleSize
+                    : Math.max(11, Math.min(state.playerPrefs.subtitleSize, 16)),
+                )}
+                className={`sx-player-subtitle-enter px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-xl text-center max-w-[94%] sm:max-w-xl leading-tight sm:leading-snug whitespace-pre-line ${
+                  !isFullscreen && controlsVisible ? 'line-clamp-2' : 'line-clamp-3'
                 } transition-all duration-200 ${
                   state.playerPrefs.subtitleBackground
-                    ? 'bg-black/75 backdrop-blur-md border border-white/10'
-                    : 'drop-shadow-[0_2px_6px_rgba(0,0,0,0.95)]'
+                    ? 'backdrop-blur-md border border-white/10'
+                    : ''
                 }`}
               >
-                {activeCue.text}
+                <SubtitleFormattedText text={activeCue.text} />
               </p>
             </div>
           )}
@@ -1879,8 +2138,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                     : 'opacity-0 -translate-y-4 pointer-events-none'
                 }`}
               >
-                {/* Left Frosted Title Pill: Back + Anime Title + Episode (exact h-9/h-10 alignment with right buttons) */}
-                <div className="inline-flex items-center gap-2 h-9 sm:h-10 pl-1 pr-3 sm:pr-3.5 py-0 rounded-full bg-white/10 backdrop-blur-2xl border border-white/15 shadow-lg min-w-0 max-w-[50vw] sm:max-w-sm">
+                {/* Left Frosted Title Pill: Back + Anime Title + Episode */}
+                <div className="inline-flex items-center gap-2 h-10 sm:h-11 pl-1 pr-3 sm:pr-4 py-0 rounded-full bg-white/10 backdrop-blur-2xl border border-white/15 shadow-lg min-w-0 max-w-[40vw] sm:max-w-sm">
                   <button
                     type="button"
                     aria-label="Exit fullscreen"
@@ -1889,9 +2148,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       e.stopPropagation();
                       void exitFullscreen();
                     }}
-                    className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors shrink-0"
+                    className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors shrink-0"
                   >
-                    <ArrowLeft className="w-4 h-4" />
+                    <ArrowLeft className="w-4 h-4 sm:w-[18px] sm:h-[18px]" />
                   </button>
                   <div className="min-w-0 leading-[1.15]">
                     <p className="text-[11px] sm:text-xs font-extrabold tracking-tight text-white truncate">
@@ -1903,8 +2162,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                   </div>
                 </div>
 
-                {/* Top-Right 4 Action Buttons ONLY: Comments, Audio Language, Episodes, Settings */}
-                <div className="flex items-center gap-1.5 shrink-0">
+                {/* Top-Right Action Buttons */}
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                   <button
                     type="button"
                     aria-label="Comments"
@@ -1919,15 +2178,15 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       setShowCreateWatchPartyModal(false);
                       setShowSpeedMenu(false);
                     }}
-                    className={`relative w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
+                    className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
                       showCommentsModal
                         ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
                         : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
                     }`}
                   >
-                    <MessageSquare className="w-4 h-4" />
+                    <MessageSquare className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
                     {totalFsCommentsCount > 0 && (
-                      <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-0.5 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-[8px] font-black tabular-nums flex items-center justify-center">
+                      <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-[8px] font-black tabular-nums flex items-center justify-center">
                         {totalFsCommentsCount}
                       </span>
                     )}
@@ -1947,14 +2206,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       setShowCreateWatchPartyModal(false);
                       setShowSpeedMenu(false);
                     }}
-                    className={`relative w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
+                    className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
                       showAudioLangMenu
                         ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
                         : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
                     }`}
                   >
-                    <Languages className="w-4 h-4" />
-                    <span className="absolute bottom-0 right-0 px-1 py-[1px] rounded-full bg-zinc-950/95 border border-white/25 text-[7px] font-black text-white leading-none">
+                    <Languages className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
+                    <span className="absolute -bottom-0.5 -right-0.5 px-1 py-[1px] rounded-full bg-zinc-950/95 border border-white/25 text-[7.5px] font-black text-white leading-none">
                       {activeAudioLangOption.shortLabel}
                     </span>
                   </button>
@@ -1972,13 +2231,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       setShowCreateWatchPartyModal(false);
                       setShowSpeedMenu(false);
                     }}
-                    className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-colors shrink-0 ${
+                    className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-colors shrink-0 ${
                       showEpisodeDrawer
                         ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
                         : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
                     }`}
                   >
-                    <ListVideo className="w-4 h-4" />
+                    <ListVideo className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
                   </button>
 
                   {!watchPartyMode && (
@@ -1996,13 +2255,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                         setShowEpisodeDrawer(false);
                         setShowSpeedMenu(false);
                       }}
-                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-colors shrink-0 ${
+                      className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-colors shrink-0 ${
                         showCreateWatchPartyModal
                           ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
                           : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
                       }`}
                     >
-                      <Users className="w-4 h-4" />
+                      <Users className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
                     </button>
                   )}
 
@@ -2019,13 +2278,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       setShowCreateWatchPartyModal(false);
                       setShowSpeedMenu(false);
                     }}
-                    className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-transform duration-300 shrink-0 ${
+                    className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-transform duration-300 shrink-0 ${
                       showSettingsMenu
                         ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)] rotate-45'
                         : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
                     }`}
                   >
-                    <Settings className="w-4 h-4" />
+                    <Settings className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
                   </button>
                 </div>
               </div>
@@ -2153,10 +2412,20 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                 type="button"
                 aria-label="Rewind 10 seconds"
                 onClick={() => seekBy(-10)}
-                className="relative w-9 h-9 sm:w-10 sm:h-10 rounded-full hover:bg-white/15 flex items-center justify-center transition-all active:scale-90"
+                className={`relative rounded-full hover:bg-white/15 flex items-center justify-center transition-all active:scale-90 ${
+                  isFullscreen ? 'w-12 h-12 sm:w-14 sm:h-14' : 'w-9 h-9 sm:w-10 sm:h-10'
+                }`}
               >
-                <RotateCcw className="w-5 h-5 sm:w-6 sm:h-6 text-white drop-shadow" />
-                <span className="absolute text-[8px] sm:text-[9px] font-black mt-0.5 text-white tabular-nums">
+                <RotateCcw
+                  className={`text-white drop-shadow ${
+                    isFullscreen ? 'w-6 h-6 sm:w-7 sm:h-7' : 'w-5 h-5 sm:w-6 sm:h-6'
+                  }`}
+                />
+                <span
+                  className={`absolute font-black mt-0.5 text-white tabular-nums ${
+                    isFullscreen ? 'text-[9.5px] sm:text-[10.5px]' : 'text-[8px] sm:text-[9px]'
+                  }`}
+                >
                   10
                 </span>
               </button>
@@ -2166,17 +2435,23 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                 aria-label={playing ? 'Pause playback' : 'Play playback'}
                 data-testid="inline-player-play-btn"
                 onClick={togglePlay}
-                className="sx-player-play-btn w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white/18 hover:bg-white/28 backdrop-blur-md border border-white/25 flex items-center justify-center shadow-2xl"
+                className={`sx-player-play-btn rounded-full bg-white/18 hover:bg-white/28 backdrop-blur-md border border-white/25 flex items-center justify-center shadow-2xl ${
+                  isFullscreen ? 'w-16 h-16 sm:w-[72px] sm:h-[72px]' : 'w-12 h-12 sm:w-14 sm:h-14'
+                }`}
               >
                 {playing ? (
                   <Pause
                     key="pause-icon"
-                    className="sx-player-icon-pop w-5 h-5 sm:w-7 sm:h-7 fill-white text-white"
+                    className={`sx-player-icon-pop fill-white text-white ${
+                      isFullscreen ? 'w-7 h-7 sm:w-8 sm:h-8' : 'w-5 h-5 sm:w-7 sm:h-7'
+                    }`}
                   />
                 ) : (
                   <Play
                     key="play-icon"
-                    className="sx-player-icon-pop w-5 h-5 sm:w-7 sm:h-7 fill-white text-white ml-0.5"
+                    className={`sx-player-icon-pop fill-white text-white ml-0.5 ${
+                      isFullscreen ? 'w-7 h-7 sm:w-8 sm:h-8' : 'w-5 h-5 sm:w-7 sm:h-7'
+                    }`}
                   />
                 )}
               </button>
@@ -2185,10 +2460,20 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                 type="button"
                 aria-label="Forward 10 seconds"
                 onClick={() => seekBy(10)}
-                className="relative w-9 h-9 sm:w-10 sm:h-10 rounded-full hover:bg-white/15 flex items-center justify-center transition-all active:scale-90"
+                className={`relative rounded-full hover:bg-white/15 flex items-center justify-center transition-all active:scale-90 ${
+                  isFullscreen ? 'w-12 h-12 sm:w-14 sm:h-14' : 'w-9 h-9 sm:w-10 sm:h-10'
+                }`}
               >
-                <RotateCw className="w-5 h-5 sm:w-6 sm:h-6 text-white drop-shadow" />
-                <span className="absolute text-[8px] sm:text-[9px] font-black mt-0.5 text-white tabular-nums">
+                <RotateCw
+                  className={`text-white drop-shadow ${
+                    isFullscreen ? 'w-6 h-6 sm:w-7 sm:h-7' : 'w-5 h-5 sm:w-6 sm:h-6'
+                  }`}
+                />
+                <span
+                  className={`absolute font-black mt-0.5 text-white tabular-nums ${
+                    isFullscreen ? 'text-[9.5px] sm:text-[10.5px]' : 'text-[8px] sm:text-[9px]'
+                  }`}
+                >
                   10
                 </span>
               </button>
@@ -2239,13 +2524,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                     title="Lock Screen Controls"
                     data-testid="fs-lock-btn"
                     onClick={handleToggleScreenLock}
-                    className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-2xl border border-white/15 flex items-center justify-center text-white transition-all shrink-0"
+                    className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-2xl border border-white/15 flex items-center justify-center text-white transition-all shrink-0"
                   >
-                    <Lock className="w-4 h-4" />
+                    <Lock className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
                   </button>
 
                   {/* Right Side: 1. Rotate, 2. Video Fit, 3. Speed, 4. Subtitle, 5. Window PiP */}
-                  <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
                     {/* 1. Screen Rotate */}
                     <button
                       type="button"
@@ -2253,13 +2538,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       title="Rotate Screen"
                       data-testid="fs-rotate-btn"
                       onClick={() => void toggleRotateScreen()}
-                      className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
+                      className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
                         isLandscapeRotated
                           ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
                           : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
                       }`}
                     >
-                      <ScreenRotateIcon className="w-4 h-4" />
+                      <ScreenRotateIcon className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
                     </button>
 
                     {/* 2. Video Fit Button */}
@@ -2272,9 +2557,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                         updatePlayerPrefs({ videoFit: getNextVideoFitMode(fitMode) });
                         scheduleHideControls();
                       }}
-                      className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-2xl border border-white/15 inline-flex items-center gap-1.5 text-[11px] font-extrabold text-white transition-all shrink-0"
+                      className="h-10 sm:h-11 px-3 sm:px-3.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-2xl border border-white/15 inline-flex items-center gap-1.5 text-xs font-extrabold text-white transition-all shrink-0"
                     >
-                      <Scaling className="w-3.5 h-3.5" />
+                      <Scaling className="w-4 h-4" />
                       <span>{fitBadgeLabel}</span>
                     </button>
 
@@ -2291,13 +2576,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                         setShowSettingsMenu(false);
                         setShowEpisodeDrawer(false);
                       }}
-                      className={`h-8 sm:h-9 px-2.5 sm:px-3 rounded-full backdrop-blur-2xl border inline-flex items-center gap-1 text-[11px] font-mono-tabular font-extrabold transition-all shrink-0 ${
+                      className={`h-10 sm:h-11 px-3 sm:px-3.5 rounded-full backdrop-blur-2xl border inline-flex items-center gap-1 text-xs font-mono-tabular font-extrabold transition-all shrink-0 ${
                         showSpeedMenu || speed !== 1
                           ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
                           : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
                       }`}
                     >
-                      <Gauge className="w-3.5 h-3.5" />
+                      <Gauge className="w-4 h-4" />
                       <span>{speed}x</span>
                     </button>
 
@@ -2312,13 +2597,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                         updatePlayerPrefs({ subtitleEnabled: !subtitlesOn });
                         scheduleHideControls();
                       }}
-                      className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
+                      className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
                         subtitlesOn
                           ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)]'
                           : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
                       }`}
                     >
-                      <Captions className="w-4 h-4" />
+                      <Captions className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
                     </button>
 
                     {/* 5. Window PiP Button */}
@@ -2328,9 +2613,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       title="Window PiP"
                       data-testid="fs-pip-btn"
                       onClick={handleEnterPip}
-                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-2xl border border-white/15 flex items-center justify-center text-white transition-all shrink-0"
+                      className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-2xl border border-white/15 flex items-center justify-center text-white transition-all shrink-0"
                     >
-                      <PictureInPicture2 className="w-4 h-4" />
+                      <PictureInPicture2 className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
                     </button>
                   </div>
                 </div>
@@ -2339,7 +2624,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               {/* Frosted Scrubber / Progress Bar (below bottom actions) */}
               <div
                 data-testid="fs-scrubber-bar"
-                className="flex items-center gap-2.5 px-3.5 py-1.5 sm:py-2 rounded-full bg-black/55 backdrop-blur-xl border border-white/15 shadow-lg"
+                className={`flex items-center gap-2.5 px-3.5 rounded-full bg-black/55 backdrop-blur-xl border border-white/15 shadow-lg ${
+                  isFullscreen ? 'py-2 sm:py-2.5' : 'py-1.5 sm:py-2'
+                }`}
               >
                 <span className="text-[11px] font-bold text-white/95 tabular-nums shrink-0">
                   {formatPlayerTime(currentTime)}
@@ -2383,10 +2670,12 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                   aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen player'}
                   data-testid="inline-player-fullscreen-btn"
                   onClick={toggleFullscreen}
-                  className="w-6 h-6 rounded-full hover:bg-white/15 flex items-center justify-center text-white/90 shrink-0 transition-colors"
+                  className={`${
+                    isFullscreen ? 'w-8 h-8 sm:w-9 sm:h-9' : 'w-6 h-6'
+                  } rounded-full hover:bg-white/15 flex items-center justify-center text-white/90 shrink-0 transition-colors`}
                 >
                   {isFullscreen ? (
-                    <Minimize2 className="w-3.5 h-3.5" />
+                    <Minimize2 className="w-4 h-4 sm:w-[18px] sm:h-[18px]" />
                   ) : (
                     <Maximize2 className="w-3.5 h-3.5" />
                   )}
@@ -2440,26 +2729,31 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             </div>
           )}
 
-          {/* Fullscreen Audio Language Selector Popover */}
+          {/* Fullscreen Audio Language Selector Popover (Real source tracks only) */}
           {isFullscreen && showAudioLangMenu && (
             <div
               data-no-gesture="true"
               data-testid="fs-audio-lang-popover"
               onClick={(e) => e.stopPropagation()}
-              className="sx-player-popover absolute top-14 sm:top-16 right-3 sm:right-6 z-40 w-60 rounded-2xl bg-zinc-950/88 backdrop-blur-2xl border border-white/20 ring-1 ring-inset ring-white/10 p-2.5 space-y-1 shadow-2xl"
+              className="sx-player-popover absolute top-16 sm:top-[4.25rem] right-3 sm:right-6 z-40 w-64 rounded-2xl bg-zinc-950/90 backdrop-blur-2xl border border-white/20 ring-1 ring-inset ring-white/10 p-2.5 space-y-1 shadow-2xl"
             >
-              <p className="px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-white/55">
-                Audio Language
-              </p>
-              {AUDIO_LANGUAGE_OPTIONS.map((opt) => {
-                const active = opt.code === state.playerPrefs.audioLanguage;
+              <div className="flex items-center justify-between px-2 py-1">
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-white/55">
+                  Audio Language
+                </p>
+                <span className="text-[9.5px] font-bold text-white/45 tabular-nums">
+                  {availableAudioOptions.length} {availableAudioOptions.length === 1 ? 'track' : 'tracks'}
+                </span>
+              </div>
+              {availableAudioOptions.map((opt) => {
+                const active = opt.code === activeAudioLangOption.code;
                 return (
                   <button
                     key={opt.code}
                     type="button"
                     data-testid={`fs-audio-option-${opt.code}`}
                     onClick={() => {
-                      updatePlayerPrefs({ audioLanguage: opt.code as AudioLanguageCode });
+                      handleSelectAudioOption(opt);
                       setShowAudioLangMenu(false);
                     }}
                     className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-colors ${
@@ -2517,16 +2811,19 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           onChangeSpeed={setSpeed}
           muted={muted}
           onToggleMute={() => setMuted((m) => !m)}
+          servers={availableServers}
+          selectedServerId={selectedServer?.id}
+          onSelectServer={handleSelectServer}
           hlsQualityOptions={hlsQualityOptions}
           selectedHlsLevel={selectedHlsLevel}
           onSelectHlsLevel={handleSelectHlsLevel}
           subtitleTracks={
-            stream.subtitles?.map((s) => ({ lang: s.lang, label: s.label })) || [
+            stream?.subtitles?.map((s) => ({ lang: s.lang, label: s.label })) || [
               { lang: 'en', label: 'English' },
             ]
           }
           activeSubLang={activeSubLang}
-          onChangeSubLang={(lang) => setActiveSubLang(lang === 'ja' ? 'ja' : 'en')}
+          onChangeSubLang={(lang) => setActiveSubLang(lang)}
           cues={effectiveCues}
           currentTime={currentTime}
           onUpdateCues={(nextCues) =>

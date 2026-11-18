@@ -1,0 +1,124 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  filterExtensions,
+  formatExtensionLangChip,
+  formatExtensionLangGroup,
+  formatExtensionVersion,
+  getExtensionManagerType,
+  groupExtensionsByLanguage,
+  reorderSourceIds,
+  sortSourcesByOrder,
+} from './extensionsManager';
+import { SourceInfo } from '../types/media';
+
+const SAMPLE_SOURCES: SourceInfo[] = [
+  {
+    id: 'shonenx-hls-inbuilt',
+    name: 'ShizuTv Stream',
+    type: 'inbuilt',
+    mediaTypes: ['ANIME', 'TV'],
+    lang: 'en',
+    version: '2.1.5',
+  },
+  {
+    id: 'ext-ay-gotaku',
+    name: 'Gotaku',
+    type: 'extension',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '16.10',
+    isNsfw: true,
+  },
+  {
+    id: 'ext-ay-aniworld',
+    name: 'AniWorld',
+    type: 'extension',
+    mediaTypes: ['ANIME'],
+    lang: 'de',
+    version: '14.43',
+  },
+  {
+    id: 'ext-my-mangapark',
+    name: 'MangaPark',
+    type: 'extension',
+    mediaTypes: ['MANGA'],
+    lang: 'en',
+    version: '1.2.0',
+  },
+  {
+    id: 'ext-cs-novelfire',
+    name: 'NovelFire',
+    type: 'extension',
+    mediaTypes: ['NOVEL'],
+    lang: 'multi',
+    version: '3.0.1',
+  },
+];
+
+test('formatting helpers return clean uppercase chips, titles, and version strings', () => {
+  assert.equal(formatExtensionLangChip('en'), 'ENGLISH');
+  assert.equal(formatExtensionLangChip('de'), 'DEUTSCH');
+  assert.equal(formatExtensionLangGroup('de'), 'Deutsch');
+  assert.equal(formatExtensionLangGroup('multi'), 'Multi-Language');
+  assert.equal(formatExtensionVersion('16.10'), 'V16.10');
+  assert.equal(formatExtensionVersion('v2.1.5'), 'V2.1.5');
+});
+
+test('getExtensionManagerType maps prefixes cleanly', () => {
+  assert.equal(getExtensionManagerType(SAMPLE_SOURCES[0]), 'inbuilt');
+  assert.equal(getExtensionManagerType(SAMPLE_SOURCES[1]), 'aniyomi');
+  assert.equal(getExtensionManagerType(SAMPLE_SOURCES[3]), 'mangayomi');
+  assert.equal(getExtensionManagerType(SAMPLE_SOURCES[4]), 'cloudstream');
+});
+
+test('filterExtensions and groupExtensionsByLanguage filter by media tab, manager, language, and query', () => {
+  const animeOnly = filterExtensions(SAMPLE_SOURCES, {
+    mediaTab: 'ANIME',
+    query: '',
+    managerFilter: 'all',
+    langFilter: 'all',
+  });
+  assert.deepEqual(
+    animeOnly.map((s) => s.id),
+    ['shonenx-hls-inbuilt', 'ext-ay-gotaku', 'ext-ay-aniworld'],
+  );
+
+  const germanAniyomi = filterExtensions(SAMPLE_SOURCES, {
+    mediaTab: 'ANIME',
+    query: 'world',
+    managerFilter: 'aniyomi',
+    langFilter: 'de',
+  });
+  assert.deepEqual(
+    germanAniyomi.map((s) => s.id),
+    ['ext-ay-aniworld'],
+  );
+
+  const grouped = groupExtensionsByLanguage(animeOnly);
+  assert.deepEqual(
+    grouped.map((g) => g.group),
+    ['Deutsch', 'English'],
+  );
+  assert.equal(grouped[0].items[0].name, 'AniWorld');
+  assert.equal(grouped[1].items.length, 2);
+});
+
+test('sortSourcesByOrder and reorderSourceIds maintain deterministic ordering', () => {
+  const reorderedIds = reorderSourceIds(
+    ['shonenx-hls-inbuilt', 'ext-ay-gotaku', 'ext-ay-aniworld'],
+    'ext-ay-aniworld',
+    'shonenx-hls-inbuilt',
+  );
+  assert.deepEqual(reorderedIds, [
+    'ext-ay-aniworld',
+    'shonenx-hls-inbuilt',
+    'ext-ay-gotaku',
+  ]);
+
+  const sorted = sortSourcesByOrder(SAMPLE_SOURCES.slice(0, 3), reorderedIds);
+  assert.deepEqual(
+    sorted.map((s) => s.id),
+    ['ext-ay-aniworld', 'shonenx-hls-inbuilt', 'ext-ay-gotaku'],
+  );
+});
