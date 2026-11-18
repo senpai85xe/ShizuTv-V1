@@ -116,7 +116,7 @@ export const AniListAccountCard: React.FC<AniListAccountCardProps> = ({
     <div
       data-testid="settings-anilist-card"
       style={{ borderRadius: roundness }}
-      className="p-4 sm:p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-3"
+      className="p-4 sm:p-5 sx-glass-panel border border-[var(--sx-outline)] space-y-3"
     >
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
         <div className="flex items-center gap-3.5 min-w-0">
@@ -158,7 +158,7 @@ export const AniListAccountCard: React.FC<AniListAccountCardProps> = ({
             <button
               type="button"
               onClick={onManageClick}
-              className="px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors"
+              className="px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors"
             >
               Trackers
             </button>
@@ -168,7 +168,7 @@ export const AniListAccountCard: React.FC<AniListAccountCardProps> = ({
               type="button"
               data-testid="settings-anilist-manual-toggle"
               onClick={() => setShowManualToken((v) => !v)}
-              className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors"
+              className="inline-flex items-center gap-1 px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors"
             >
               <KeyRound className="w-3.5 h-3.5" />
               <span>Token</span>
@@ -227,7 +227,7 @@ export const AniListAccountCard: React.FC<AniListAccountCardProps> = ({
               value={tokenInput}
               onChange={(e) => setTokenInput(e.target.value)}
               placeholder="Paste Bearer token or full redirect URL (#access_token=... / ?code=...)"
-              className="flex-1 px-3.5 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
+              className="flex-1 px-3.5 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
             />
             <button
               type="submit"

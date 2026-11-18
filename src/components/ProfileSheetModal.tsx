@@ -108,7 +108,7 @@ export const ProfileSheetModal: React.FC<ProfileSheetModalProps> = ({
           className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
             incognito
               ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
-              : 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)]'
+              : 'sx-glass-control text-[var(--sx-on-surface-muted)]'
           }`}
         >
           {incognito ? 'On' : 'Off'}
@@ -171,7 +171,7 @@ export const ProfileSheetModal: React.FC<ProfileSheetModalProps> = ({
             onClick={() => goTo('/calendar')}
             title="Airing Calendar & Schedule"
             aria-label="Airing Calendar"
-            className="w-10 h-10 rounded-xl bg-[var(--sx-surface-high)] hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] flex items-center justify-center text-[var(--sx-on-surface)] transition-colors shrink-0"
+            className="w-10 h-10 rounded-xl sx-glass-control hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] flex items-center justify-center text-[var(--sx-on-surface)] transition-colors shrink-0"
           >
             <Bell className="w-4 h-4" />
           </button>

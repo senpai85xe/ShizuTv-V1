@@ -419,7 +419,7 @@ export const HomePage: React.FC = () => {
         />
 
         {modeSections.length === 0 ? (
-          <div className="mx-4 sm:mx-6 py-16 text-center rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-3">
+          <div className="mx-4 sm:mx-6 py-16 text-center rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)] space-y-3">
             <p className="text-base font-bold">
               No active {mode === 'MANGA' ? 'Manga' : 'Anime'} Home sections
             </p>
@@ -634,10 +634,10 @@ export const HomePage: React.FC = () => {
           pullIndicatorVisible ? 'opacity-100' : 'opacity-0'
         } ${
           isPullArmed || isPullRefreshing
-            ? 'border-[var(--sx-primary)]/50 bg-[var(--sx-surface-container)]/92 text-[var(--sx-on-surface)]'
+            ? 'border-[var(--sx-primary)]/50 bg-[var(--sx-surface-container)]/72 text-[var(--sx-on-surface)]'
             : pullPhase === 'completing'
-              ? 'border-emerald-500/45 bg-[var(--sx-surface-container)]/92 text-emerald-400'
-              : 'border-[var(--sx-outline)] bg-[var(--sx-surface-container)]/85 text-[var(--sx-on-surface-muted)]'
+              ? 'border-emerald-500/45 bg-[var(--sx-surface-container)]/72 text-emerald-400'
+              : 'border-[var(--sx-outline)] bg-[var(--sx-surface-container)]/64 text-[var(--sx-on-surface-muted)]'
         }`}
       >
         <span
@@ -655,7 +655,7 @@ export const HomePage: React.FC = () => {
                 ? 'sx-pull-haptic-pop bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
                 : isPullRefreshing
                   ? 'bg-[var(--sx-primary)]/15 text-[var(--sx-primary)]'
-                  : 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface)]'
+                  : 'sx-glass-control text-[var(--sx-on-surface)]'
           }`}
         >
           {pullPhase === 'completing' ? (
@@ -721,14 +721,14 @@ export const HomePage: React.FC = () => {
             <button
               type="button"
               onClick={() => updateDiscoveryPrefs({ metadataTrackerId: 'myanimelist' })}
-              className="px-3 py-1.5 rounded-lg bg-[var(--sx-surface-high)] text-xs font-bold hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors"
+              className="px-3 py-1.5 rounded-lg sx-glass-control text-xs font-bold hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors"
             >
               Use MAL
             </button>
             <button
               type="button"
               onClick={() => updateDiscoveryPrefs({ metadataTrackerId: 'kitsu' })}
-              className="px-3 py-1.5 rounded-lg bg-[var(--sx-surface-high)] text-xs font-bold hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors"
+              className="px-3 py-1.5 rounded-lg sx-glass-control text-xs font-bold hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors"
             >
               Use Kitsu
             </button>
@@ -744,7 +744,7 @@ export const HomePage: React.FC = () => {
             aria-label="Home media type"
             data-testid="home-media-switcher"
             style={{ borderRadius: 'var(--sx-radius)' }}
-            className="relative grid grid-cols-2 items-center p-1 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] shadow-sm"
+            className="relative grid grid-cols-2 items-center p-1 sx-glass-panel border border-[var(--sx-outline)] shadow-sm"
           >
             <span
               aria-hidden="true"

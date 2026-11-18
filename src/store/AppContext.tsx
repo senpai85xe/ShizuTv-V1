@@ -258,8 +258,8 @@ const DEFAULT_STATE: PersistedState = {
   uiPrefs: {
     ...createDefaultCardStylePrefs(),
     wideCardMode: false,
-    navBarStyle: 'frosted',
-    homeHeaderStyle: 'prominent',
+    navBarStyle: 'glassLabeled',
+    homeHeaderStyle: 'cleanWave',
     heroBannerStyle: 'classic',
     episodeChapterStyle: DEFAULT_EPISODE_CHAPTER_STYLE,
     useNewUi: false,

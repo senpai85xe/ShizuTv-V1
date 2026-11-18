@@ -34,7 +34,7 @@ export const DiscoveryModeModal: React.FC<DiscoveryModeModalProps> = ({ open, on
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full sm:max-w-md bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-2xl sm:rounded-2xl p-5 space-y-5 shadow-2xl sx-sheet-enter"
+        className="w-full sm:max-w-md sx-glass-modal border border-[var(--sx-outline)] rounded-t-2xl sm:rounded-2xl p-5 space-y-5 shadow-2xl sx-sheet-enter"
       >
         <div className="flex items-center justify-between">
           <div>
@@ -54,7 +54,7 @@ export const DiscoveryModeModal: React.FC<DiscoveryModeModalProps> = ({ open, on
 
         <div
           ref={modePill.containerRef}
-          className="relative grid grid-cols-2 gap-2 p-1 rounded-xl bg-[var(--sx-surface-high)]"
+          className="relative grid grid-cols-2 gap-2 p-1 rounded-xl sx-glass-control border border-[var(--sx-outline)]/60"
         >
           {modePill.pillRect.ready && (
             <span
@@ -127,7 +127,7 @@ export const DiscoveryModeModal: React.FC<DiscoveryModeModalProps> = ({ open, on
             })}
           </div>
         ) : (
-          <div className="p-4 rounded-xl bg-[var(--sx-surface-high)] text-xs text-[var(--sx-on-surface-muted)] space-y-2">
+          <div className="p-4 rounded-xl sx-glass-control border border-[var(--sx-outline)]/60 text-xs text-[var(--sx-on-surface-muted)] space-y-2">
             <p className="font-bold text-[var(--sx-on-surface)]">Extension Mode Active</p>
             <p>
               Home and Discover will display sections from your enabled inbuilt and custom

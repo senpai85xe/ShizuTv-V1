@@ -64,7 +64,7 @@ export const TrackerProfileModal: React.FC<TrackerProfileModalProps> = ({ open, 
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full sm:max-w-lg bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-2xl sm:rounded-2xl overflow-hidden shadow-2xl sx-sheet-enter"
+        className="w-full sm:max-w-lg sx-glass-modal border border-[var(--sx-outline)] rounded-t-2xl sm:rounded-2xl overflow-hidden shadow-2xl sx-sheet-enter"
       >
         {activeProfile?.bannerUrl && (
           <div className="h-28 w-full relative">
@@ -104,7 +104,7 @@ export const TrackerProfileModal: React.FC<TrackerProfileModalProps> = ({ open, 
           </div>
 
           {state.profiles.anilist && (
-            <div className="grid grid-cols-3 gap-2 p-3 rounded-xl bg-[var(--sx-surface-high)] text-center tabular-nums">
+            <div className="grid grid-cols-3 gap-2 p-3 rounded-xl sx-glass-control border border-[var(--sx-outline)]/60 text-center tabular-nums">
               <div>
                 <p className="text-base font-extrabold">{state.profiles.anilist.animeCount ?? 0}</p>
                 <p className="text-[11px] text-[var(--sx-on-surface-muted)]">Anime</p>
@@ -181,7 +181,7 @@ export const TrackerProfileModal: React.FC<TrackerProfileModalProps> = ({ open, 
                     value={tokenInput}
                     onChange={(e) => setTokenInput(e.target.value)}
                     placeholder="Paste Bearer token or full redirect URL..."
-                    className="flex-1 px-3 py-2 text-xs rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] focus:outline-none focus:border-[var(--sx-primary)]"
+                    className="flex-1 px-3 py-2 text-xs rounded-xl sx-glass-control border border-[var(--sx-outline)] focus:outline-none focus:border-[var(--sx-primary)]"
                   />
                   <button
                     type="submit"

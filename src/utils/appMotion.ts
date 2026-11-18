@@ -106,10 +106,20 @@ export interface PillRect {
 export function measureRelativePillRect(
   containerRect: { left: number; top: number },
   targetRect: { left: number; top: number; width: number; height: number },
+  scrollOffset: {
+    scrollLeft?: number;
+    scrollTop?: number;
+    clientLeft?: number;
+    clientTop?: number;
+  } = {},
 ): PillRect {
+  const scrollLeft = scrollOffset.scrollLeft ?? 0;
+  const scrollTop = scrollOffset.scrollTop ?? 0;
+  const clientLeft = scrollOffset.clientLeft ?? 0;
+  const clientTop = scrollOffset.clientTop ?? 0;
   return {
-    left: targetRect.left - containerRect.left,
-    top: targetRect.top - containerRect.top,
+    left: targetRect.left - containerRect.left + scrollLeft - clientLeft,
+    top: targetRect.top - containerRect.top + scrollTop - clientTop,
     width: targetRect.width,
     height: targetRect.height,
     ready: targetRect.width > 0 && targetRect.height > 0,

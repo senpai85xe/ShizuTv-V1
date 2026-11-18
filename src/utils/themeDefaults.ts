@@ -23,7 +23,7 @@ export interface ThemePrefs {
   noiseOpacity: number;
 }
 
-export const DEFAULT_THEME_MODE: ThemeMode = 'light';
+export const DEFAULT_THEME_MODE: ThemeMode = 'system';
 export const DEFAULT_EXCLUSIVE_SCHEME = 'metallic_black';
 export const DEFAULT_UI_ROUNDNESS = 24;
 export const DEFAULT_GRADIENT_STYLE: BackgroundGradientStyle = 'linear';

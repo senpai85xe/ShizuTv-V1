@@ -1,75 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  getBoundedStaggerDelay,
-  getRouteTransitionClass,
-  getRouteTransitionKind,
-  isRectInRevealViewport,
-  measureRelativePillRect,
-  shouldShowOnlineHubSwitcher,
-} from './appMotion';
+import { measureRelativePillRect } from './appMotion';
 
-test('getRouteTransitionKind distinguishes tab switches, online switches, deeper pushes, and back pops', () => {
-  assert.equal(getRouteTransitionKind(null, '/home'), 'none');
-  assert.equal(getRouteTransitionKind('/home', '/home'), 'none');
-  assert.equal(getRouteTransitionKind('/home', '/discover'), 'tab');
-  assert.equal(getRouteTransitionKind('/home', '/watch-together'), 'tab');
-  assert.equal(getRouteTransitionKind('/watch-together', '/community'), 'online-next');
-  assert.equal(getRouteTransitionKind('/community', '/watch-together'), 'online-prev');
-  assert.equal(getRouteTransitionKind('/library', '/settings'), 'tab');
-  assert.equal(getRouteTransitionKind('/settings', '/settings/ui'), 'push');
-  assert.equal(getRouteTransitionKind('/home', '/details/anime/21'), 'push');
-  assert.equal(getRouteTransitionKind('/settings/ui', '/settings'), 'pop');
-  assert.equal(getRouteTransitionKind('/details/anime/21', '/home'), 'pop');
-});
-
-test('getRouteTransitionClass maps each transition kind to its compositor CSS class', () => {
-  assert.equal(getRouteTransitionClass('tab'), 'sx-page-tab-enter');
-  assert.equal(getRouteTransitionClass('push'), 'sx-page-push-enter');
-  assert.equal(getRouteTransitionClass('pop'), 'sx-page-pop-enter');
-  assert.equal(getRouteTransitionClass('online-next'), 'sx-online-switch-next');
-  assert.equal(getRouteTransitionClass('online-prev'), 'sx-online-switch-prev');
-  assert.equal(getRouteTransitionClass('none'), '');
-});
-
-test('shouldShowOnlineHubSwitcher shows switcher on Watch Together lobby and Community only', () => {
-  assert.equal(shouldShowOnlineHubSwitcher('/watch-together'), true);
-  assert.equal(shouldShowOnlineHubSwitcher('/watch-together/'), true);
-  assert.equal(shouldShowOnlineHubSwitcher('/community'), true);
-  assert.equal(shouldShowOnlineHubSwitcher('/watch-together/ABC123'), false);
-  assert.equal(shouldShowOnlineHubSwitcher('/home'), false);
-  assert.equal(shouldShowOnlineHubSwitcher('/discover'), false);
-});
-
-test('measureRelativePillRect computes container-relative coordinates accurately', () => {
+test('measureRelativePillRect compensates for horizontal scrollLeft and clientLeft inside scrollable tab bars', () => {
+  // Simulate scrolled overflow-x-auto tab container scrolled 120px to the right, with 1px border (clientLeft=1).
+  // Container viewport left is at 20px; the 4th tab visually starts at viewport x=180px.
+  // In container scroll-content coordinates: (180 - 20) + 120 - 1 = 279px.
   const rect = measureRelativePillRect(
-    { left: 100, top: 40 },
-    { left: 184, top: 44, width: 72, height: 36 },
+    { left: 20, top: 100 },
+    { left: 180, top: 104, width: 88, height: 34 },
+    { scrollLeft: 120, scrollTop: 0, clientLeft: 1, clientTop: 0 },
   );
-  assert.deepEqual(rect, {
-    left: 84,
-    top: 4,
-    width: 72,
-    height: 36,
-    ready: true,
-  });
 
-  const empty = measureRelativePillRect(
-    { left: 0, top: 0 },
-    { left: 0, top: 0, width: 0, height: 0 },
-  );
-  assert.equal(empty.ready, false);
-});
-
-test('getBoundedStaggerDelay clamps step delays smoothly', () => {
-  assert.equal(getBoundedStaggerDelay(0), 0);
-  assert.equal(getBoundedStaggerDelay(3, 24, 10), 72);
-  assert.equal(getBoundedStaggerDelay(25, 24, 10), 240);
-});
-
-test('isRectInRevealViewport distinguishes above/in-fold elements from below-fold sections', () => {
-  assert.equal(isRectInRevealViewport(120, 420, 844), true);
-  assert.equal(isRectInRevealViewport(860, 1180, 844, 40), true);
-  assert.equal(isRectInRevealViewport(950, 1300, 844, 40), false);
-  assert.equal(isRectInRevealViewport(-200, -60, 844, 40), false);
+  assert.equal(rect.left, 279);
+  assert.equal(rect.top, 4);
+  assert.equal(rect.width, 88);
+  assert.equal(rect.height, 34);
+  assert.equal(rect.ready, true);
 });

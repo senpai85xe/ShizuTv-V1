@@ -33,6 +33,7 @@ import {
   resolveBatterySaverHlsLevel,
   resolveEffectiveStreamQuality,
   resolvePersistedSubtitleLang,
+  resolvePreferredAudioForSource,
   resolvePreferredHlsLevel,
   resolvePreferredVideoServer,
   sanitizeAudioLanguageCode,
@@ -354,18 +355,88 @@ test('buildSubtitleBoxCssProps applies font family, weight, edge style, and opac
   assert.ok(css.textShadow.includes('-1px -1px 0'));
 });
 
-test('buildSelectableAudioOptions exposes all 4 languages and marks confirmed source tracks', () => {
-  const opts = buildSelectableAudioOptions(
+test('buildSelectableAudioOptions exposes only languages confirmed or inherent to the active source', () => {
+  // When stream metadata reports only Japanese + Hindi (e.g. Hindi source with Japanese fallback)
+  const resolvedSubset = buildSelectableAudioOptions(
     [{ code: 'ja', shortLabel: 'JP', label: 'Japanese (Original)', serverCategory: 'sub' }],
     'hi',
   );
   assert.deepEqual(
-    opts.map((o) => o.code),
-    ['ja', 'en', 'hi', 'es'],
+    resolvedSubset.map((o) => o.code),
+    ['ja', 'hi'],
   );
-  assert.equal(opts.find((o) => o.code === 'ja')?.confirmed, true);
-  assert.equal(opts.find((o) => o.code === 'hi')?.confirmed, true);
-  assert.equal(opts.find((o) => o.code === 'en')?.confirmed, false);
+  assert.equal(resolvedSubset.every((o) => o.confirmed), true);
+
+  // When stream reports sub + dub on inbuilt source, only JP & EN are shown (no Hindi/Spanish)
+  const subAndDubOnly = buildSelectableAudioOptions(
+    [
+      { code: 'ja', shortLabel: 'JP', label: 'Japanese (Original)', serverCategory: 'sub' },
+      { code: 'en', shortLabel: 'EN', label: 'English (Dub)', serverCategory: 'dub' },
+    ],
+    'en',
+  );
+  assert.deepEqual(
+    subAndDubOnly.map((o) => o.code),
+    ['ja', 'en'],
+  );
+
+  // Before stream resolves on a Hindi extension, only Hindi is shown
+  const hindiPreload = buildSelectableAudioOptions(null, 'hi');
+  assert.deepEqual(
+    hindiPreload.map((o) => o.code),
+    ['hi'],
+  );
+  assert.equal(hindiPreload[0].confirmed, true);
+
+  // Before stream resolves on an English/multi source, JP & EN are available without false Hindi/Spanish
+  const englishPreload = buildSelectableAudioOptions(undefined, 'en');
+  assert.deepEqual(
+    englishPreload.map((o) => o.code),
+    ['ja', 'en'],
+  );
+  assert.equal(englishPreload.every((o) => !o.confirmed), true);
+});
+
+test('resolvePreferredAudioForSource aligns audio when switching sources and prevents stale Hindi on ShizuTv', () => {
+  // Switching to Hindi extension auto-selects Hindi even if user had English/Japanese active
+  assert.equal(
+    resolvePreferredAudioForSource({
+      currentAudioLang: 'en',
+      sourceLang: 'hi',
+      sourceName: 'AnimeHindiWorld',
+    }),
+    'hi',
+  );
+
+  // Switching to source with Hindi in name even when sourceLang metadata says multi
+  assert.equal(
+    resolvePreferredAudioForSource({
+      currentAudioLang: 'ja',
+      sourceLang: 'multi',
+      sourceName: 'ToonStream Hindi Dub',
+    }),
+    'hi',
+  );
+
+  // Switching back from Hindi extension to ShizuTv inbuilt resets stale Hindi back to Japanese
+  assert.equal(
+    resolvePreferredAudioForSource({
+      currentAudioLang: 'hi',
+      sourceLang: 'en',
+      sourceName: 'ShizuTv Stream (Inbuilt)',
+    }),
+    'ja',
+  );
+
+  // Switching between English-capable sources keeps English selected
+  assert.equal(
+    resolvePreferredAudioForSource({
+      currentAudioLang: 'en',
+      sourceLang: 'en',
+      sourceName: 'AniWatch / HiAnime (Bridge)',
+    }),
+    'en',
+  );
 });
 
 test('shouldAutoMatchAudioForServerChange preserves Hindi and Spanish dubs across dub server switches', () => {

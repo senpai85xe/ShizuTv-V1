@@ -59,7 +59,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         data-testid={`media-card-trending-rank-${media.id}`}
         onClick={onClick}
         style={{ borderRadius: `calc(${roundness} + 8px)`, ...entranceStyle }}
-        className={`group relative overflow-hidden text-left bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]/70 aspect-[4/3] sx-card-spring ${entranceClass} hover:border-[var(--sx-primary)]/50 hover:shadow-[0_16px_32px_-14px_rgba(0,0,0,0.5)] focus-visible:outline-2 focus-visible:outline-[var(--sx-primary)] ${
+        className={`group relative overflow-hidden text-left sx-glass-panel border border-[var(--sx-outline)]/70 aspect-[4/3] sx-card-spring ${entranceClass} hover:border-[var(--sx-primary)]/50 hover:shadow-[0_16px_32px_-14px_rgba(0,0,0,0.5)] focus-visible:outline-2 focus-visible:outline-[var(--sx-primary)] ${
           fullWidth ? 'w-full' : 'shrink-0 w-[232px] sm:w-[285px]'
         }`}
       >
@@ -417,7 +417,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         type="button"
         onClick={onClick}
         style={{ borderRadius: roundness, ...entranceStyle }}
-        className={`group relative overflow-hidden text-left bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] sx-card-spring ${entranceClass} hover:border-[var(--sx-primary)]/50 hover:shadow-[0_14px_28px_-12px_rgba(0,0,0,0.45)] focus-visible:outline-2 focus-visible:outline-[var(--sx-primary)] ${
+        className={`group relative overflow-hidden text-left sx-glass-panel border border-[var(--sx-outline)] sx-card-spring ${entranceClass} hover:border-[var(--sx-primary)]/50 hover:shadow-[0_14px_28px_-12px_rgba(0,0,0,0.45)] focus-visible:outline-2 focus-visible:outline-[var(--sx-primary)] ${
           fullWidth
             ? isBanner
               ? 'w-full h-[132px]'
@@ -494,9 +494,9 @@ export const MediaCard: React.FC<MediaCardProps> = ({
 
   const containerStyle =
     cardStyle === 'material'
-      ? 'bg-[var(--sx-surface-container)] p-2 border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/45'
+      ? 'sx-glass-panel p-2 border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/45'
       : cardStyle === 'neon'
-        ? 'bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] hover:shadow-[0_0_20px_-4px_var(--sx-primary)]'
+        ? 'sx-glass-panel border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] hover:shadow-[0_0_20px_-4px_var(--sx-primary)]'
         : cardStyle === 'editorial'
           ? 'bg-transparent'
           : 'bg-transparent';

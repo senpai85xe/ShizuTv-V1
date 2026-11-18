@@ -9,7 +9,9 @@ import {
   extractMegaPlayStreamUrl,
   HIANIME_BRIDGE_HOSTS,
   INBUILT_PRIMARY_HOSTS,
+  isMetadataOnlyCatalogHost,
   isSourceInherentLanguage,
+  isViableTitleMatch,
   mapSubtitleTracksFromSources,
   parseGenericEmbedCandidates,
   parseGenericEpisodeLinks,
@@ -322,5 +324,96 @@ test('generic site search, episode links, embed sorting, and packer video extrac
   assert.ok(unpacked.includes('https://cdn.example/master.m3u8'));
   const direct = extractDirectVideoUrlFromHtmlOrScript(packed, 'https://player.example.com');
   assert.equal(direct, 'https://cdn.example/master.m3u8');
+
+  const hindiAudios = detectAvailableAudiosFromSources({
+    candidates: [{ href: '/series/naruto-hindi', title: 'Naruto Hindi' }],
+    targetTitles: ['Naruto'],
+    currentCategory: 'dub',
+    currentAudioLanguage: 'hi',
+    embedLangHints: ['hi'],
+  });
+  assert.deepEqual(
+    hindiAudios.map((a) => a.code),
+    ['hi'],
+  );
+
+  const queryEpsHtml = `
+    <a href="/watch/naruto?ep=1">Episode 1</a>
+    <a href="/watch/naruto?ep=5">Episode 5</a>
+  `;
+  const ep5Links = parseGenericEpisodeLinks(queryEpsHtml, 'https://hindi.example.com', 5);
+  assert.equal(ep5Links[0], 'https://hindi.example.com/watch/naruto?ep=5');
 });
+
+test('isViableTitleMatch rejects unrelated schoolgirl movie on The God of War and checks metadata-only hosts', () => {
+  const queries = buildSearchQueriesForMedia({
+    english: 'The God of War',
+    romaji: 'Zhan Shen',
+  });
+  assert.ok(!queries.includes('The'), 'must not fall back to bare stop-word query "The"');
+
+  assert.equal(
+    isViableTitleMatch(
+      { href: '/category/girls-und-panzer-the-movie', title: 'Girls und Panzer: The Movie' },
+      ['The God of War', 'Zhan Shen'],
+      'ONA',
+    ),
+    false,
+  );
+  assert.equal(
+    isViableTitleMatch(
+      { href: '/category/the-god-of-war-donghua', title: 'The God of War' },
+      ['The God of War', 'Zhan Shen'],
+      'ONA',
+    ),
+    true,
+  );
+
+  assert.equal(isMetadataOnlyCatalogHost('https://anidb.net', 'AniDB'), true);
+  assert.equal(isMetadataOnlyCatalogHost('https://myanimelist.net/anime', 'MAL'), true);
+  assert.equal(isMetadataOnlyCatalogHost('https://animexin.dev', 'AnimeXin'), false);
+});
+
+test('parseGenericSearchHtml survives nested divs and parseGenericEmbedCandidates decodes base64 mirror options and atob()', () => {
+  const nestedCardHtml = `
+    <div class="bsx">
+      <a href="https://animexin.example/zhan-shen-the-god-of-war/" title="Zhan Shen (The God of War)">
+        <div class="limit"><div class="typez ONA">ONA</div><img src="poster.jpg" /></div>
+        <div class="tt">The God of War<h2>Zhan Shen</h2></div>
+      </a>
+    </div>
+  `;
+  const cards = parseGenericSearchHtml(nestedCardHtml, 'https://animexin.example');
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].href, '/zhan-shen-the-god-of-war/');
+  assert.ok(/god of war|zhan shen/i.test(cards[0].title));
+
+  const epListHtml = `
+    <a href="https://animexin.example/zhan-shen-episode-01-hindi-sub/">Ep 1</a>
+    <a href="https://animexin.example/zhan-shen-episode-02-hindi-sub/">Ep 2</a>
+  `;
+  const eps = parseGenericEpisodeLinks(epListHtml, 'https://animexin.example', 1);
+  assert.equal(eps[0], 'https://animexin.example/zhan-shen-episode-01-hindi-sub/');
+
+  const encodedIframe = Buffer.from('<iframe src="https://mirror.example/e/hindi-1" allowfullscreen></iframe>').toString('base64');
+  const mirrorHtml = `
+    <select class="mirror">
+      <option value="">Select Video Server</option>
+      <option value="${encodedIframe}">Server Hindi Mirror</option>
+    </select>
+  `;
+  const embeds = parseGenericEmbedCandidates(mirrorHtml, 'https://animexin.example/ep-1/');
+  assert.equal(embeds.length, 1);
+  assert.equal(embeds[0].url, 'https://mirror.example/e/hindi-1');
+  assert.equal(embeds[0].langHint, 'hi');
+
+  const encodedStreamUrl = Buffer.from('https://cdn.mirror.example/hls/master.m3u8').toString('base64');
+  const atobHtml = `<script>var s = atob("${encodedStreamUrl}");</script>`;
+  assert.equal(
+    extractDirectVideoUrlFromHtmlOrScript(atobHtml, 'https://mirror.example/e/hindi-1'),
+    'https://cdn.mirror.example/hls/master.m3u8',
+  );
+});
+
+
 

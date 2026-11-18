@@ -293,7 +293,7 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
               type="button"
               onClick={() => updateUiPrefs({ useNewUi: false })}
               title="Exit TV Mode"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[var(--sx-surface-high)] text-[var(--sx-on-surface)] hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors whitespace-nowrap shrink-0"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold sx-glass-control text-[var(--sx-on-surface)] hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors whitespace-nowrap shrink-0"
             >
               <Tv className="w-3.5 h-3.5" />
               <span>Standard UI</span>
@@ -301,7 +301,7 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
             <button
               type="button"
               onClick={() => navigate('/settings')}
-              className="p-2 rounded-lg bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors"
+              className="p-2 rounded-lg sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors"
               aria-label="Settings"
             >
               <Settings className="w-4 h-4" />
@@ -336,7 +336,7 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
         data-nav-style={navStyle}
         className={`hidden md:flex landscape:flex flex-col justify-between shrink-0 z-40 sticky top-0 h-dvh overflow-y-auto no-scrollbar transition-all duration-200 ${
           isDocked
-            ? 'w-20 short-screen:w-[68px] bg-[var(--sx-surface-container)] border-r border-[var(--sx-outline)] py-5 short-screen:py-2'
+            ? 'w-20 short-screen:w-[68px] bg-[var(--sx-surface-container)]/76 backdrop-blur-xl border-r border-[var(--sx-outline)] py-5 short-screen:py-2'
             : isGlassPill && isIconOnly
               ? 'w-[74px] short-screen:w-[66px] py-5 short-screen:py-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-1'
               : 'w-[84px] short-screen:w-[72px] py-5 short-screen:py-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-1'
@@ -352,8 +352,8 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
               : isGlassPill
                 ? glassSurfaceClass
                 : isFrosted
-                  ? 'bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)] shadow-lg'
-                  : 'bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]'
+                  ? 'bg-[var(--sx-surface-container)]/62 backdrop-blur-2xl border border-white/30 dark:border-white/12 shadow-lg'
+                  : 'sx-glass-panel border border-[var(--sx-outline)]'
           }`}
         >
           <button
@@ -533,8 +533,8 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
               : isGlassPill
                 ? glassSurfaceClass
                 : isFrosted
-                  ? 'bg-[var(--sx-surface-container)]/75 backdrop-blur-xl border border-[var(--sx-outline)]'
-                  : 'bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]'
+                  ? 'bg-[var(--sx-surface-container)]/62 backdrop-blur-2xl border border-white/30 dark:border-white/12'
+                  : 'sx-glass-panel border border-[var(--sx-outline)]'
           } ${
             isActive('/downloads')
               ? isGlassPill
@@ -601,10 +601,10 @@ export const NavShell: React.FC<NavShellProps> = ({ children }) => {
                 : `max-w-[420px] mx-auto h-[66px] px-1.5 justify-around ${glassSurfaceClass}`
               : `justify-around h-14 px-2 ${
                   isDocked
-                    ? 'bg-[var(--sx-surface-container)] border-t border-[var(--sx-outline)]'
+                    ? 'bg-[var(--sx-surface-container)]/78 backdrop-blur-xl border-t border-[var(--sx-outline)]'
                     : isFrosted
-                      ? 'bg-[var(--sx-surface-container)]/78 backdrop-blur-2xl border border-[var(--sx-outline)] shadow-[0_12px_36px_-10px_rgba(0,0,0,0.45)]'
-                      : 'bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] shadow-xl'
+                      ? 'bg-[var(--sx-surface-container)]/64 backdrop-blur-2xl border border-white/30 dark:border-white/12 shadow-[0_12px_36px_-10px_rgba(0,0,0,0.45)]'
+                      : 'sx-glass-panel border border-[var(--sx-outline)] shadow-xl'
                 }`
           }`}
         >

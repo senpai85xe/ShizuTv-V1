@@ -64,7 +64,7 @@ export const ContinueHistoryPage: React.FC = () => {
           type="button"
           onClick={() => navigate(-1)}
           aria-label="Go back"
-          className="p-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]"
+          className="p-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)]"
         >
           <ArrowLeft className="w-4 h-4" />
         </button>
@@ -89,7 +89,7 @@ export const ContinueHistoryPage: React.FC = () => {
           ))}
         </div>
       ) : items.length === 0 ? (
-        <div className="py-16 text-center rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]">
+        <div className="py-16 text-center rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)]">
           <p className="text-sm font-bold">No recent history recorded</p>
         </div>
       ) : (
@@ -100,7 +100,7 @@ export const ContinueHistoryPage: React.FC = () => {
             return (
               <div
                 key={item.id}
-                className="flex items-center gap-3.5 p-3 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]"
+                className="flex items-center gap-3.5 p-3 rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)]"
               >
                 <SmartImage
                   src={item.media.cover}
@@ -132,7 +132,7 @@ export const ContinueHistoryPage: React.FC = () => {
                         type="button"
                         onClick={() => removeHistoryItem(item.id)}
                         aria-label={`Remove ${title} from history`}
-                        className="p-1.5 rounded-lg bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)] hover:text-red-400"
+                        className="p-1.5 rounded-lg sx-glass-control text-[var(--sx-on-surface-muted)] hover:text-red-400"
                         title="Remove from history"
                       >
                         <Trash2 className="w-3.5 h-3.5" />

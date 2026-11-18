@@ -10,7 +10,7 @@ import {
   TrackedStatus,
 } from '../types/media';
 import { fetchAniListUserLibrary } from '../services/anilist';
-import { resolveChaptersForMedia } from '../services/sourceEngine';
+import { INBUILT_SOURCES } from '../services/sourceEngine';
 import { MediaCard } from '../components/MediaCard';
 import { MediaCardSkeleton } from '../components/MediaCardSkeleton';
 import { SmartImage } from '../components/SmartImage';
@@ -119,7 +119,7 @@ export const LibraryPage: React.FC = () => {
           {state.anilistToken && !showBookmarks && (
             <div
               ref={modePill.containerRef}
-              className="relative flex items-center gap-1 p-1 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]"
+              className="relative flex items-center gap-1 p-1 rounded-xl sx-glass-panel border border-[var(--sx-outline)]"
             >
               {modePill.pillRect.ready && (
                 <span
@@ -167,7 +167,7 @@ export const LibraryPage: React.FC = () => {
 
           <div
             ref={mediaTypePill.containerRef}
-            className="relative flex items-center gap-1 p-1 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]"
+            className="relative flex items-center gap-1 p-1 rounded-xl sx-glass-panel border border-[var(--sx-outline)]"
           >
             {mediaTypePill.pillRect.ready && (
               <span
@@ -211,7 +211,7 @@ export const LibraryPage: React.FC = () => {
             className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 border transition-colors ${
               showBookmarks
                 ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)]'
-                : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+                : 'sx-glass-panel border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
             }`}
           >
             <Bookmark className={`w-3.5 h-3.5 ${showBookmarks ? 'fill-current' : ''}`} />
@@ -240,7 +240,7 @@ export const LibraryPage: React.FC = () => {
               className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 border transition-colors ${
                 !showBookmarks && status === s
                   ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)]'
-                  : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+                  : 'sx-glass-panel border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
               }`}
             >
               {getStatusLabel(s, mediaType)}
@@ -256,14 +256,14 @@ export const LibraryPage: React.FC = () => {
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
               placeholder={showBookmarks ? 'Filter bookmarks...' : 'Filter library...'}
-              className="w-full pl-8 pr-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs focus:outline-none focus:border-[var(--sx-primary)]"
+              className="w-full pl-8 pr-3 py-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-xs focus:outline-none focus:border-[var(--sx-primary)]"
             />
           </div>
           {mode === 'cloud' && !showBookmarks && (
             <button
               type="button"
               onClick={loadCloud}
-              className="p-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]"
+              className="p-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]"
               title="Refresh Cloud Library"
             >
               <RefreshCw className={`w-4 h-4 ${loadingCloud ? 'animate-spin' : ''}`} />
@@ -329,13 +329,19 @@ export const LibraryPage: React.FC = () => {
                         data-testid={`library-bookmark-play-${item.id}`}
                         onClick={() => {
                           if (isItemManga) {
-                            const chapters = resolveChaptersForMedia(item.media);
-                            const idx = chapters.findIndex((c) => c.number === item.itemNumber);
+                            const mangaSourceId =
+                              state.discoveryPrefs.preferredMangaSourceId || 'mangadex-bridge';
+                            const mangaSource = [...INBUILT_SOURCES, ...state.customSources].find(
+                              (s) => s.id === mangaSourceId,
+                            );
                             navigate('/reader', {
                               state: {
                                 media: item.media,
-                                chapters,
-                                chapterIndex: idx >= 0 ? idx : 0,
+                                targetChapterNumber: item.itemNumber,
+                                sourceId: mangaSource?.id || 'mangadex-bridge',
+                                sourceName: mangaSource?.name,
+                                sourceBaseUrl: mangaSource?.baseUrl,
+                                sourceLang: mangaSource?.lang,
                               },
                             });
                           } else {
@@ -393,11 +399,11 @@ export const LibraryPage: React.FC = () => {
           ))}
         </div>
       ) : cloudError ? (
-        <div className="p-6 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-red-500/30 text-center text-xs text-red-400">
+        <div className="p-6 rounded-[var(--sx-radius)] sx-glass-panel border border-red-500/30 text-center text-xs text-red-400">
           {cloudError}
         </div>
       ) : filteredEntries.length === 0 ? (
-        <div className="py-16 text-center rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-3">
+        <div className="py-16 text-center rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)] space-y-3">
           <p className="text-base font-bold">Your {getStatusLabel(status, mediaType)} list is empty</p>
           <p className="text-xs text-[var(--sx-on-surface-muted)]">
             Discover {mediaType.toLowerCase()} and add titles to track your progress here.

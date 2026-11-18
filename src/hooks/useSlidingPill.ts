@@ -32,7 +32,12 @@ export function useSlidingPill<T extends HTMLElement = HTMLDivElement>(
     }
     const cRect = container.getBoundingClientRect();
     const tRect = target.getBoundingClientRect();
-    const next = measureRelativePillRect(cRect, tRect);
+    const next = measureRelativePillRect(cRect, tRect, {
+      scrollLeft: container.scrollLeft,
+      scrollTop: container.scrollTop,
+      clientLeft: container.clientLeft,
+      clientTop: container.clientTop,
+    });
     setPillRect((prev) =>
       prev.ready === next.ready &&
       Math.abs(prev.left - next.left) < 0.5 &&
@@ -45,9 +50,22 @@ export function useSlidingPill<T extends HTMLElement = HTMLDivElement>(
   }, [activeKey]);
 
   useLayoutEffect(() => {
-    updatePill();
     const container = containerRef.current;
     const target = itemsRef.current.get(activeKey);
+    if (container && target && container.scrollWidth > container.clientWidth + 4) {
+      const targetLeft = target.offsetLeft;
+      const targetRight = targetLeft + target.offsetWidth;
+      const viewLeft = container.scrollLeft;
+      const viewRight = viewLeft + container.clientWidth;
+      if (targetLeft < viewLeft + 8 || targetRight > viewRight - 8) {
+        target.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+          inline: 'center',
+        });
+      }
+    }
+    updatePill();
     if (!container || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => updatePill());
     ro.observe(container);

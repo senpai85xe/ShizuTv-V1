@@ -62,13 +62,28 @@ export function matchesExtensionMediaTab(
   source: SourceInfo,
   mediaTab: ExtensionMediaTab,
 ): boolean {
+  const types = Array.isArray(source.mediaTypes) ? source.mediaTypes : [];
   if (mediaTab === 'ANIME') {
-    return source.mediaTypes.some((m) => m === 'ANIME' || m === 'TV' || m === 'MOVIE');
+    return types.some((m) => m === 'ANIME' || m === 'TV' || m === 'MOVIE');
   }
   if (mediaTab === 'MANGA') {
-    return source.mediaTypes.includes('MANGA');
+    return types.includes('MANGA');
   }
-  return source.mediaTypes.includes('NOVEL');
+  return types.includes('NOVEL');
+}
+
+export function collectAvailableExtensionLanguages(
+  sources: SourceInfo[],
+  mediaTab: ExtensionMediaTab,
+): string[] {
+  const langs = new Set<string>();
+  for (const s of sources) {
+    if (!matchesExtensionMediaTab(s, mediaTab) || !s.lang) continue;
+    const normalized = s.lang.trim().toLowerCase();
+    if (!normalized || normalized === 'all') continue;
+    langs.add(normalized);
+  }
+  return ['all', ...Array.from(langs).sort()];
 }
 
 export interface FilterExtensionsOptions {
@@ -113,8 +128,11 @@ export function filterExtensions(
 export function groupExtensionsByLanguage(
   sources: SourceInfo[],
 ): Array<{ group: string; items: SourceInfo[] }> {
+  const seenIds = new Set<string>();
   const buckets = new Map<string, SourceInfo[]>();
   for (const src of sources) {
+    if (!src.id || seenIds.has(src.id)) continue;
+    seenIds.add(src.id);
     const group = formatExtensionLangGroup(src.lang);
     const list = buckets.get(group);
     if (list) list.push(src);
@@ -132,10 +150,17 @@ export function sortSourcesByOrder(
   sources: SourceInfo[],
   sourceOrder: string[],
 ): SourceInfo[] {
-  if (!Array.isArray(sourceOrder) || sourceOrder.length === 0) return sources;
+  const seenIds = new Set<string>();
+  const deduped: SourceInfo[] = [];
+  for (const src of sources) {
+    if (!src?.id || seenIds.has(src.id)) continue;
+    seenIds.add(src.id);
+    deduped.push(src);
+  }
+  if (!Array.isArray(sourceOrder) || sourceOrder.length === 0) return deduped;
   const rank = new Map<string, number>();
   sourceOrder.forEach((id, idx) => rank.set(id, idx));
-  return [...sources].sort((a, b) => {
+  return [...deduped].sort((a, b) => {
     const ra = rank.get(a.id);
     const rb = rank.get(b.id);
     if (ra !== undefined && rb !== undefined) return ra - rb;

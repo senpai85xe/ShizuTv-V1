@@ -860,7 +860,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                           type="button"
                           data-testid="watch-room-copy-code-btn"
                           onClick={() => void handleCopyRoomCode()}
-                          className="h-7 px-2.5 rounded-full bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-[11px] font-bold text-[var(--sx-on-surface)] inline-flex items-center gap-1 hover:border-[var(--sx-primary)]/50 transition-colors"
+                          className="h-7 px-2.5 rounded-full sx-glass-control border border-[var(--sx-outline)] text-[11px] font-bold text-[var(--sx-on-surface)] inline-flex items-center gap-1 hover:border-[var(--sx-primary)]/50 transition-colors"
                         >
                           {copiedRoomCode ? (
                             <>
@@ -896,12 +896,12 @@ export const WatchTogetherRoomPage: React.FC = () => {
                     </div>
 
                     {/* Track Selector (H-Sub / Dub moved into Settings) */}
-                    <div className="rounded-xl bg-[var(--sx-surface-high)]/70 border border-[var(--sx-outline)] p-2 space-y-1.5">
+                    <div className="rounded-xl sx-glass-control border border-[var(--sx-outline)] p-2 space-y-1.5">
                       <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-[var(--sx-on-surface-muted)] px-0.5">
                         <span>Audio Track</span>
                         {!isHost && <span>Host controlled</span>}
                       </div>
-                      <div className="grid grid-cols-2 gap-1 p-0.5 rounded-full bg-[var(--sx-surface)]/80 border border-[var(--sx-outline)]">
+                      <div className="grid grid-cols-2 gap-1 p-0.5 rounded-full bg-[var(--sx-surface)]/45 backdrop-blur-md border border-[var(--sx-outline)]">
                         {(['H-Sub', 'Dub'] as WatchPartyTrack[]).map((opt) => {
                           const active = activeTrack === opt;
                           return (
@@ -928,7 +928,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                     {isHost && (
                       <form
                         onSubmit={handleSaveRoomName}
-                        className="rounded-xl bg-[var(--sx-surface-high)]/70 border border-[var(--sx-outline)] p-2 space-y-1.5"
+                        className="rounded-xl sx-glass-control border border-[var(--sx-outline)] p-2 space-y-1.5"
                       >
                         <label
                           htmlFor="watch-room-name-edit"
@@ -946,7 +946,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                             value={roomNameDraft}
                             onChange={(e) => setRoomNameDraft(e.target.value)}
                             placeholder={`${hostName}'s room`}
-                            className="flex-1 min-w-0 h-7 px-2.5 rounded-lg bg-[var(--sx-surface)]/85 border border-[var(--sx-outline)] text-xs font-semibold text-[var(--sx-on-surface)] focus:outline-none focus:border-[var(--sx-primary)]"
+                            className="flex-1 min-w-0 h-7 px-2.5 rounded-lg bg-[var(--sx-surface)]/45 backdrop-blur-md border border-[var(--sx-outline)] text-xs font-semibold text-[var(--sx-on-surface)] focus:outline-none focus:border-[var(--sx-primary)]"
                           />
                           <button
                             type="submit"
@@ -966,7 +966,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                           type="button"
                           data-testid="watch-room-visibility-toggle"
                           onClick={() => updateRoomMeta({ isPublic: !room.isPublic })}
-                          className="w-full px-3 py-2 rounded-xl bg-[var(--sx-surface-high)]/80 hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] flex items-center justify-between transition-colors"
+                          className="w-full px-3 py-2 rounded-xl sx-glass-control hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] flex items-center justify-between transition-colors"
                         >
                           <span className="inline-flex items-center gap-2">
                             {room.isPublic ? (
@@ -985,7 +985,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                         data-testid="watch-room-reactions-toggle"
                         aria-pressed={reactionsEnabled}
                         onClick={() => setReactionsEnabled((v) => !v)}
-                        className="w-full px-3 py-2 rounded-xl bg-[var(--sx-surface-high)]/80 hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] flex items-center justify-between transition-colors"
+                        className="w-full px-3 py-2 rounded-xl sx-glass-control hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] flex items-center justify-between transition-colors"
                       >
                         <span className="inline-flex items-center gap-2">
                           <Sparkles
@@ -1015,7 +1015,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                         type="button"
                         data-testid="watch-room-resync-btn"
                         onClick={handleResyncStream}
-                        className="px-2.5 py-2 rounded-xl bg-[var(--sx-surface-high)]/80 hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-[11px] font-bold text-[var(--sx-on-surface)] inline-flex items-center justify-center gap-1.5 transition-colors"
+                        className="px-2.5 py-2 rounded-xl sx-glass-control hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-[11px] font-bold text-[var(--sx-on-surface)] inline-flex items-center justify-center gap-1.5 transition-colors"
                       >
                         <RefreshCw className="w-3 h-3 text-[var(--sx-primary)]" />
                         <span>Re-sync Live</span>
@@ -1028,7 +1028,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                           setChatDrawerOpenOnMobile((v) => !v);
                           setSettingsMenuOpen(false);
                         }}
-                        className="px-2.5 py-2 rounded-xl bg-[var(--sx-surface-high)]/80 hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-[11px] font-bold text-[var(--sx-on-surface)] inline-flex items-center justify-center gap-1.5 transition-colors"
+                        className="px-2.5 py-2 rounded-xl sx-glass-control hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-[11px] font-bold text-[var(--sx-on-surface)] inline-flex items-center justify-center gap-1.5 transition-colors"
                       >
                         {chatDrawerOpenOnMobile ? (
                           <>
@@ -1048,7 +1048,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                       type="button"
                       data-testid="watch-room-open-details-btn"
                       onClick={handleOpenMediaDetails}
-                      className="w-full px-3 py-2 rounded-xl bg-[var(--sx-surface-high)]/80 hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] flex items-center justify-between transition-colors"
+                      className="w-full px-3 py-2 rounded-xl sx-glass-control hover:bg-[var(--sx-primary)]/15 border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] flex items-center justify-between transition-colors"
                     >
                       <span className="inline-flex items-center gap-2">
                         <Tv className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
@@ -1063,7 +1063,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
                         type="button"
                         data-testid="watch-room-leave-btn"
                         onClick={handleLeave}
-                        className="w-full px-3 py-2 rounded-xl bg-[var(--sx-surface-high)]/85 hover:bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] flex items-center justify-center gap-1.5 transition-colors"
+                        className="w-full px-3 py-2 rounded-xl sx-glass-control hover:bg-[var(--sx-surface-high)]/70 border border-[var(--sx-outline)] text-xs font-bold text-[var(--sx-on-surface)] flex items-center justify-center gap-1.5 transition-colors"
                       >
                         <LogOut className="w-3.5 h-3.5" />
                         <span>Leave Room</span>
@@ -1160,7 +1160,7 @@ export const WatchTogetherRoomPage: React.FC = () => {
               >
                 {displayTitle}
               </button>
-              <span className="px-2 py-0.5 rounded-full bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-[10px] font-extrabold uppercase tracking-wider text-[var(--sx-on-surface)] shrink-0">
+              <span className="px-2 py-0.5 rounded-full bg-[var(--sx-surface-high)]/45 backdrop-blur-md border border-[var(--sx-outline)] text-[10px] font-extrabold uppercase tracking-wider text-[var(--sx-on-surface)] shrink-0">
                 {activeTrack}
               </span>
             </div>

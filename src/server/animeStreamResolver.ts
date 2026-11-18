@@ -10,7 +10,10 @@ import {
   extractSlugFromGogoHref,
   type GenericEmbedCandidate,
   type GogoSearchCandidate,
+  HIANIME_BRIDGE_HOSTS,
+  isMetadataOnlyCatalogHost,
   isSourceInherentLanguage,
+  isViableTitleMatch,
   type MappedSubtitleTrack,
   mapSubtitleTracksFromSources,
   parseGenericEmbedCandidates,
@@ -133,6 +136,83 @@ function normalizeHttpUrl(rawUrl: string, baseUrl: string): string | null {
   } catch {
     return null;
   }
+}
+
+async function parseDooPlayAjaxEmbeds(
+  html: string,
+  episodePageUrl: string,
+): Promise<GenericEmbedCandidate[]> {
+  const embeds: GenericEmbedCandidate[] = [];
+  const dooRe =
+    /<li[^>]*class="[^"]*dooplay_player_option[^"]*"[^>]*>/gi;
+  const matches: Array<{ post: string; nume: string; type: string; label: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = dooRe.exec(html)) !== null) {
+    const tag = m[0];
+    const post = tag.match(/data-post=["']([^"']+)["']/i)?.[1];
+    const nume = tag.match(/data-nume=["']([^"']+)["']/i)?.[1];
+    const type = tag.match(/data-type=["']([^"']+)["']/i)?.[1] || 'tv';
+    if (!post || !nume || nume === 'trailer') continue;
+    const chunk = html.slice(m.index, m.index + 320);
+    const label = chunk
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 40);
+    matches.push({ post, nume, type, label: label || `Server ${nume}` });
+  }
+  if (matches.length === 0) return embeds;
+
+  let origin: string;
+  try {
+    origin = new URL(episodePageUrl).origin;
+  } catch {
+    return embeds;
+  }
+
+  for (const opt of matches.slice(0, 4)) {
+    try {
+      const form = new URLSearchParams({
+        action: 'doo_player_ajax',
+        post: opt.post,
+        nume: opt.nume,
+        type: opt.type,
+      });
+      const res = await fetch(`${origin}/wp-admin/admin-ajax.php`, {
+        method: 'POST',
+        headers: {
+          'User-Agent': BROWSER_UA,
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          Referer: episodePageUrl,
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        body: form.toString(),
+        signal: AbortSignal.timeout(6500),
+      });
+      if (!res.ok) continue;
+      const rawText = await res.text();
+      let embedUrl: string | null = null;
+      try {
+        const json = JSON.parse(rawText) as { embed_url?: string };
+        if (json?.embed_url) {
+          const iframeSrc = json.embed_url.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1];
+          embedUrl = iframeSrc || json.embed_url;
+        }
+      } catch {
+        embedUrl = rawText.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1] || null;
+      }
+      if (embedUrl) {
+        const normalized = normalizeHttpUrl(embedUrl, episodePageUrl);
+        if (normalized) {
+          embeds.push({ label: opt.label, url: normalized });
+        }
+      }
+    } catch {
+      // Try next DooPlay player option
+    }
+  }
+
+  return embeds;
 }
 
 function parseGogoSearchHtml(html: string): GogoSearchCandidate[] {
@@ -415,6 +495,20 @@ async function searchGogoAcrossQueries(
   const querySubset =
     audioLanguage === 'hi' || audioLanguage === 'es' ? queries.slice(0, 3) : queries;
 
+  const rankViable = (items: Iterable<GogoSearchCandidate>) =>
+    Array.from(items)
+      .filter((c) => isViableTitleMatch(c, targetTitles, format))
+      .map((c) => ({
+        ...c,
+        score: scoreGogoSearchCandidate(c, {
+          titles: targetTitles,
+          category,
+          format,
+          audioLanguage,
+        }),
+      }))
+      .sort((a, b) => b.score - a.score);
+
   for (let qIdx = 0; qIdx < querySubset.length; qIdx++) {
     const query = querySubset[qIdx];
     try {
@@ -430,17 +524,7 @@ async function searchGogoAcrossQueries(
       }
 
       if (allCandidates.size > 0) {
-        const rankedNow = Array.from(allCandidates.values())
-          .map((c) => ({
-            ...c,
-            score: scoreGogoSearchCandidate(c, {
-              titles: targetTitles,
-              category,
-              format,
-              audioLanguage,
-            }),
-          }))
-          .sort((a, b) => b.score - a.score);
+        const rankedNow = rankViable(allCandidates.values());
         if (audioLanguage === 'hi' || audioLanguage === 'es') {
           const hasExplicitLangCandidate = rankedNow.some((c) =>
             candidateMatchesAudioLanguage(c, audioLanguage),
@@ -460,17 +544,7 @@ async function searchGogoAcrossQueries(
     }
   }
 
-  return Array.from(allCandidates.values())
-    .map((c) => ({
-      ...c,
-      score: scoreGogoSearchCandidate(c, {
-        titles: targetTitles,
-        category,
-        format,
-        audioLanguage,
-      }),
-    }))
-    .sort((a, b) => b.score - a.score);
+  return rankViable(allCandidates.values());
 }
 
 async function searchGenericSiteAcrossQueries(
@@ -483,20 +557,37 @@ async function searchGenericSiteAcrossQueries(
 ): Promise<Array<GogoSearchCandidate & { score: number }>> {
   const allCandidates = new Map<string, GogoSearchCandidate>();
 
-  for (const query of queries) {
+  const rankViable = (items: Iterable<GogoSearchCandidate>) =>
+    Array.from(items)
+      .filter((c) => isViableTitleMatch(c, targetTitles, format))
+      .map((c) => ({
+        ...c,
+        score: scoreGogoSearchCandidate(c, {
+          titles: targetTitles,
+          category,
+          format,
+          audioLanguage,
+        }),
+      }))
+      .sort((a, b) => b.score - a.score);
+
+  for (const query of queries.slice(0, 5)) {
     const searchEndpoints = [
-      `${host}/search.html?keyword=${encodeURIComponent(query)}`,
       `${host}/?s=${encodeURIComponent(query)}`,
+      `${host}/search.html?keyword=${encodeURIComponent(query)}`,
       `${host}/search?keyword=${encodeURIComponent(query)}`,
+      `${host}/search?q=${encodeURIComponent(query)}`,
+      `${host}/search/${encodeURIComponent(query)}/`,
     ];
 
+    let foundOnAnyHtmlEndpoint = false;
     for (const endpoint of searchEndpoints) {
       try {
-        const res = await fetchText(endpoint, { Referer: `${host}/` }, 7000);
+        const res = await fetchText(endpoint, { Referer: `${host}/` }, 6500);
         if (!res.ok) continue;
 
         const gogoItems = parseGogoSearchHtml(res.text);
-        const genericItems = parseGenericSearchHtml(res.text, host);
+        const genericItems = parseGenericSearchHtml(res.text, res.url || host);
         const merged = [...gogoItems, ...genericItems];
         for (const item of merged) {
           if (!allCandidates.has(item.href)) {
@@ -504,42 +595,53 @@ async function searchGenericSiteAcrossQueries(
           }
         }
         if (merged.length > 0) {
-          break; // Endpoint format worked for this host
+          foundOnAnyHtmlEndpoint = true;
+          break;
         }
       } catch {
         // Try next search endpoint pattern
       }
     }
 
+    // Fallback: WordPress REST search API when HTML search is SPA/JS-rendered
+    if (!foundOnAnyHtmlEndpoint) {
+      try {
+        const wpRes = await fetchText(
+          `${host}/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=10`,
+          { Referer: `${host}/`, Accept: 'application/json' },
+          5500,
+        );
+        if (wpRes.ok) {
+          const wpJson = JSON.parse(wpRes.text) as Array<{ url?: string; title?: string }>;
+          if (Array.isArray(wpJson)) {
+            for (const row of wpJson) {
+              if (!row?.url || !row?.title) continue;
+              try {
+                const u = new URL(row.url);
+                const href = `${u.pathname}${u.search}`;
+                if (!allCandidates.has(href)) {
+                  allCandidates.set(href, { href, title: row.title });
+                }
+              } catch {
+                // Skip invalid URL
+              }
+            }
+          }
+        }
+      } catch {
+        // WP REST API unavailable on this host
+      }
+    }
+
     if (allCandidates.size > 0 && audioLanguage !== 'hi' && audioLanguage !== 'es') {
-      const rankedNow = Array.from(allCandidates.values())
-        .map((c) => ({
-          ...c,
-          score: scoreGogoSearchCandidate(c, {
-            titles: targetTitles,
-            category,
-            format,
-            audioLanguage,
-          }),
-        }))
-        .sort((a, b) => b.score - a.score);
+      const rankedNow = rankViable(allCandidates.values());
       if (rankedNow[0] && rankedNow[0].score >= 100) {
         return rankedNow;
       }
     }
   }
 
-  return Array.from(allCandidates.values())
-    .map((c) => ({
-      ...c,
-      score: scoreGogoSearchCandidate(c, {
-        titles: targetTitles,
-        category,
-        format,
-        audioLanguage,
-      }),
-    }))
-    .sort((a, b) => b.score - a.score);
+  return rankViable(allCandidates.values());
 }
 
 async function resolveEpisodePageUrls(
@@ -708,6 +810,7 @@ function finalizePayload(input: {
   sourceLang?: string;
   sourceBaseUrl?: string;
   fallbackQueryTitle: string;
+  embedLangHints?: Array<string | undefined>;
 }): ResolvedAnimeStreamPayload {
   const primary = input.resolvedMirrors[0];
   const isHls =
@@ -722,7 +825,9 @@ function finalizePayload(input: {
     candidates: input.candidates,
     targetTitles: input.targetTitles,
     currentCategory: input.effectiveCategory,
+    currentAudioLanguage: input.requestedAudioLang,
     hasDubProbe: input.hasDubProbe,
+    embedLangHints: input.embedLangHints,
   });
 
   if (
@@ -848,6 +953,7 @@ async function resolveViaHiAnimeHost(input: {
   if (allCandidates.size === 0) return null;
 
   const ranked = Array.from(allCandidates.values())
+    .filter((c) => isViableTitleMatch(c, input.targetTitles, input.format))
     .map((c) => ({
       ...c,
       score: scoreGogoSearchCandidate(c, {
@@ -858,6 +964,8 @@ async function resolveViaHiAnimeHost(input: {
       }),
     }))
     .sort((a, b) => b.score - a.score);
+
+  if (ranked.length === 0) return null;
 
   for (const candidate of ranked.slice(0, 3)) {
     const idMatch = candidate.href.match(/-(\d+)(?:\?|$|\/)/);
@@ -1028,6 +1136,15 @@ export async function resolveAnimeEpisodeStream(
   if (hostPlan.mode === 'missing-host' || hostPlan.hosts.length === 0) {
     throw new Error(
       `Extension "${hostPlan.sourceLabel}" does not have a valid stream base URL configured. Open Extensions settings to verify or reinstall this source.`,
+    );
+  }
+
+  if (
+    hostPlan.mode === 'custom-extension' &&
+    isMetadataOnlyCatalogHost(params.sourceBaseUrl, hostPlan.sourceLabel)
+  ) {
+    throw new Error(
+      `${hostPlan.sourceLabel} is an anime info catalog and does not host playable video streams. Switch to ShizuTv Stream (Inbuilt), HiAnime Bridge, or a streaming extension.`,
     );
   }
 
@@ -1204,15 +1321,57 @@ export async function resolveAnimeEpisodeStream(
 
         const gogoEmbeds = parseGogoEpisodeEmbeds(epHtml, resolvedEpUrl);
         const genericEmbeds = parseGenericEmbedCandidates(epHtml, resolvedEpUrl);
+        const dooEmbeds =
+          gogoEmbeds.length === 0 && genericEmbeds.length === 0 && hostPlan.mode === 'custom-extension'
+            ? await parseDooPlayAjaxEmbeds(epHtml, resolvedEpUrl)
+            : [];
         const combinedEmbeds: GenericEmbedCandidate[] = [];
         const seenEmbedUrls = new Set<string>();
-        for (const emb of [...gogoEmbeds, ...genericEmbeds]) {
+        for (const emb of [...gogoEmbeds, ...genericEmbeds, ...dooEmbeds]) {
           if (!seenEmbedUrls.has(emb.url)) {
             seenEmbedUrls.add(emb.url);
             combinedEmbeds.push(emb);
           }
         }
-        if (combinedEmbeds.length === 0) continue;
+        // Check if the episode HTML itself directly embeds an m3u8 / mp4 URL
+        if (combinedEmbeds.length === 0) {
+          const directInline = extractDirectVideoUrlFromHtmlOrScript(epHtml, resolvedEpUrl);
+          if (directInline && isSafeExternalHttpUrl(directInline)) {
+            const origin = new URL(resolvedEpUrl).origin + '/';
+            const directPayload = finalizePayload({
+              resolvedMirrors: [
+                {
+                  streamUrl: directInline,
+                  referer: origin,
+                  subtitles: [],
+                  intro: null,
+                  outro: null,
+                  label: 'Direct',
+                },
+              ],
+              candidates,
+              targetTitles,
+              effectiveCategory,
+              requestedAudioLang,
+              hasDubProbe: false,
+              candidateTitle: candidate.title,
+              slug,
+              episodeNumber: safeEpisodeNum,
+              serverNameParam: params.serverName,
+              sourceLabel: hostPlan.sourceLabel,
+              sourceId: params.sourceId,
+              sourceLang: params.sourceLang,
+              sourceBaseUrl: params.sourceBaseUrl,
+              fallbackQueryTitle: queries[0],
+            });
+            resolvedStreamCache.set(cacheKey, {
+              expiresAt: Date.now() + CACHE_TTL_MS,
+              payload: directPayload,
+            });
+            return directPayload;
+          }
+          continue;
+        }
 
         if (requiresStrictAudioMatch && !sourceInherentlyMatchesRequested) {
           const candOk = candidateMatchesAudioLanguage(candidate, requestedAudioLang, {
@@ -1302,6 +1461,7 @@ export async function resolveAnimeEpisodeStream(
             sourceLang: params.sourceLang,
             sourceBaseUrl: params.sourceBaseUrl,
             fallbackQueryTitle: queries[0],
+            embedLangHints: combinedEmbeds.map((emb) => emb.langHint),
           });
 
           resolvedStreamCache.set(cacheKey, {
@@ -1315,6 +1475,38 @@ export async function resolveAnimeEpisodeStream(
 
     if (hostPlan.mode === 'inbuilt' && sawCandidatesWithoutRequestedLanguage) {
       break;
+    }
+  }
+
+  // Secondary inbuilt mirror sweep across HiAnime-compatible hosts (strict title viability still enforced)
+  if (hostPlan.mode === 'inbuilt' && !sawCandidatesWithoutRequestedLanguage) {
+    for (const hiHost of HIANIME_BRIDGE_HOSTS) {
+      try {
+        const hiPayload = await resolveViaHiAnimeHost({
+          host: hiHost,
+          queries,
+          targetTitles,
+          format: params.format,
+          episodeNumber: safeEpisodeNum,
+          effectiveCategory,
+          requestedAudioLang,
+          serverId: params.serverId,
+          serverName: params.serverName,
+          sourceLabel: hostPlan.sourceLabel,
+          sourceId: params.sourceId,
+          sourceLang: params.sourceLang,
+          sourceBaseUrl: params.sourceBaseUrl,
+        });
+        if (hiPayload) {
+          resolvedStreamCache.set(cacheKey, {
+            expiresAt: Date.now() + CACHE_TTL_MS,
+            payload: hiPayload,
+          });
+          return hiPayload;
+        }
+      } catch {
+        // Continue to next mirror
+      }
     }
   }
 

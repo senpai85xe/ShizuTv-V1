@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  collectAvailableExtensionLanguages,
   filterExtensions,
   formatExtensionLangChip,
   formatExtensionLangGroup,
@@ -104,7 +105,7 @@ test('filterExtensions and groupExtensionsByLanguage filter by media tab, manage
   assert.equal(grouped[1].items.length, 2);
 });
 
-test('sortSourcesByOrder and reorderSourceIds maintain deterministic ordering', () => {
+test('sortSourcesByOrder and reorderSourceIds maintain deterministic ordering and deduplicate IDs', () => {
   const reorderedIds = reorderSourceIds(
     ['shonenx-hls-inbuilt', 'ext-ay-gotaku', 'ext-ay-aniworld'],
     'ext-ay-aniworld',
@@ -116,9 +117,45 @@ test('sortSourcesByOrder and reorderSourceIds maintain deterministic ordering', 
     'ext-ay-gotaku',
   ]);
 
-  const sorted = sortSourcesByOrder(SAMPLE_SOURCES.slice(0, 3), reorderedIds);
+  const sorted = sortSourcesByOrder(
+    [...SAMPLE_SOURCES.slice(0, 3), SAMPLE_SOURCES[1]],
+    reorderedIds,
+  );
   assert.deepEqual(
     sorted.map((s) => s.id),
     ['ext-ay-aniworld', 'shonenx-hls-inbuilt', 'ext-ay-gotaku'],
   );
+});
+
+test('collectAvailableExtensionLanguages deduplicates all/ALL so React keys remain unique', () => {
+  const mixedSources: SourceInfo[] = [
+    ...SAMPLE_SOURCES,
+    {
+      id: 'ext-ay-all-1',
+      name: 'MultiRepo One',
+      type: 'extension',
+      mediaTypes: ['ANIME'],
+      lang: 'all',
+      version: '1.0.0',
+    },
+    {
+      id: 'ext-ay-all-2',
+      name: 'MultiRepo Two',
+      type: 'extension',
+      mediaTypes: ['ANIME'],
+      lang: 'ALL ',
+      version: '1.0.1',
+    },
+    {
+      id: 'ext-ay-hi',
+      name: 'HindiStream',
+      type: 'extension',
+      mediaTypes: ['ANIME'],
+      lang: ' hi ',
+      version: '1.0.2',
+    },
+  ];
+  const langs = collectAvailableExtensionLanguages(mixedSources, 'ANIME');
+  assert.deepEqual(langs, ['all', 'de', 'en', 'hi']);
+  assert.equal(new Set(langs).size, langs.length);
 });

@@ -118,6 +118,9 @@ export interface UnifiedChapter {
   releaseDate?: string | null;
   pageCount?: number;
   pages?: string[];
+  sourceChapterId?: string;
+  chapterUrl?: string;
+  externalUrl?: string | null;
 }
 
 export interface VideoServer {
@@ -138,6 +141,7 @@ export interface VideoStream {
   quality: string;
   isHls: boolean;
   serverName: string;
+  sourceId?: string;
   provider?: string;
   matchedTitle?: string;
   matchedEpisode?: number;

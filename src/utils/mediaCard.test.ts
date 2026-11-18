@@ -164,9 +164,9 @@ test('mergeContinueHistoryItems prioritizes local history and maps unique cloud 
   assert.equal(merged[1]?.episodeNumber, 8);
 });
 
-test('createDefaultCardStylePrefs defaults Continue Watching & Reading styles to episodeTile', () => {
+test('createDefaultCardStylePrefs defaults cardStyle to shizutv and Continue styles to episodeTile', () => {
   const defaults = createDefaultCardStylePrefs();
-  assert.equal(defaults.cardStyle, 'expressive');
+  assert.equal(defaults.cardStyle, 'shizutv');
   assert.equal(defaults.continueWatchingStyle, 'episodeTile');
   assert.equal(defaults.continueReadingStyle, 'episodeTile');
 });

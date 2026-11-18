@@ -652,30 +652,88 @@ export interface SelectableAudioLanguageOption extends AudioLanguageOption {
 }
 
 /**
- * Returns all selectable audio languages so users can explicitly choose Japanese, English,
- * Hindi, or Spanish on the player page, while annotating which tracks were confirmed by
- * the active source/stream metadata.
+ * Returns only the audio languages actually supported or detected for the active
+ * source/stream, annotating which tracks were confirmed by stream metadata.
  */
 export function buildSelectableAudioOptions(
   sourceAudios?: AudioLanguageOption[] | null,
   sourceLang?: string | null,
 ): SelectableAudioLanguageOption[] {
   const confirmedCodes = new Set<AudioLanguageCode>();
-  if (Array.isArray(sourceAudios)) {
+  const hasStreamMetadata = Array.isArray(sourceAudios) && sourceAudios.length > 0;
+  if (hasStreamMetadata) {
     for (const item of sourceAudios) {
       if (item?.code) confirmedCodes.add(item.code);
     }
   }
+
   const cleanSourceLang = typeof sourceLang === 'string' ? sourceLang.trim().toLowerCase() : '';
   if (cleanSourceLang === 'hi' || cleanSourceLang === 'hindi') {
     confirmedCodes.add('hi');
   } else if (cleanSourceLang === 'es' || cleanSourceLang === 'spanish') {
     confirmedCodes.add('es');
+  } else if (cleanSourceLang === 'ja' || cleanSourceLang === 'japanese') {
+    confirmedCodes.add('ja');
   }
-  return AUDIO_LANGUAGE_OPTIONS.map((opt) => ({
-    ...opt,
-    confirmed: confirmedCodes.has(opt.code),
-  }));
+
+  if (hasStreamMetadata) {
+    return AUDIO_LANGUAGE_OPTIONS.filter((opt) => confirmedCodes.has(opt.code)).map((opt) => ({
+      ...opt,
+      confirmed: confirmedCodes.has(opt.code),
+    }));
+  }
+
+  if (confirmedCodes.size > 0) {
+    return AUDIO_LANGUAGE_OPTIONS.filter((opt) => confirmedCodes.has(opt.code)).map((opt) => ({
+      ...opt,
+      confirmed: true,
+    }));
+  }
+
+  // Before an English / multi source finishes resolving, expose only Japanese (Sub) & English (Dub)
+  return AUDIO_LANGUAGE_OPTIONS.filter((opt) => opt.code === 'ja' || opt.code === 'en').map(
+    (opt) => ({
+      ...opt,
+      confirmed: false,
+    }),
+  );
+}
+
+/**
+ * Aligns audioLanguage when switching anime sources/extensions so inherently Hindi/Spanish
+ * sources immediately request their native dub and incompatible audio picks don't linger.
+ */
+export function resolvePreferredAudioForSource(params: {
+  currentAudioLang?: string | null;
+  sourceLang?: string | null;
+  sourceName?: string | null;
+  sourceBaseUrl?: string | null;
+  sourceAudios?: AudioLanguageOption[] | null;
+}): AudioLanguageCode {
+  const cleanLang =
+    typeof params.sourceLang === 'string' ? params.sourceLang.trim().toLowerCase() : '';
+  const combinedMeta = `${params.sourceName || ''} ${params.sourceBaseUrl || ''}`.toLowerCase();
+
+  if (cleanLang === 'hi' || cleanLang === 'hindi' || /\bhindi\b|\bhin\b/.test(combinedMeta)) {
+    return 'hi';
+  }
+  if (
+    cleanLang === 'es' ||
+    cleanLang === 'spanish' ||
+    /\bspanish\b|\bespanol\b|\blatino\b|\bcastellano\b/.test(combinedMeta)
+  ) {
+    return 'es';
+  }
+  if (cleanLang === 'ja' || cleanLang === 'japanese') {
+    return 'ja';
+  }
+
+  const allowed = buildSelectableAudioOptions(params.sourceAudios, params.sourceLang);
+  const current = sanitizeAudioLanguageCode(params.currentAudioLang);
+  if (allowed.some((opt) => opt.code === current)) {
+    return current;
+  }
+  return (allowed[0]?.code as AudioLanguageCode) ?? 'ja';
 }
 
 /**

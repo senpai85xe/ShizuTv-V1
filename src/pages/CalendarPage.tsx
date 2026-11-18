@@ -75,7 +75,7 @@ export const CalendarPage: React.FC = () => {
           <button
             type="button"
             onClick={() => navigate(-1)}
-            className="p-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]"
+            className="p-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)]"
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
@@ -91,13 +91,13 @@ export const CalendarPage: React.FC = () => {
           <select
             value={source}
             onChange={(e) => setSource(e.target.value as 'anilist' | 'myanimelist')}
-            className="px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold"
+            className="px-3 py-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-xs font-bold"
           >
-            <option value="anilist">AniList Schedule</option>
-            <option value="myanimelist">MyAnimeList (Jikan)</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="anilist">AniList Schedule</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="myanimelist">MyAnimeList (Jikan)</option>
           </select>
 
-          <div className="flex items-center gap-1 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] rounded-xl p-1">
+          <div className="flex items-center gap-1 sx-glass-panel border border-[var(--sx-outline)] rounded-xl p-1">
             <button
               type="button"
               onClick={() => shiftWeek(-7)}
@@ -133,7 +133,7 @@ export const CalendarPage: React.FC = () => {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search airing anime..."
-          className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs focus:outline-none focus:border-[var(--sx-primary)]"
+          className="w-full pl-10 pr-4 py-2.5 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-xs focus:outline-none focus:border-[var(--sx-primary)]"
         />
       </div>
 
@@ -152,7 +152,7 @@ export const CalendarPage: React.FC = () => {
           ))}
         </div>
       ) : error ? (
-        <div className="p-8 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-red-500/30 text-center space-y-3">
+        <div className="p-8 rounded-[var(--sx-radius)] sx-glass-panel border border-red-500/30 text-center space-y-3">
           <p className="text-sm font-bold text-red-400">{error}</p>
           <button
             type="button"
@@ -175,7 +175,7 @@ export const CalendarPage: React.FC = () => {
             return (
               <section
                 key={key}
-                className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] p-4 space-y-3"
+                className="rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)] p-4 space-y-3"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -220,7 +220,7 @@ export const CalendarPage: React.FC = () => {
                               state: { media: entry.media },
                             })
                           }
-                          className="flex items-center gap-3 p-2.5 rounded-xl bg-[var(--sx-surface-high)] hover:border-[var(--sx-primary)] border border-transparent text-left transition-colors"
+                          className="flex items-center gap-3 p-2.5 rounded-xl sx-glass-control hover:border-[var(--sx-primary)] border border-transparent text-left transition-colors"
                         >
                           <SmartImage
                             src={entry.media.cover}

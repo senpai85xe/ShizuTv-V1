@@ -34,7 +34,7 @@ export const DownloadsPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]">
+          <div className="flex items-center gap-1 p-1 rounded-xl sx-glass-panel border border-[var(--sx-outline)]">
             {(['all', 'active', 'completed'] as const).map((tab) => (
               <button
                 key={tab}
@@ -54,7 +54,7 @@ export const DownloadsPage: React.FC = () => {
             <button
               type="button"
               onClick={clearCompletedDownloads}
-              className="px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)]"
+              className="px-3 py-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)]"
             >
               Clear Completed
             </button>
@@ -63,7 +63,7 @@ export const DownloadsPage: React.FC = () => {
       </div>
 
       {items.length === 0 ? (
-        <div className="py-16 text-center rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-3">
+        <div className="py-16 text-center rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)] space-y-3">
           <Download className="w-10 h-10 mx-auto text-[var(--sx-on-surface-muted)] opacity-60" />
           <p className="text-base font-bold">No downloads in queue</p>
           <p className="text-xs text-[var(--sx-on-surface-muted)]">
@@ -84,7 +84,7 @@ export const DownloadsPage: React.FC = () => {
             return (
               <div
                 key={task.id}
-                className="flex items-center gap-4 p-4 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]"
+                className="flex items-center gap-4 p-4 rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)]"
               >
                 <SmartImage
                   src={task.cover}
@@ -105,7 +105,7 @@ export const DownloadsPage: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="w-full h-1.5 rounded-full bg-[var(--sx-surface-high)] overflow-hidden">
+                  <div className="w-full h-1.5 rounded-full bg-[var(--sx-surface-high)]/55 overflow-hidden">
                     <div
                       className="h-full bg-[var(--sx-primary)] transition-all duration-300"
                       style={{ width: `${pct}%` }}
@@ -156,7 +156,7 @@ export const DownloadsPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => toggleDownloadPause(task.id)}
-                      className="p-2 rounded-xl bg-[var(--sx-surface-high)] hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors"
+                      className="p-2 rounded-xl sx-glass-control hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] transition-colors"
                       title={task.status === 'paused' ? 'Resume' : 'Pause'}
                     >
                       {task.status === 'paused' ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
@@ -165,7 +165,7 @@ export const DownloadsPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => removeDownload(task.id)}
-                    className="p-2 rounded-xl bg-[var(--sx-surface-high)] hover:text-red-400 transition-colors"
+                    className="p-2 rounded-xl sx-glass-control hover:text-red-400 transition-colors"
                     title="Delete"
                   >
                     <Trash2 className="w-4 h-4" />

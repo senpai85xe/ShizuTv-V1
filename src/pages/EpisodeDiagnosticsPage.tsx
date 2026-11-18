@@ -86,7 +86,7 @@ function providerStatusDisplay(status: ProviderTraceStatus): {
     default:
       return {
         label: 'SKIPPED',
-        toneClass: 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)] border-[var(--sx-outline)]',
+        toneClass: 'sx-glass-control text-[var(--sx-on-surface-muted)] border-[var(--sx-outline)]',
         Icon: MinusCircle,
       };
   }
@@ -312,7 +312,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
           <button
             type="button"
             onClick={() => navigate('/settings')}
-            className="p-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors shrink-0"
+            className="p-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors shrink-0"
             aria-label="Back to Settings"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -335,7 +335,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
               type="button"
               data-testid="diagnostics-copy-json-btn"
               onClick={handleCopyJson}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
             >
               {copiedTraceId === activeTrace.id ? (
                 <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -353,7 +353,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
               clearEpisodeTraces();
               setSelectedTraceId(null);
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-red-400 hover:text-red-400 disabled:opacity-45 whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-xs font-bold hover:border-red-400 hover:text-red-400 disabled:opacity-45 whitespace-nowrap"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Clear Log</span>
@@ -365,7 +365,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
       <form
         onSubmit={handleSubmitProbe}
         style={{ borderRadius: roundness }}
-        className="p-4 sm:p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-4"
+        className="p-4 sm:p-5 sx-glass-panel border border-[var(--sx-outline)] space-y-4"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -386,7 +386,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
                   setOverrideDraft('');
                   void executeProbe(sample.id);
                 }}
-                className="px-2.5 py-1 rounded-lg bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-[11px] font-bold hover:border-[var(--sx-primary)] transition-colors disabled:opacity-50 whitespace-nowrap"
+                className="px-2.5 py-1 rounded-lg sx-glass-control border border-[var(--sx-outline)] text-[11px] font-bold hover:border-[var(--sx-primary)] transition-colors disabled:opacity-50 whitespace-nowrap"
               >
                 {sample.label}
               </button>
@@ -405,7 +405,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
               value={probeQuery}
               onChange={(e) => setProbeQuery(e.target.value)}
               placeholder="e.g. 154587, Naruto, Dandadan"
-              className="w-full px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
+              className="w-full px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
             />
           </label>
 
@@ -417,12 +417,16 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
               data-testid="diagnostics-source-select"
               value={selectedSourceId}
               onChange={(e) => setSelectedSourceId(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold outline-none focus:border-[var(--sx-primary)]"
+              className="w-full px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold outline-none focus:border-[var(--sx-primary)]"
             >
               {animeSources.map((src) => {
                 const enabled = state.discoveryPrefs.activeSources.includes(src.id);
                 return (
-                  <option key={src.id} value={src.id}>
+                  <option
+                    key={src.id}
+                    value={src.id}
+                    className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                  >
                     {src.name} ({src.lang}){enabled ? '' : ' [Disabled]'}
                   </option>
                 );
@@ -440,7 +444,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
               value={overrideDraft}
               onChange={(e) => setOverrideDraft(e.target.value)}
               placeholder="Alternate title lookup"
-              className="w-full px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
+              className="w-full px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
             />
           </label>
         </div>
@@ -488,7 +492,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
           {/* Trace Overview Banner */}
           <section
             style={{ borderRadius: roundness }}
-            className="p-4 sm:p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-4"
+            className="p-4 sm:p-5 sx-glass-panel border border-[var(--sx-outline)] space-y-4"
           >
             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
               <div className="min-w-0 space-y-1">
@@ -526,7 +530,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
                     void executeProbe(activeTrace.inputMediaId);
                   }}
                   disabled={probing}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] disabled:opacity-50 whitespace-nowrap"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] disabled:opacity-50 whitespace-nowrap"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${probing ? 'animate-spin' : ''}`} />
                   <span>Re-probe</span>
@@ -534,7 +538,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => navigate(`/details/anime/${activeTrace.resolvedMediaId}`)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>Open Anime</span>
@@ -642,7 +646,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
           {/* Provider Waterfall Breakdown */}
           <section
             style={{ borderRadius: roundness }}
-            className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] overflow-hidden"
+            className="sx-glass-panel border border-[var(--sx-outline)] overflow-hidden"
           >
             <div className="px-4 py-3 border-b border-[var(--sx-outline)] flex flex-col sm:flex-row sm:items-center justify-between gap-1">
               <div className="flex items-center gap-2">
@@ -723,7 +727,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
           {/* Merged Episode Comparison Preview */}
           <section
             style={{ borderRadius: roundness }}
-            className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] overflow-hidden"
+            className="sx-glass-panel border border-[var(--sx-outline)] overflow-hidden"
           >
             <div className="px-4 py-3 border-b border-[var(--sx-outline)] flex items-center justify-between gap-2">
               <h2 className="text-xs font-extrabold uppercase tracking-wider">
@@ -802,7 +806,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
       ) : (
         <div
           style={{ borderRadius: roundness }}
-          className="p-8 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-center space-y-2"
+          className="p-8 sx-glass-panel border border-[var(--sx-outline)] text-center space-y-2"
         >
           <Activity className="w-6 h-6 mx-auto text-[var(--sx-primary)]" />
           <div className="text-sm font-bold">No episode fetch traces captured yet</div>
@@ -819,7 +823,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
             <h2 className="text-xs font-extrabold uppercase tracking-wider text-[var(--sx-on-surface-muted)]">
               Captured Fetch Log ({traces.length})
             </h2>
-            <div className="flex items-center gap-1 bg-[var(--sx-surface-container)] p-1 rounded-xl border border-[var(--sx-outline)]">
+            <div className="flex items-center gap-1 sx-glass-panel p-1 rounded-xl border border-[var(--sx-outline)]">
               <button
                 type="button"
                 data-testid="diagnostics-filter-all"
@@ -854,7 +858,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
               value={logSearch}
               onChange={(e) => setLogSearch(e.target.value)}
               placeholder="Filter traces by anime or source..."
-              className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs outline-none focus:border-[var(--sx-primary)]"
+              className="w-full pl-8 pr-3 py-1.5 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-xs outline-none focus:border-[var(--sx-primary)]"
             />
           </div>
         </div>
@@ -862,7 +866,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
         <div
           data-testid="diagnostics-trace-list"
           style={{ borderRadius: roundness }}
-          className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+          className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
         >
           {filteredTraces.length === 0 ? (
             <div className="p-6 text-center text-xs text-[var(--sx-on-surface-muted)]">
@@ -881,7 +885,7 @@ export const EpisodeDiagnosticsPage: React.FC = () => {
                   className={`w-full px-4 py-3 text-left flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors ${
                     selected
                       ? 'bg-[var(--sx-primary)]/10'
-                      : 'hover:bg-[var(--sx-surface-high)]'
+                      : 'hover:bg-[var(--sx-surface-high)]/55'
                   }`}
                 >
                   <div className="min-w-0 space-y-0.5">

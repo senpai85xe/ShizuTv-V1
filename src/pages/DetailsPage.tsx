@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Activity,
+  AlertCircle,
   AlignJustify,
   ArrowDownUp,
   ArrowLeft,
@@ -65,8 +66,9 @@ import { searchJikan } from '../services/jikan';
 import {
   INBUILT_SOURCES,
   resolveChapterPages,
-  resolveChaptersForMedia,
   resolveEpisodesForMedia,
+  resolveMangaChapterPagesAsync,
+  resolveMangaChaptersAsync,
   resolveVideoServers,
   resolveVideoStreamAsync,
 } from '../services/sourceEngine';
@@ -74,6 +76,7 @@ import {
   buildSelectableAudioOptions,
   resolveAudioLanguageOption,
   resolvePersistedSubtitleLang,
+  resolvePreferredAudioForSource,
   resolvePreferredVideoServer,
 } from '../utils/inlinePlayer';
 import {
@@ -230,6 +233,8 @@ export const DetailsPage: React.FC = () => {
   const [episodes, setEpisodes] = useState<UnifiedEpisode[]>([]);
   const [chapters, setChapters] = useState<UnifiedChapter[]>([]);
   const [resolvingEpisodes, setResolvingEpisodes] = useState(false);
+  const [resolvingChapters, setResolvingChapters] = useState(false);
+  const [chaptersError, setChaptersError] = useState<string | null>(null);
   const [episodeRefreshNonce, setEpisodeRefreshNonce] = useState(0);
   const [epFilter, setEpFilter] = useState('');
   const [epOrderAsc, setEpOrderAsc] = useState(true);
@@ -239,11 +244,12 @@ export const DetailsPage: React.FC = () => {
   const isManga = media.type === 'MANGA' || media.type === 'NOVEL';
   const availableSources = useMemo(() => {
     const combined = [...INBUILT_SOURCES, ...state.customSources];
-    const typeMatched = combined.filter((s) =>
-      isManga
-        ? s.mediaTypes.includes('MANGA') || s.mediaTypes.includes('NOVEL')
-        : s.mediaTypes.includes('ANIME') || s.mediaTypes.includes('MOVIE') || s.mediaTypes.includes('TV'),
-    );
+    const typeMatched = combined.filter((s) => {
+      const types = Array.isArray(s.mediaTypes) && s.mediaTypes.length > 0 ? s.mediaTypes : ['ANIME'];
+      return isManga
+        ? types.includes('MANGA') || types.includes('NOVEL')
+        : types.includes('ANIME') || types.includes('MOVIE') || types.includes('TV');
+    });
     const activeMatched = typeMatched.filter((s) =>
       state.discoveryPrefs.activeSources.includes(s.id),
     );
@@ -369,18 +375,17 @@ export const DetailsPage: React.FC = () => {
     setEpFilter('');
     setMatchedTitleOverride('');
     setMatchedOverrideMedia(null);
+    setChaptersError(null);
     if (isRouteChanged) {
       setHasPickedInlineEpisode(false);
       setInlineEpisodeIndex(0);
       setInlinePlaySignal(0);
+      setChapters([]);
     }
     fetchMediaDetails(id, resolvedType, initialMedia?.providerId)
       .then((full) => {
         const merged = { ...initialMedia, ...full };
         setMedia(merged);
-        if (merged.type === 'MANGA' || merged.type === 'NOVEL') {
-          setChapters(resolveChaptersForMedia(merged));
-        }
       })
       .catch(() => {
         // Keep partial media when offline
@@ -431,6 +436,51 @@ export const DetailsPage: React.FC = () => {
     selectedSourceId,
     matchedTitleOverride,
     matchedOverrideMedia?.id,
+    episodeRefreshNonce,
+  ]);
+
+  useEffect(() => {
+    if (!id || !isManga || loadingDetails || !media.id) return;
+    let cancelled = false;
+    setResolvingChapters(true);
+    setChaptersError(null);
+    const sourceMeta = availableSources.find((s) => s.id === selectedSourceId);
+    resolveMangaChaptersAsync({
+      media,
+      sourceId: selectedSourceId,
+      sourceName: sourceMeta?.name,
+      sourceBaseUrl: sourceMeta?.baseUrl,
+      sourceLang: sourceMeta?.lang,
+      overrideTitle: matchedTitleOverride.trim() || undefined,
+      bypassCache: episodeRefreshNonce > 0,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setChapters(res.chapters);
+        setSelectedRangeId('all');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setChapters([]);
+        setChaptersError(
+          err instanceof Error ? err.message : 'Unable to fetch chapters from this source.',
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setResolvingChapters(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    id,
+    isManga,
+    loadingDetails,
+    media.id,
+    media.title?.english,
+    media.title?.romaji,
+    selectedSourceId,
+    matchedTitleOverride,
     episodeRefreshNonce,
   ]);
 
@@ -516,13 +566,35 @@ export const DetailsPage: React.FC = () => {
     state.playerPrefs.audioLanguage,
     selectableAudioOptions,
   );
+
+  useEffect(() => {
+    if (isManga) return;
+    if (!resolvedWatchStream || resolvedWatchStream.sourceId !== selectedSourceId) return;
+    if (!Array.isArray(resolvedWatchStream.availableAudios) || resolvedWatchStream.availableAudios.length === 0) {
+      return;
+    }
+    const isSupported = selectableAudioOptions.some(
+      (opt) => opt.code === state.playerPrefs.audioLanguage,
+    );
+    if (!isSupported && selectableAudioOptions[0]) {
+      updatePlayerPrefs({ audioLanguage: selectableAudioOptions[0].code });
+    }
+  }, [
+    isManga,
+    resolvedWatchStream,
+    selectedSourceId,
+    selectableAudioOptions,
+    state.playerPrefs.audioLanguage,
+    updatePlayerPrefs,
+  ]);
   const filteredSourcePickerList = useMemo(
     () => filterAvailableSources(availableSources, sourcePickerQuery),
     [availableSources, sourcePickerQuery],
   );
+  const isResolvingItems = isManga ? resolvingChapters : resolvingEpisodes;
   const sourceAvailabilityLabel = formatSourceAvailabilityLabel({
     mediaType: media.type,
-    resolving: resolvingEpisodes,
+    resolving: isResolvingItems,
     resolvedCount: isManga ? chapters.length : episodes.length,
     expectedCount: isManga ? media.chapters : matchedOverrideMedia?.episodes ?? media.episodes,
     status: matchedOverrideMedia?.status ?? media.status,
@@ -672,22 +744,35 @@ export const DetailsPage: React.FC = () => {
         title: item.title,
       };
       setRealDownloadActive(taskId, true);
-      window.setTimeout(() => {
-        updateDownloadTask(taskId, { progress: 0.42, status: 'downloading' });
-        const pages = resolveChapterPages(media, ch);
+      updateDownloadTask(taskId, { progress: 0.25, status: 'downloading' });
+      void (async () => {
+        let pages: string[] = [];
+        try {
+          const res = await resolveMangaChapterPagesAsync({
+            media,
+            chapter: ch,
+            sourceId: selectedSourceId,
+            sourceName: activeSource?.name,
+            sourceBaseUrl: activeSource?.baseUrl,
+            sourceLang: activeSource?.lang,
+            overrideTitle: matchedTitleOverride.trim() || undefined,
+          });
+          pages = res.pages;
+        } catch {
+          pages = resolveChapterPages(media, ch);
+        }
+        updateDownloadTask(taskId, { progress: 0.72, status: 'downloading' });
         const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle} - Chapter ${ch.number}</title><style>body{margin:0;background:#111;color:#fff;font-family:sans-serif;text-align:center}img{max-width:860px;width:100%;display:block;margin:8px auto}</style></head><body><h2>${safeTitle} · Chapter ${ch.number}: ${ch.title}</h2>${pages.map((p, i) => `<img src="${p}" alt="Page ${i + 1}" />`).join('')}</body></html>`;
         const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-        window.setTimeout(() => {
-          updateDownloadTask(taskId, {
-            progress: 1,
-            downloadedBytes: blob.size,
-            totalBytes: blob.size,
-            status: 'completed',
-          });
-          setRealDownloadActive(taskId, false);
-          triggerBrowserFileDownload(blob, `${safeTitle}_Ch${ch.number}.html`);
-        }, 350);
-      }, 300);
+        updateDownloadTask(taskId, {
+          progress: 1,
+          downloadedBytes: blob.size,
+          totalBytes: blob.size,
+          status: 'completed',
+        });
+        setRealDownloadActive(taskId, false);
+        triggerBrowserFileDownload(blob, `${safeTitle}_Ch${ch.number}.html`);
+      })();
       return;
     }
 
@@ -766,7 +851,18 @@ export const DetailsPage: React.FC = () => {
   const handleLaunchMedia = (indexOverride?: number) => {
     if (isManga && chapters.length > 0) {
       const idx = typeof indexOverride === 'number' ? indexOverride : resumeIndex;
-      navigate('/reader', { state: { media, chapters, chapterIndex: idx } });
+      navigate('/reader', {
+        state: {
+          media,
+          chapters,
+          chapterIndex: idx,
+          sourceId: selectedSourceId,
+          sourceName: activeSource?.name,
+          sourceBaseUrl: activeSource?.baseUrl,
+          sourceLang: activeSource?.lang,
+          overrideTitle: matchedTitleOverride.trim() || undefined,
+        },
+      });
       return;
     }
     if (!isManga && episodes.length > 0) {
@@ -932,6 +1028,10 @@ export const DetailsPage: React.FC = () => {
               )}
               initialEditedCuesMap={navMediaState?.editedCuesMap}
               onStreamResolved={setResolvedWatchStream}
+              onOpenSourcePicker={() => {
+                setSourcePickerQuery('');
+                setSourcePickerOpen(true);
+              }}
               onChangeEpisodeIndex={(nextIdx) => {
                 setHasPickedInlineEpisode(true);
                 setInlineEpisodeIndex(nextIdx);
@@ -1637,6 +1737,100 @@ export const DetailsPage: React.FC = () => {
             data-testid="details-panel-watch"
             className={`${tabTransitionClass} space-y-4`}
           >
+            {/* Audio Language Selector Card (Compact, Directly Above Anime Source) */}
+            {!isManga && (
+              <section
+                data-testid="details-audio-language-card"
+                className={`${frostedCardClass} px-3 py-2 space-y-2`}
+              >
+                <button
+                  type="button"
+                  data-testid="details-audio-language-btn"
+                  aria-expanded={audioPickerOpen}
+                  aria-haspopup="listbox"
+                  onClick={() => setAudioPickerOpen((prev) => !prev)}
+                  className="w-full flex items-center justify-between gap-2 text-left group"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <div className="w-7 h-7 rounded-xl shrink-0 bg-[var(--sx-on-surface)]/8 dark:bg-white/10 border border-white/35 dark:border-white/12 flex items-center justify-center">
+                      <Languages className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
+                    </div>
+                    <div className="min-w-0 flex-1 flex items-center gap-2">
+                      <span className="text-xs font-extrabold whitespace-nowrap">Audio</span>
+                      <span
+                        data-testid="details-audio-active-badge"
+                        className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/14 text-[var(--sx-primary)] text-[10px] font-black uppercase tracking-wider truncate"
+                      >
+                        {activeAudioOption.shortLabel} · {activeAudioOption.label}
+                      </span>
+                    </div>
+                  </div>
+
+                  <span className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-[11px] font-bold group-hover:border-[var(--sx-primary)] transition-colors">
+                    <span>Change</span>
+                    <ChevronDown
+                      className={`w-3 h-3 transition-transform duration-200 ${
+                        audioPickerOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </span>
+                </button>
+
+                {audioPickerOpen && (
+                  <div
+                    role="listbox"
+                    aria-label="Audio Language"
+                    data-testid="details-audio-language-menu"
+                    className="pt-2 border-t border-[var(--sx-outline)] grid grid-cols-1 sm:grid-cols-2 gap-1.5"
+                  >
+                    {selectableAudioOptions.map((opt) => {
+                      const isSelected = opt.code === activeAudioOption.code;
+                      return (
+                        <button
+                          key={opt.code}
+                          type="button"
+                          role="option"
+                          aria-selected={isSelected}
+                          data-testid={`details-audio-option-${opt.code}`}
+                          onClick={() => {
+                            updatePlayerPrefs({ audioLanguage: opt.code });
+                            setResolvedWatchStream(null);
+                            setAudioPickerOpen(false);
+                          }}
+                          className={`w-full px-2.5 py-2 rounded-xl border flex items-center justify-between gap-2 text-left transition-all ${
+                            isSelected
+                              ? 'bg-[var(--sx-primary)]/12 border-[var(--sx-primary)] text-[var(--sx-on-surface)] shadow-sm'
+                              : 'bg-[var(--sx-on-surface)]/5 dark:bg-white/5 border-white/25 dark:border-white/10 hover:border-[var(--sx-primary)]/60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className={`px-1.5 py-0.5 rounded-md text-[10px] font-black font-mono-tabular uppercase shrink-0 ${
+                                isSelected
+                                  ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
+                                  : 'bg-[var(--sx-on-surface)]/10 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
+                              }`}
+                            >
+                              {opt.shortLabel}
+                            </span>
+                            <span className="text-xs font-extrabold truncate">{opt.label}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {opt.confirmed && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[9.5px] font-extrabold uppercase">
+                                Available
+                              </span>
+                            )}
+                            {isSelected && <Check className="w-3.5 h-3.5 text-[var(--sx-primary)]" />}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
+
             {/* Source / Extension Selector Card */}
             <section className={`${frostedCardClass} p-3.5 sm:p-4 space-y-3`}>
               {/* Top Row: Active Extension Card + Quick Settings / Diagnose / Picker Trigger */}
@@ -1725,21 +1919,19 @@ export const DetailsPage: React.FC = () => {
                     <Settings className="w-3.5 h-3.5" />
                   </button>
 
-                  {!isManga && (
-                    <button
-                      type="button"
-                      data-testid="refresh-episodes-btn"
-                      disabled={resolvingEpisodes}
-                      onClick={() => setEpisodeRefreshNonce((n) => n + 1)}
-                      title="Refresh episode list"
-                      aria-label="Refresh episode list"
-                      className="w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors disabled:opacity-50"
-                    >
-                      <RefreshCw
-                        className={`w-3.5 h-3.5 ${resolvingEpisodes ? 'animate-spin' : ''}`}
-                      />
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    data-testid="refresh-episodes-btn"
+                    disabled={isResolvingItems}
+                    onClick={() => setEpisodeRefreshNonce((n) => n + 1)}
+                    title={isManga ? 'Refresh chapter list' : 'Refresh episode list'}
+                    aria-label={isManga ? 'Refresh chapter list' : 'Refresh episode list'}
+                    className="w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 ${isResolvingItems ? 'animate-spin' : ''}`}
+                    />
+                  </button>
 
                   <button
                     type="button"
@@ -1785,109 +1977,6 @@ export const DetailsPage: React.FC = () => {
                 </button>
               </div>
             </section>
-
-            {/* Audio Language Selector Card (Directly Below Anime Source) */}
-            {!isManga && (
-              <section
-                data-testid="details-audio-language-card"
-                className={`${frostedCardClass} p-3 sm:p-3.5 space-y-2.5`}
-              >
-                <button
-                  type="button"
-                  data-testid="details-audio-language-btn"
-                  aria-expanded={audioPickerOpen}
-                  aria-haspopup="listbox"
-                  onClick={() => setAudioPickerOpen((prev) => !prev)}
-                  className="w-full flex items-center justify-between gap-2.5 text-left group"
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="w-10 h-10 rounded-2xl shrink-0 bg-[var(--sx-on-surface)]/8 dark:bg-white/10 border border-white/35 dark:border-white/12 flex items-center justify-center">
-                      <Languages className="w-4 h-4 text-[var(--sx-primary)]" />
-                    </div>
-                    <div className="min-w-0 flex-1 space-y-0.5">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs sm:text-sm font-extrabold">
-                          Audio Language
-                        </span>
-                        <span
-                          data-testid="details-audio-active-badge"
-                          className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/14 text-[var(--sx-primary)] text-[10px] font-black uppercase tracking-wider"
-                        >
-                          {activeAudioOption.shortLabel} · {activeAudioOption.label}
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-semibold text-[var(--sx-on-surface-muted)] truncate">
-                        {resolvedWatchStream?.provider
-                          ? `Active source: ${resolvedWatchStream.provider}`
-                          : `Plays from ${activeSource?.name || 'ShizuTv Stream (Inbuilt)'}`}
-                      </p>
-                    </div>
-                  </div>
-
-                  <span className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold group-hover:border-[var(--sx-primary)] transition-colors">
-                    <span>Select</span>
-                    <ChevronDown
-                      className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                        audioPickerOpen ? 'rotate-180' : ''
-                      }`}
-                    />
-                  </span>
-                </button>
-
-                {audioPickerOpen && (
-                  <div
-                    role="listbox"
-                    aria-label="Audio Language"
-                    data-testid="details-audio-language-menu"
-                    className="pt-2.5 border-t border-[var(--sx-outline)] grid grid-cols-1 sm:grid-cols-2 gap-2"
-                  >
-                    {selectableAudioOptions.map((opt) => {
-                      const isSelected = opt.code === activeAudioOption.code;
-                      return (
-                        <button
-                          key={opt.code}
-                          type="button"
-                          role="option"
-                          aria-selected={isSelected}
-                          data-testid={`details-audio-option-${opt.code}`}
-                          onClick={() => {
-                            updatePlayerPrefs({ audioLanguage: opt.code });
-                            setResolvedWatchStream(null);
-                            setAudioPickerOpen(false);
-                          }}
-                          className={`w-full px-3 py-2.5 rounded-2xl border flex items-center justify-between gap-2 text-left transition-all ${
-                            isSelected
-                              ? 'bg-[var(--sx-primary)]/12 border-[var(--sx-primary)] text-[var(--sx-on-surface)] shadow-sm'
-                              : 'bg-[var(--sx-on-surface)]/5 dark:bg-white/5 border-white/25 dark:border-white/10 hover:border-[var(--sx-primary)]/60'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span
-                              className={`px-1.5 py-0.5 rounded-md text-[10px] font-black font-mono-tabular uppercase shrink-0 ${
-                                isSelected
-                                  ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
-                                  : 'bg-[var(--sx-on-surface)]/10 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
-                              }`}
-                            >
-                              {opt.shortLabel}
-                            </span>
-                            <span className="text-xs font-extrabold truncate">{opt.label}</span>
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            {opt.confirmed && (
-                              <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[9.5px] font-extrabold uppercase">
-                                Available
-                              </span>
-                            )}
-                            {isSelected && <Check className="w-3.5 h-3.5 text-[var(--sx-primary)]" />}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-            )}
 
             {/* Filter & Episode Tools Row */}
             {(() => {
@@ -1958,7 +2047,7 @@ export const DetailsPage: React.FC = () => {
                   {/* Sticky Search + Controls Toolbar while scrolling Episodes / Chapters */}
                   <div
                     data-testid="episode-sticky-toolbar"
-                    className="sticky top-0 z-30 pt-2.5 pb-1 -mx-1 px-1 space-y-2.5"
+                    className="sticky top-0 z-30 pt-2.5 pb-2 -mx-2 px-2 space-y-2.5 bg-gradient-to-b from-[var(--sx-surface)]/95 via-[var(--sx-surface)]/90 to-transparent backdrop-blur-xl rounded-b-2xl"
                   >
                     {/* Episode Search Input */}
                     <div className="relative">
@@ -1969,14 +2058,14 @@ export const DetailsPage: React.FC = () => {
                         value={epFilter}
                         onChange={(e) => setEpFilter(e.target.value)}
                         placeholder={isManga ? 'Search chapters...' : 'Search episodes...'}
-                        className="w-full pl-10 pr-3 py-2.5 rounded-full bg-[var(--sx-surface-container)]/48 dark:bg-[var(--sx-surface-container)]/54 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/5 shadow-md text-xs font-semibold focus:outline-none focus:border-[var(--sx-primary)]"
+                        className="w-full pl-10 pr-3 py-2.5 rounded-full bg-[var(--sx-surface-container)]/92 dark:bg-[var(--sx-surface-container)]/90 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/5 shadow-md text-xs font-semibold focus:outline-none focus:border-[var(--sx-primary)]"
                       />
                     </div>
 
                     {/* Episode / Chapter Filter, Style, Sort & Range Card */}
                     <div
                       data-testid="episode-controls-card"
-                      className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/48 dark:bg-[var(--sx-surface-container)]/54 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 shadow-[0_12px_34px_rgba(15,23,42,0.14)] ring-1 ring-inset ring-white/25 dark:ring-white/5 p-2.5 sm:p-3 space-y-2.5"
+                      className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/92 dark:bg-[var(--sx-surface-container)]/90 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 shadow-[0_12px_34px_rgba(15,23,42,0.16)] ring-1 ring-inset ring-white/25 dark:ring-white/5 p-2.5 sm:p-3 space-y-2.5"
                     >
                       {/* Top Row: Online / Downloaded / Bookmarked + Ep Style & Sort By actions */}
                       <div className="flex items-center justify-between gap-2">
@@ -2143,8 +2232,41 @@ export const DetailsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {(loadingDetails || resolvingEpisodes) && rawItemsCount === 0 ? (
+                  {(loadingDetails || isResolvingItems) && rawItemsCount === 0 ? (
                     <EpisodeListSkeleton style={activeEpStyle} />
+                  ) : isManga && chaptersError && rawItemsCount === 0 ? (
+                    <div
+                      data-testid="manga-chapters-error"
+                      className={`${frostedCardClass} p-7 text-center space-y-3`}
+                    >
+                      <AlertCircle className="w-7 h-7 text-amber-400 mx-auto" />
+                      <div className="space-y-1">
+                        <p className="text-sm font-extrabold">Chapters Unavailable</p>
+                        <p className="text-xs text-[var(--sx-on-surface-muted)] max-w-md mx-auto">
+                          {chaptersError}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEpisodeRefreshNonce((n) => n + 1)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-extrabold"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Retry</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSourcePickerQuery('');
+                            setSourcePickerOpen(true);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[var(--sx-on-surface)]/10 dark:bg-white/10 text-xs font-bold"
+                        >
+                          <span>Change Source</span>
+                        </button>
+                      </div>
+                    </div>
                   ) : listItems.length === 0 ? (
                     <div className={`${frostedCardClass} p-8 text-center space-y-2`}>
                       <p className="text-sm font-bold">
@@ -2637,14 +2759,14 @@ export const DetailsPage: React.FC = () => {
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="w-full sm:max-w-md bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl sx-sheet-enter"
+                className="w-full sm:max-w-md bg-[var(--sx-surface-container)]/68 dark:bg-[var(--sx-surface-container)]/62 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/20 dark:ring-white/10 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl sx-sheet-enter"
               >
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-extrabold">Custom List &amp; Tracker</h2>
                   <button
                     type="button"
                     onClick={() => setTrackerOpen(false)}
-                    className="p-2 rounded-full hover:bg-[var(--sx-surface-high)]"
+                    className="p-2 rounded-full hover:bg-[var(--sx-surface-high)]/60"
                   >
                     <X className="w-5 h-5" />
                   </button>
@@ -2658,7 +2780,7 @@ export const DetailsPage: React.FC = () => {
                     <select
                       value={editStatus}
                       onChange={(e) => setEditStatus(e.target.value as TrackedStatus)}
-                      className="w-full px-3 py-2.5 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold"
+                      className="w-full px-3 py-2.5 rounded-2xl bg-[var(--sx-surface-high)]/55 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold"
                     >
                       {(
                         [
@@ -2686,7 +2808,7 @@ export const DetailsPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setEditProgress((p) => Math.max(0, p - 1))}
-                          className="px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)] font-bold"
+                          className="px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)]/55 border border-white/30 dark:border-white/10 font-bold"
                         >
                           -
                         </button>
@@ -2695,12 +2817,12 @@ export const DetailsPage: React.FC = () => {
                           min={0}
                           value={editProgress}
                           onChange={(e) => setEditProgress(Math.max(0, Number(e.target.value)))}
-                          className="w-full px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-center text-xs font-bold tabular-nums"
+                          className="w-full px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)]/55 border border-white/35 dark:border-white/12 text-center text-xs font-bold tabular-nums"
                         />
                         <button
                           type="button"
                           onClick={() => setEditProgress((p) => p + 1)}
-                          className="px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)] font-bold"
+                          className="px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)]/55 border border-white/30 dark:border-white/10 font-bold"
                         >
                           +
                         </button>
@@ -2720,7 +2842,7 @@ export const DetailsPage: React.FC = () => {
                         onChange={(e) =>
                           setEditScore(Math.min(10, Math.max(0, Number(e.target.value))))
                         }
-                        className="w-full px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold tabular-nums"
+                        className="w-full px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)]/55 border border-white/35 dark:border-white/12 text-xs font-bold tabular-nums"
                       />
                     </div>
                   </div>
@@ -2734,7 +2856,7 @@ export const DetailsPage: React.FC = () => {
                       value={editNotes}
                       onChange={(e) => setEditNotes(e.target.value)}
                       placeholder="Personal notes..."
-                      className="w-full px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs"
+                      className="w-full px-3 py-2 rounded-2xl bg-[var(--sx-surface-high)]/55 border border-white/35 dark:border-white/12 text-xs"
                     />
                   </div>
                 </div>
@@ -2783,7 +2905,7 @@ export const DetailsPage: React.FC = () => {
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="w-full sm:max-w-lg max-h-[82vh] flex flex-col bg-[var(--sx-surface-container)]/92 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 space-y-4 shadow-2xl sx-sheet-enter"
+                className="w-full sm:max-w-lg max-h-[82vh] flex flex-col bg-[var(--sx-surface-container)]/68 dark:bg-[var(--sx-surface-container)]/62 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/20 dark:ring-white/10 rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 space-y-4 shadow-2xl sx-sheet-enter"
               >
                 <div className="w-10 h-1 rounded-full bg-[var(--sx-on-surface-muted)]/30 mx-auto shrink-0 sm:hidden" />
 
@@ -2795,14 +2917,14 @@ export const DetailsPage: React.FC = () => {
                     </h2>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <span className="px-2.5 py-1 rounded-full bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-[11px] font-extrabold tabular-nums">
+                    <span className="px-2.5 py-1 rounded-full bg-[var(--sx-surface-high)]/55 backdrop-blur-md border border-white/35 dark:border-white/12 text-[11px] font-extrabold tabular-nums">
                       {availableSources.length} installed
                     </span>
                     <button
                       type="button"
                       onClick={() => setSourcePickerOpen(false)}
                       aria-label="Close source selector"
-                      className="p-1.5 rounded-full hover:bg-[var(--sx-surface-high)]"
+                      className="p-1.5 rounded-full hover:bg-[var(--sx-surface-high)]/60"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -2819,7 +2941,7 @@ export const DetailsPage: React.FC = () => {
                     onChange={(e) => setSourcePickerQuery(e.target.value)}
                     placeholder="Search sources..."
                     autoFocus
-                    className="w-full pl-10 pr-9 py-2.5 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-semibold outline-none focus:border-[var(--sx-primary)]"
+                    className="w-full pl-10 pr-9 py-2.5 rounded-2xl bg-[var(--sx-surface-high)]/55 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-semibold outline-none focus:border-[var(--sx-primary)]"
                   />
                   {sourcePickerQuery && (
                     <button
@@ -2851,18 +2973,30 @@ export const DetailsPage: React.FC = () => {
                           type="button"
                           data-testid={`source-picker-item-${src.id}`}
                           onClick={() => {
+                            const isSwitching = src.id !== selectedSourceId;
                             setPreferredSource(isManga ? 'MANGA' : 'ANIME', src.id);
                             setResolvedWatchStream(null);
+                            if (!isManga && isSwitching) {
+                              const nextAudio = resolvePreferredAudioForSource({
+                                currentAudioLang: state.playerPrefs.audioLanguage,
+                                sourceLang: src.lang,
+                                sourceName: src.name,
+                                sourceBaseUrl: src.baseUrl,
+                              });
+                              if (nextAudio !== state.playerPrefs.audioLanguage) {
+                                updatePlayerPrefs({ audioLanguage: nextAudio });
+                              }
+                            }
                             setSourcePickerOpen(false);
                           }}
-                          className={`w-full p-3 rounded-2xl border flex items-center justify-between gap-3 text-left transition-all ${
+                          className={`w-full p-3 rounded-2xl border backdrop-blur-md flex items-center justify-between gap-3 text-left transition-all ${
                             isSelected
-                              ? 'bg-[var(--sx-primary)]/10 border-[var(--sx-primary)] shadow-sm'
-                              : 'bg-[var(--sx-surface-high)]/65 border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/60'
+                              ? 'bg-[var(--sx-primary)]/14 border-[var(--sx-primary)] shadow-sm'
+                              : 'bg-[var(--sx-surface-high)]/45 border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)]/60'
                           }`}
                         >
                           <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <div className="relative w-11 h-11 rounded-2xl shrink-0 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] flex items-center justify-center">
+                            <div className="relative w-11 h-11 rounded-2xl shrink-0 bg-[var(--sx-surface-container)]/60 border border-white/35 dark:border-white/12 flex items-center justify-center">
                               {src.iconUrl ? (
                                 <img
                                   src={src.iconUrl}
@@ -2889,7 +3023,7 @@ export const DetailsPage: React.FC = () => {
                                 <span className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/14 text-[var(--sx-primary)] text-[10px] font-extrabold">
                                   {getSourceManagerBadge(src)}
                                 </span>
-                                <span className="px-2 py-0.5 rounded-md bg-[var(--sx-surface-container)] text-[10px] font-extrabold uppercase">
+                                <span className="px-2 py-0.5 rounded-md bg-[var(--sx-surface-container)]/65 text-[10px] font-extrabold uppercase">
                                   {src.lang}
                                 </span>
                                 {src.isNsfw && (
@@ -2927,7 +3061,7 @@ export const DetailsPage: React.FC = () => {
                       setSourcePickerOpen(false);
                       navigate('/settings/extensions');
                     }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--sx-surface-high)]/55 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
                   >
                     <Settings className="w-3.5 h-3.5" />
                     <span>Extensions</span>
@@ -2967,7 +3101,7 @@ export const DetailsPage: React.FC = () => {
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="w-full sm:max-w-lg max-h-[84vh] flex flex-col bg-[var(--sx-surface-container)]/92 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 space-y-3.5 shadow-2xl sx-sheet-enter"
+                className="w-full sm:max-w-lg max-h-[84vh] flex flex-col bg-[var(--sx-surface-container)]/68 dark:bg-[var(--sx-surface-container)]/62 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/20 dark:ring-white/10 rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 space-y-3.5 shadow-2xl sx-sheet-enter"
               >
                 <div className="w-10 h-1 rounded-full bg-[var(--sx-on-surface-muted)]/30 mx-auto shrink-0 sm:hidden" />
 
@@ -2982,7 +3116,7 @@ export const DetailsPage: React.FC = () => {
                       onChange={(e) => setWrongTitleDraft(e.target.value)}
                       placeholder={`Search title on ${activeSource?.name || 'source'}...`}
                       autoFocus
-                      className="w-full pl-10 pr-9 py-2.5 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-semibold outline-none focus:border-[var(--sx-primary)]"
+                      className="w-full pl-10 pr-9 py-2.5 rounded-2xl bg-[var(--sx-surface-high)]/55 backdrop-blur-md border border-white/35 dark:border-white/12 text-xs font-semibold outline-none focus:border-[var(--sx-primary)]"
                     />
                     {wrongTitleSearching ? (
                       <Loader2 className="w-4 h-4 animate-spin text-[var(--sx-primary)] absolute right-3 top-1/2 -translate-y-1/2" />
@@ -3010,7 +3144,7 @@ export const DetailsPage: React.FC = () => {
                       wrongTitleViewMode === 'list' ? 'Switch to grid view' : 'Switch to list view'
                     }
                     aria-label="Toggle title results layout"
-                    className="w-10 h-10 rounded-2xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] flex items-center justify-center shrink-0 hover:border-[var(--sx-primary)] transition-colors"
+                    className="w-10 h-10 rounded-2xl bg-[var(--sx-surface-high)]/55 backdrop-blur-md border border-white/35 dark:border-white/12 flex items-center justify-center shrink-0 hover:border-[var(--sx-primary)] transition-colors"
                   >
                     {wrongTitleViewMode === 'list' ? (
                       <LayoutGrid className="w-4 h-4 text-[var(--sx-primary)]" />
@@ -3028,7 +3162,7 @@ export const DetailsPage: React.FC = () => {
                         key={`${cand}-${idx}`}
                         type="button"
                         onClick={() => setWrongTitleDraft(cand)}
-                        className="px-2.5 py-1 rounded-full bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-[11px] font-bold whitespace-nowrap hover:border-[var(--sx-primary)] transition-colors"
+                        className="px-2.5 py-1 rounded-full bg-[var(--sx-surface-high)]/55 backdrop-blur-md border border-white/35 dark:border-white/12 text-[11px] font-bold whitespace-nowrap hover:border-[var(--sx-primary)] transition-colors"
                       >
                         {cand}
                       </button>
@@ -3039,7 +3173,7 @@ export const DetailsPage: React.FC = () => {
                 {/* Search Results List / Grid */}
                 <div
                   data-testid="wrong-title-results"
-                  className="flex-1 overflow-y-auto rounded-2xl bg-[var(--sx-surface-high)]/45 border border-[var(--sx-outline)]"
+                  className="flex-1 overflow-y-auto rounded-2xl bg-[var(--sx-surface-high)]/38 border border-white/30 dark:border-white/10"
                 >
                   {wrongTitleSearching && wrongTitleResults.length === 0 ? (
                     <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-[var(--sx-on-surface-muted)]">
@@ -3154,7 +3288,7 @@ export const DetailsPage: React.FC = () => {
                       setMatchedOverrideMedia(null);
                       setWrongTitleOpen(false);
                     }}
-                    className="px-4 py-2 rounded-full bg-[var(--sx-surface-high)] text-xs font-bold hover:border-[var(--sx-primary)] border border-[var(--sx-outline)]"
+                    className="px-4 py-2 rounded-full bg-[var(--sx-surface-high)]/55 text-xs font-bold hover:border-[var(--sx-primary)] border border-white/35 dark:border-white/12"
                   >
                     Reset Match
                   </button>
@@ -3162,7 +3296,7 @@ export const DetailsPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setWrongTitleOpen(false)}
-                      className="px-3.5 py-2 rounded-full bg-[var(--sx-surface-high)] text-xs font-bold"
+                      className="px-3.5 py-2 rounded-full bg-[var(--sx-surface-high)]/55 border border-white/35 dark:border-white/12 text-xs font-bold"
                     >
                       Close
                     </button>

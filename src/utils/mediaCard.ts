@@ -111,7 +111,7 @@ export function getMediaGridClassName(cardStyle: MediaCardStyle): string {
   return 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5 sm:gap-5';
 }
 
-export const DEFAULT_MEDIA_CARD_STYLE: MediaCardStyle = 'expressive';
+export const DEFAULT_MEDIA_CARD_STYLE: MediaCardStyle = 'shizutv';
 export const DEFAULT_CONTINUE_CARD_STYLE: MediaCardStyle = 'episodeTile';
 
 export interface CardStylePrefs {

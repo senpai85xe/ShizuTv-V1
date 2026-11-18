@@ -124,7 +124,7 @@ export function buildSearchQueriesForMedia(
     if (asciiCleaned) addExpanded(asciiCleaned);
   }
 
-  // Short root fallbacks (first 1-2 significant words of English/override/Romaji)
+  // Short root fallbacks (first 1-2 significant words, skipping leading articles like "The ")
   const primaryTitle = rawCandidates[0] || '';
   if (primaryTitle) {
     const words = primaryTitle
@@ -132,11 +132,19 @@ export function buildSearchQueriesForMedia(
       .replace(/[^a-zA-Z0-9\s]/g, ' ')
       .split(/\s+/)
       .filter(Boolean);
-    if (words.length >= 2) {
+    const nonArticleWords =
+      words.length > 1 && STOP_WORDS.has(words[0].toLowerCase()) ? words.slice(1) : words;
+    if (nonArticleWords.length >= 2) {
+      addExpanded(nonArticleWords.slice(0, 2).join(' '));
+    } else if (words.length >= 2) {
       addExpanded(words.slice(0, 2).join(' '));
     }
-    if (words.length >= 1 && words[0].length >= 4 && !STOP_WORDS.has(words[0].toLowerCase())) {
-      addExpanded(words[0]);
+    if (
+      nonArticleWords.length >= 1 &&
+      nonArticleWords[0].length >= 4 &&
+      !STOP_WORDS.has(nonArticleWords[0].toLowerCase())
+    ) {
+      addExpanded(nonArticleWords[0]);
     }
   }
 
@@ -172,6 +180,84 @@ function hasSeasonMarker(text: string): string | null {
     text.match(/\bs(\d+)\b/i);
   if (m) return m[1];
   return null;
+}
+
+function meaningfulTokens(norm: string): string[] {
+  const all = tokenizeNormalized(norm);
+  const sig = all.filter((t) => !STOP_WORDS.has(t));
+  return sig.length > 0 ? sig : all;
+}
+
+/**
+ * Verifies a search candidate genuinely represents one of the target anime/manga titles
+ * (filtering out unrelated shows or random movies matched on stop-words or single common words).
+ */
+export function isViableTitleMatch(
+  candidate: GogoSearchCandidate,
+  targetTitles: string[],
+  format?: string | null,
+): boolean {
+  const slug = extractSlugFromGogoHref(candidate.href).toLowerCase();
+  const candTextRaw = (candidate.title || slug.replace(/-/g, ' '))
+    .replace(/\b(hindi|spanish|espanol|latino|castellano|multi[\s-]?audio|eng[\s-]?dub|dubbed|subbed)\b/gi, ' ');
+  const candNorm = normalizeTitleForMatch(candTextRaw);
+  const slugNorm = normalizeTitleForMatch(
+    slug
+      .replace(/-/g, ' ')
+      .replace(/\b(hindi|spanish|espanol|latino|castellano|multi[\s-]?audio|dub|sub)\b/gi, ' '),
+  );
+  if (!candNorm && !slugNorm) return false;
+
+  const candSig = new Set([...meaningfulTokens(candNorm), ...meaningfulTokens(slugNorm)]);
+  const candIsMovie = /\bmovie\b|\bfilm\b/.test(`${candNorm} ${slugNorm}`);
+  const candNormalizedStr = candNorm || slugNorm;
+
+  for (const rawTarget of targetTitles) {
+    const targetNorm = normalizeTitleForMatch(rawTarget);
+    if (!targetNorm) continue;
+
+    if (candNorm === targetNorm || slugNorm === targetNorm) {
+      return true;
+    }
+
+    const targetSig = meaningfulTokens(targetNorm);
+    if (targetSig.length === 0) continue;
+
+    // Reject a MOVIE candidate for a non-MOVIE TV/ONA series unless target explicitly says movie/film
+    if (
+      format &&
+      format !== 'MOVIE' &&
+      candIsMovie &&
+      !/\bmovie\b|\bfilm\b/.test(targetNorm)
+    ) {
+      continue;
+    }
+
+    const hits = targetSig.filter((tok) => candSig.has(tok)).length;
+    const sigRecall = hits / targetSig.length;
+    const minNeededHits = targetSig.length === 1 ? 1 : targetSig.length === 2 ? 2 : Math.ceil(targetSig.length * 0.55);
+
+    if (hits >= minNeededHits && sigRecall >= 0.55) {
+      // For single-word titles (e.g. "Naruto" or "Bleach"), guard against unrelated extra-word spin-offs
+      // when precision is tiny unless it starts with the target title
+      if (targetSig.length === 1 && candSig.size > 3 && !candNormalizedStr.startsWith(targetNorm)) {
+        continue;
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function isMetadataOnlyCatalogHost(
+  sourceBaseUrl?: string | null,
+  sourceName?: string | null,
+): boolean {
+  const combined = `${sourceBaseUrl || ''} ${sourceName || ''}`.toLowerCase();
+  return /\b(?:anidb\.net|myanimelist\.net|anilist\.co|kitsu\.io|kitsu\.app|anime-planet\.com|livechart\.me|notify\.moe|mangaupdates\.com|anidb)\b/.test(
+    combined,
+  );
 }
 
 export function scoreGogoSearchCandidate(
@@ -219,10 +305,10 @@ export function scoreGogoSearchCandidate(
       score += 75;
     }
 
-    const candTokens = tokenizeNormalized(candNorm);
-    const targetTokens = tokenizeNormalized(targetNorm);
-    const candSet = new Set(candTokens);
-    const targetSet = new Set(targetTokens);
+    const candSigTokens = meaningfulTokens(candNorm);
+    const targetSigTokens = meaningfulTokens(targetNorm);
+    const candSet = new Set(candSigTokens);
+    const targetSet = new Set(targetSigTokens);
 
     let overlap = 0;
     for (const tok of targetSet) {
@@ -230,19 +316,22 @@ export function scoreGogoSearchCandidate(
     }
     const recall = targetSet.size > 0 ? overlap / targetSet.size : 0;
     const precision = candSet.size > 0 ? overlap / candSet.size : 0;
-    score += Math.round(recall * 60 + precision * 35);
+    score += Math.round(recall * 70 + precision * 40);
+    if (overlap === 0) {
+      score -= 140;
+    }
 
     // Extra word length difference penalty (e.g. "Naruto" vs "Boruto: Naruto the Movie")
-    const extraTokens = Math.max(0, candTokens.length - overlap);
-    score -= extraTokens * 8;
+    const extraTokens = Math.max(0, candSigTokens.length - overlap);
+    score -= extraTokens * 10;
 
     // Season number alignment
     const targetSeason = hasSeasonMarker(targetNorm);
     const candSeason = hasSeasonMarker(candNorm);
     if (targetSeason && candSeason) {
-      score += targetSeason === candSeason ? 35 : -50;
+      score += targetSeason === candSeason ? 35 : -55;
     } else if (!targetSeason && candSeason && Number(candSeason) > 1) {
-      score -= 38;
+      score -= 42;
     } else if (targetSeason && !candSeason) {
       score -= 25;
     }
@@ -252,7 +341,7 @@ export function scoreGogoSearchCandidate(
     if (target.format === 'MOVIE' && candIsMovie) {
       score += 20;
     } else if (target.format !== 'MOVIE' && candIsMovie && !/\bmovie\b|\bfilm\b/.test(targetNorm)) {
-      score -= 30;
+      score -= 75;
     }
 
     // Penalize unrelated spin-offs / recaps / mini anime unless explicitly asked
@@ -451,7 +540,9 @@ export function detectAvailableAudiosFromSources(input: {
   candidates: Array<{ href: string; title: string }>;
   targetTitles: string[];
   currentCategory: 'sub' | 'dub' | 'raw';
+  currentAudioLanguage?: string | null;
   hasDubProbe?: boolean;
+  embedLangHints?: Array<string | undefined>;
 }): ResolvedAvailableAudioOption[] {
   const audios: ResolvedAvailableAudioOption[] = [];
   const pushAudio = (opt: ResolvedAvailableAudioOption) => {
@@ -481,10 +572,22 @@ export function detectAvailableAudiosFromSources(input: {
     });
   };
 
-  let hasSubCandidate = input.currentCategory === 'sub';
-  let hasDubCandidate = Boolean(input.hasDubProbe) || input.currentCategory === 'dub';
-  let hasHindiCandidate = false;
-  let hasSpanishCandidate = false;
+  let hasSubCandidate = input.currentCategory === 'sub' || input.currentAudioLanguage === 'ja';
+  let hasDubCandidate =
+    Boolean(input.hasDubProbe) ||
+    (input.currentCategory === 'dub' &&
+      (!input.currentAudioLanguage || input.currentAudioLanguage === 'en'));
+  let hasHindiCandidate = input.currentAudioLanguage === 'hi';
+  let hasSpanishCandidate = input.currentAudioLanguage === 'es';
+
+  if (Array.isArray(input.embedLangHints)) {
+    for (const hint of input.embedLangHints) {
+      if (hint === 'hi') hasHindiCandidate = true;
+      else if (hint === 'es') hasSpanishCandidate = true;
+      else if (hint === 'en') hasDubCandidate = true;
+      else if (hint === 'ja') hasSubCandidate = true;
+    }
+  }
 
   for (const cand of input.candidates) {
     const slug = extractSlugFromGogoHref(cand.href).toLowerCase();
@@ -506,7 +609,7 @@ export function detectAvailableAudiosFromSources(input: {
     }
   }
 
-  if (hasSubCandidate || !hasDubCandidate) {
+  if (hasSubCandidate || (!hasDubCandidate && !hasHindiCandidate && !hasSpanishCandidate)) {
     pushAudio({
       code: 'ja',
       shortLabel: 'JP',
@@ -721,7 +824,7 @@ function inferLangHintFromText(text: string): string | undefined {
 
 /**
  * Extracts anime/series search result links from WordPress / DooPlay / AnimeStream /
- * HiAnime / generic extension search HTML pages.
+ * HiAnime / generic extension search HTML pages without truncating nested card divs.
  */
 export function parseGenericSearchHtml(html: string, baseUrl: string): GogoSearchCandidate[] {
   const results: GogoSearchCandidate[] = [];
@@ -731,7 +834,11 @@ export function parseGenericSearchHtml(html: string, baseUrl: string): GogoSearc
     const cleanHref = decodeHtmlEntities(rawHref);
     if (!cleanHref || cleanHref.startsWith('#') || cleanHref.startsWith('javascript:')) return;
     if (/\.(?:jpg|jpeg|png|webp|gif|svg|css|js|ico)(?:\?|$)/i.test(cleanHref)) return;
-    if (/\/(?:wp-content|wp-includes|tag|genre|genres|category\/action|author|page\/)\b/i.test(cleanHref)) {
+    if (
+      /\/(?:wp-content|wp-includes|wp-json|tag|genre|genres|category\/action|author|page\/|login|register|account)\b/i.test(
+        cleanHref,
+      )
+    ) {
       return;
     }
 
@@ -749,39 +856,54 @@ export function parseGenericSearchHtml(html: string, baseUrl: string): GogoSearc
 
     const cleanTitle = decodeHtmlEntities(rawTitle.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '));
     if (!cleanTitle || cleanTitle.length < 2) return;
+    if (/^(?:home|movies|tv series|anime|genre|schedule|contact|dmca|privacy|bookmark|random|login|sign in)$/i.test(cleanTitle)) {
+      return;
+    }
     if (seen.has(absUrl)) return;
     seen.add(absUrl);
     results.push({ href: absUrl, title: cleanTitle });
   };
 
-  // Pattern 1: Article / card blocks with anchor + title/heading/img-alt
-  const articleRe = /<(?:article|div|li)[^>]*class="[^"]*(?:result-item|bsx|flw-item|post|anime|item|card|movie)[^"]*"[^>]*>([\s\S]*?)<\/(?:article|div|li)>/gi;
-  let blockMatch: RegExpExecArray | null;
-  while ((blockMatch = articleRe.exec(html)) !== null) {
-    const block = blockMatch[1];
-    const anchorMatch = block.match(/<a[^>]+href=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/i);
+  // Pattern 1: AnimeStream / WordPress / DooPlay card containers (scan up to 1600 chars after container open tag to survive nested divs)
+  const cardOpenRe =
+    /<(?:article|div|li)[^>]*class="[^"]*(?:result-item|bsx|flw-item|post|anime-card|anime-item|film-item|card|movie-item)[^"]*"[^>]*>/gi;
+  let cardMatch: RegExpExecArray | null;
+  while ((cardMatch = cardOpenRe.exec(html)) !== null) {
+    const startIdx = cardMatch.index + cardMatch[0].length;
+    const chunk = html.slice(startIdx, startIdx + 1600);
+    const anchorMatch = chunk.match(/<a[^>]+href=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/i);
     if (!anchorMatch) continue;
     const href = anchorMatch[1];
     const attrs = anchorMatch[2] || '';
+    const inner = anchorMatch[3] || '';
     const titleAttr = attrs.match(/\btitle=["']([^"']+)["']/i)?.[1];
-    const headingMatch = block.match(/<h[1-4][^>]*>([\s\S]*?)<\/h[1-4]>/i)?.[1];
-    const altMatch = block.match(/\balt=["']([^"']+)["']/i)?.[1];
-    const title = titleAttr || headingMatch || anchorMatch[3] || altMatch || '';
+    const ttMatch =
+      chunk.match(/<div[^>]*class="[^"]*\btt\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i)?.[1] ||
+      chunk.match(/<h[1-5][^>]*>([\s\S]*?)<\/h[1-5]>/i)?.[1];
+    const altMatch = chunk.match(/\balt=["']([^"']+)["']/i)?.[1];
+    const title = titleAttr || ttMatch || inner || altMatch || '';
     pushResult(href, title);
   }
 
-  // Pattern 2: Direct anchors with title attribute or heading inside
+  // Pattern 2: Direct anchors pointing to anime/series/donghua/watch/toon pages
   const anchorRe = /<a\s+[^>]*href=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi;
   let aMatch: RegExpExecArray | null;
   while ((aMatch = anchorRe.exec(html)) !== null) {
     const href = aMatch[1];
-    if (!/\/(?:series|anime|watch|category|shows|title|movie)\//i.test(href) && !/-[a-z0-9]+-\d+$/i.test(href)) {
+    if (
+      !/\/(?:series|anime|watch|category|shows|title|movie|donghua|toon|cartoon|drama|v\/)\//i.test(
+        href,
+      ) &&
+      !/-[a-z0-9]+-\d+$/i.test(href)
+    ) {
       continue;
     }
     const attrs = aMatch[2] || '';
-    const titleAttr = attrs.match(/\btitle=["']([^"']+)["']/i)?.[1];
     const innerText = aMatch[3] || '';
-    const title = titleAttr || innerText;
+    const titleAttr = attrs.match(/\btitle=["']([^"']+)["']/i)?.[1];
+    const headingInside = innerText.match(/<(?:h[1-5]|div[^>]*class="[^"]*\btt\b[^"]*")[^>]*>([\s\S]*?)<\/(?:h[1-5]|div)>/i)?.[1];
+    const altInside = innerText.match(/\balt=["']([^"']+)["']/i)?.[1];
+    const title = titleAttr || headingInside || innerText || altInside || '';
     pushResult(href, title);
   }
 
@@ -829,15 +951,41 @@ export function parseGenericEpisodeLinks(
 
     let score = 0;
     if (dataNum && Number(dataNum) === episodeNumber) score += 100;
-    const pathLower = new URL(absUrl).pathname.toLowerCase();
+    const parsedUrl = new URL(absUrl);
+    const pathLower = parsedUrl.pathname.toLowerCase();
+    const pathAndQueryLower = `${parsedUrl.pathname}${parsedUrl.search}`.toLowerCase();
     if (exactPatterns.some((re) => re.test(pathLower))) score += 80;
-    if (new RegExp(`(?:ep(?:isode)?\\s*0*${ep}\\b|\\b0*${ep}\\b)`, 'i').test(innerText)) score += 35;
-    if (/episode|watch|ep-|\dx\d+|s\d+e\d+/i.test(pathLower)) score += 20;
-    if (new RegExp(`-episode-${epStr}(?:$|\\?|/)`, 'i').test(pathLower)) score += 60;
+    if (new RegExp(`[?&](?:ep|episode)=0*${ep}(?:$|&)`, 'i').test(pathAndQueryLower)) score += 80;
+    if (new RegExp(`(?:^|\\s)(?:ep(?:isode)?\\s*0*${ep}(?:$|[^0-9])|0*${ep}(?:$|\\s*-))`, 'i').test(innerText)) {
+      score += 40;
+    }
+    if (/episode|watch|ep-|\dx\d+|s\d+e\d+/i.test(pathAndQueryLower)) score += 20;
+    if (new RegExp(`-episode-0*${epStr}(?:$|\\?|/|-)`, 'i').test(pathLower)) score += 60;
 
     if (score >= 45) {
       seen.add(absUrl);
       candidates.push({ url: absUrl, score });
+    }
+  }
+
+  // Also check <select><option value="https://...">Episode X</option></select>
+  const optionRe = /<option[^>]+value=["']([^"']+)["'][^>]*>([\s\S]*?)<\/option>/gi;
+  while ((m = optionRe.exec(html)) !== null) {
+    const rawVal = decodeHtmlEntities(m[1]);
+    const label = decodeHtmlEntities((m[2] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '));
+    if (!/^https?:\/\/|^\//i.test(rawVal)) continue;
+    try {
+      const absUrl = new URL(rawVal, baseUrl).toString();
+      if (seen.has(absUrl)) continue;
+      if (
+        new RegExp(`(?:ep(?:isode)?\\s*0*${ep}(?:$|[^0-9])|^0*${ep}$)`, 'i').test(label) ||
+        exactPatterns.some((re) => re.test(absUrl.toLowerCase()))
+      ) {
+        seen.add(absUrl);
+        candidates.push({ url: absUrl, score: 85 });
+      }
+    } catch {
+      // Ignore invalid option URL
     }
   }
 
@@ -848,7 +996,21 @@ export function parseGenericEpisodeLinks(
 /**
  * Extracts embed/iframe/server links from an extension's episode page HTML, keeping
  * any audio/language hints (Hindi, English, Japanese, Spanish, Multi-Audio) attached.
+ * Also decodes base64-encoded <option value="..."> iframe HTML used by AnimeStream WordPress sites.
  */
+function decodeBase64Utf8(raw: string): string {
+  const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+  if (typeof globalThis.atob === 'function') {
+    const bin = globalThis.atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) {
+      bytes[i] = bin.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  }
+  return '';
+}
+
 export function parseGenericEmbedCandidates(
   html: string,
   baseUrl: string,
@@ -892,7 +1054,31 @@ export function parseGenericEmbedCandidates(
     pushEmbed(url, inner || langAttr || `Server ${embeds.length + 1}`, langAttr);
   }
 
-  // 2. Iframes (src / data-src / data-litespeed-src)
+  // 2. AnimeStream / WordPress <select class="mirror"><option value="BASE64_IFRAME_OR_URL">
+  const selectMirrorRe = /<option\b[^>]*value=["']([^"']{8,})["'][^>]*>([\s\S]*?)<\/option>/gi;
+  while ((m = selectMirrorRe.exec(html)) !== null) {
+    const rawVal = m[1].trim();
+    const label = decodeHtmlEntities((m[2] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '));
+    if (/^https?:\/\//i.test(rawVal)) {
+      pushEmbed(rawVal, label || `Mirror ${embeds.length + 1}`, label);
+      continue;
+    }
+    if (/^[A-Za-z0-9+/=_-]{12,}$/.test(rawVal)) {
+      try {
+        const decoded = decodeBase64Utf8(rawVal);
+        const iframeSrc =
+          decoded.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1] ||
+          decoded.match(/https?:\/\/[^\s"'<>]+/i)?.[0];
+        if (iframeSrc) {
+          pushEmbed(iframeSrc, label || `Mirror ${embeds.length + 1}`, label);
+        }
+      } catch {
+        // Not valid base64 embed option
+      }
+    }
+  }
+
+  // 3. Iframes (src / data-src / data-litespeed-src)
   const iframeRe = /<iframe\b([^>]*)>/gi;
   while ((m = iframeRe.exec(html)) !== null) {
     const attrs = m[1] || '';
@@ -1000,7 +1186,19 @@ export function extractDirectVideoUrlFromHtmlOrScript(
   baseUrl: string,
 ): string | null {
   const unpacked = unpackDeanEdwardsPacker(html);
-  const combined = `${html}\n${unpacked}`;
+  // Also decode inline atob('...') segments
+  const atobDecoded: string[] = [];
+  const atobRe = /atob\(\s*["']([A-Za-z0-9+/=_-]{12,})["']\s*\)/g;
+  let am: RegExpExecArray | null;
+  while ((am = atobRe.exec(html)) !== null) {
+    try {
+      const decoded = decodeBase64Utf8(am[1]);
+      if (decoded) atobDecoded.push(decoded);
+    } catch {
+      // Ignore malformed base64
+    }
+  }
+  const combined = `${html}\n${unpacked}\n${atobDecoded.join('\n')}`;
 
   const tryNormalize = (raw: string): string | null => {
     const cleaned = decodeHtmlEntities(raw).replace(/\\\//g, '/').trim();
@@ -1021,9 +1219,10 @@ export function extractDirectVideoUrlFromHtmlOrScript(
     if (normalized) return normalized;
   }
 
-  // Priority 2: JSON/JS player config fields: sources: [{ file: "..." }], file: "...", hls.loadSource("...")
+  // Priority 2: JSON/JS player config fields: sources: [{ file: "..." }], "hls": "...", hls.loadSource("...")
   const configPatterns = [
     /(?:sources?\s*:\s*\[\s*\{[^}]*?(?:file|src|url)\s*:\s*["'])([^"']+)["']/i,
+    /["'](?:hls|file|stream|video_url)["']\s*:\s*["']([^"']+)["']/i,
     /\bfile\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i,
     /loadSource\(\s*["']([^"']+)["']\s*\)/i,
     /<source[^>]+src=["']([^"']+)["']/i,

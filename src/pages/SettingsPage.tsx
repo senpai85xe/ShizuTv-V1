@@ -180,7 +180,7 @@ export const SettingsPage: React.FC = () => {
           <button
             type="button"
             onClick={() => navigate('/settings/ui')}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold sx-glass-panel text-[var(--sx-on-surface)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] transition-colors"
           >
             <Tv className="w-3.5 h-3.5" />
             <span>{state.uiPrefs.useNewUi ? 'TV Mode On' : 'Layout'}</span>
@@ -205,7 +205,7 @@ export const SettingsPage: React.FC = () => {
               </h2>
               <div
                 style={{ borderRadius: roundness }}
-                className="overflow-hidden bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)]"
+                className="overflow-hidden sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)]"
               >
                 {group.items.map((item, itemIdx) => {
                   const Icon = item.icon;
@@ -216,7 +216,7 @@ export const SettingsPage: React.FC = () => {
                       type="button"
                       onClick={() => navigate(item.path)}
                       style={delay > 0 ? { animationDelay: `${delay}ms` } : undefined}
-                      className="sx-card-animate w-full flex items-center gap-4 px-4 sm:px-5 py-3.5 text-left hover:bg-[var(--sx-surface-high)] transition-all duration-200 group"
+                      className="sx-card-animate w-full flex items-center gap-4 px-4 sm:px-5 py-3.5 text-left hover:bg-[var(--sx-surface-high)]/55 transition-all duration-200 group"
                     >
                       <div className="w-10 h-10 rounded-xl bg-[var(--sx-primary)]/12 text-[var(--sx-primary)] flex items-center justify-center shrink-0 transition-transform duration-200 group-hover:scale-105">
                         <Icon className="w-5 h-5" />

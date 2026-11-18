@@ -50,7 +50,7 @@ export const SecurityGate: React.FC<{ children: React.ReactNode }> = ({ children
               className={`w-3.5 h-3.5 rounded-full border transition-all ${
                 i < pin.length
                   ? 'bg-[var(--sx-primary)] border-[var(--sx-primary)] scale-110'
-                  : 'border-[var(--sx-outline)] bg-[var(--sx-surface-container)]'
+                  : 'border-[var(--sx-outline)] sx-glass-control'
               }`}
             />
           ))}
@@ -62,7 +62,7 @@ export const SecurityGate: React.FC<{ children: React.ReactNode }> = ({ children
               key={d}
               type="button"
               onClick={() => handleDigit(d)}
-              className="h-14 rounded-2xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-lg font-bold hover:border-[var(--sx-primary)] active:scale-95 transition-all"
+              className="h-14 rounded-2xl sx-glass-panel border border-[var(--sx-outline)] text-lg font-bold hover:border-[var(--sx-primary)] active:scale-95 transition-all"
             >
               {d}
             </button>
@@ -71,7 +71,7 @@ export const SecurityGate: React.FC<{ children: React.ReactNode }> = ({ children
           <button
             type="button"
             onClick={() => handleDigit('0')}
-            className="h-14 rounded-2xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-lg font-bold hover:border-[var(--sx-primary)] active:scale-95 transition-all"
+            className="h-14 rounded-2xl sx-glass-panel border border-[var(--sx-outline)] text-lg font-bold hover:border-[var(--sx-primary)] active:scale-95 transition-all"
           >
             0
           </button>
@@ -79,7 +79,7 @@ export const SecurityGate: React.FC<{ children: React.ReactNode }> = ({ children
             type="button"
             onClick={() => setPin((p) => p.slice(0, -1))}
             aria-label="Backspace"
-            className="h-14 rounded-2xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] flex items-center justify-center text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] active:scale-95 transition-all"
+            className="h-14 rounded-2xl sx-glass-panel border border-[var(--sx-outline)] flex items-center justify-center text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] active:scale-95 transition-all"
           >
             <Delete className="w-5 h-5" />
           </button>

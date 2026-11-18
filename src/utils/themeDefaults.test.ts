@@ -19,10 +19,10 @@ test('shouldOpenProfileSheet returns true for clean and cleanWave headers', () =
   assert.equal(shouldOpenProfileSheet('shizutv'), false);
 });
 
-test('default theme prefs use Metallic Black, light mode, 24px roundness, linear gradient at 75%', () => {
+test('default theme prefs use Metallic Black, system mode, 24px roundness, linear gradient at 75%', () => {
   const defaults = createDefaultThemePrefs();
   assert.equal(defaults.exclusiveScheme, 'metallic_black');
-  assert.equal(defaults.themeMode, 'light');
+  assert.equal(defaults.themeMode, 'system');
   assert.equal(defaults.uiRoundness, 24);
   assert.equal(defaults.gradientStyle, 'linear');
   assert.equal(defaults.gradientIntensity, 0.75);
@@ -33,7 +33,7 @@ test('default theme prefs use Metallic Black, light mode, 24px roundness, linear
 });
 
 test('exported default constants match expected values', () => {
-  assert.equal(DEFAULT_THEME_MODE, 'light');
+  assert.equal(DEFAULT_THEME_MODE, 'system');
   assert.equal(DEFAULT_EXCLUSIVE_SCHEME, 'metallic_black');
   assert.equal(DEFAULT_UI_ROUNDNESS, 24);
   assert.equal(DEFAULT_GRADIENT_STYLE, 'linear');

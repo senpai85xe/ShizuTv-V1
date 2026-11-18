@@ -371,9 +371,16 @@ export const PlayerPage: React.FC = () => {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !activeStreamUrl) {
-      if (video && video.getAttribute('src')) {
-        video.removeAttribute('src');
-        video.load();
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      if (video) {
+        if (!video.paused) video.pause();
+        if (video.getAttribute('src')) {
+          video.removeAttribute('src');
+          video.load();
+        }
       }
       return;
     }

@@ -582,10 +582,133 @@ export async function resolveVideoStreamAsync(
   return data;
 }
 
+export interface ResolveMangaChaptersAsyncParams {
+  media: UnifiedMedia;
+  sourceId?: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  overrideTitle?: string;
+  bypassCache?: boolean;
+  signal?: AbortSignal;
+}
+
+export async function resolveMangaChaptersAsync(
+  params: ResolveMangaChaptersAsyncParams,
+): Promise<{ chapters: UnifiedChapter[]; matchedTitle?: string; sourceLabel?: string }> {
+  const response = await fetch('/api/manga/chapters', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: params.signal,
+    body: JSON.stringify({
+      mediaId: params.media.id,
+      titles: {
+        overrideTitle: params.overrideTitle?.trim() || null,
+        english: params.media.title?.english ?? null,
+        romaji: params.media.title?.romaji ?? null,
+        native: params.media.title?.native ?? null,
+        synonyms: params.media.synonyms ?? null,
+      },
+      sourceId: params.sourceId,
+      sourceName: params.sourceName,
+      sourceBaseUrl: params.sourceBaseUrl,
+      sourceLang: params.sourceLang,
+      bypassCache: Boolean(params.bypassCache),
+    }),
+  });
+
+  if (!response.ok) {
+    let errMessage = `Failed to load chapters (HTTP ${response.status}).`;
+    try {
+      const errData = (await response.json()) as { message?: string };
+      if (errData?.message) errMessage = errData.message;
+    } catch {
+      // Ignore JSON parse error
+    }
+    throw new Error(errMessage);
+  }
+
+  const data = (await response.json()) as {
+    chapters?: UnifiedChapter[];
+    matchedTitle?: string;
+    sourceLabel?: string;
+  };
+  if (!Array.isArray(data?.chapters) || data.chapters.length === 0) {
+    throw new Error('No chapters found on this manga source.');
+  }
+  return {
+    chapters: data.chapters,
+    matchedTitle: data.matchedTitle,
+    sourceLabel: data.sourceLabel,
+  };
+}
+
+export interface ResolveMangaPagesAsyncParams {
+  media: UnifiedMedia;
+  chapter: UnifiedChapter;
+  sourceId?: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  overrideTitle?: string;
+  bypassCache?: boolean;
+  signal?: AbortSignal;
+}
+
+export async function resolveMangaChapterPagesAsync(
+  params: ResolveMangaPagesAsyncParams,
+): Promise<{ pages: string[]; sourceLabel?: string }> {
+  const response = await fetch('/api/manga/pages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: params.signal,
+    body: JSON.stringify({
+      mediaId: params.media.id,
+      titles: {
+        overrideTitle: params.overrideTitle?.trim() || null,
+        english: params.media.title?.english ?? null,
+        romaji: params.media.title?.romaji ?? null,
+        native: params.media.title?.native ?? null,
+        synonyms: params.media.synonyms ?? null,
+      },
+      chapter: {
+        id: params.chapter.id,
+        number: params.chapter.number,
+        title: params.chapter.title,
+        sourceChapterId: params.chapter.sourceChapterId,
+        chapterUrl: params.chapter.chapterUrl,
+      },
+      sourceId: params.sourceId,
+      sourceName: params.sourceName,
+      sourceBaseUrl: params.sourceBaseUrl,
+      sourceLang: params.sourceLang,
+      bypassCache: Boolean(params.bypassCache),
+    }),
+  });
+
+  if (!response.ok) {
+    let errMessage = `Failed to load chapter pages (HTTP ${response.status}).`;
+    try {
+      const errData = (await response.json()) as { message?: string };
+      if (errData?.message) errMessage = errData.message;
+    } catch {
+      // Ignore JSON parse error
+    }
+    throw new Error(errMessage);
+  }
+
+  const data = (await response.json()) as { pages?: string[]; sourceLabel?: string };
+  if (!Array.isArray(data?.pages) || data.pages.length === 0) {
+    throw new Error('No readable pages returned for this chapter.');
+  }
+  return {
+    pages: data.pages,
+    sourceLabel: data.sourceLabel,
+  };
+}
+
 /**
- * Generates crisp inline SVG manga pages for the browser reader when external
- * extension bridge servers aren't running locally, preserving full reader UX
- * (webtoon vertical scroll, single/double page, RTL/LTR, zoom, and chapter nav).
+ * Fallback placeholder pages used only when no live reader/chapter data is supplied.
  */
 export function resolveChapterPages(media: UnifiedMedia, chapter: UnifiedChapter): string[] {
   const title = (media.title.english || media.title.romaji || 'Manga').replace(/[<>&"']/g, '');
@@ -609,24 +732,9 @@ export function resolveChapterPages(media: UnifiedMedia, chapter: UnifiedChapter
           <text x="400" y="240" text-anchor="middle" font-family="Montserrat, sans-serif" font-size="38" font-weight="800" fill="${fg}">${title.slice(0, 28)}</text>
           <text x="400" y="295" text-anchor="middle" font-family="Montserrat, sans-serif" font-size="22" font-weight="600" fill="${accent}">CHAPTER ${chapter.number}</text>
           <text x="400" y="340" text-anchor="middle" font-family="Montserrat, sans-serif" font-size="16" fill="${fg}" fill-opacity="0.7">${chapter.title.replace(/[<>&"']/g, '')}</text>
-          <rect x="64" y="490" width="320" height="540" rx="4" fill="${fg}" fill-opacity="0.06" stroke="${fg}" stroke-opacity="0.2" />
-          <rect x="416" y="490" width="320" height="255" rx="4" fill="${fg}" fill-opacity="0.06" stroke="${fg}" stroke-opacity="0.2" />
-          <rect x="416" y="775" width="320" height="255" rx="4" fill="${fg}" fill-opacity="0.06" stroke="${fg}" stroke-opacity="0.2" />
         `
             : `
-          <rect x="56" y="64" width="688" height="310" rx="4" fill="#e2e8f0" stroke="#0f172a" stroke-width="3" />
-          <polygon points="56,374 420,250 744,374" fill="#cbd5e1" />
-          <ellipse cx="560" cy="175" rx="120" ry="52" fill="#ffffff" stroke="#0f172a" stroke-width="2.5" />
-          <text x="560" y="181" text-anchor="middle" font-family="Montserrat, sans-serif" font-size="16" font-weight="700" fill="#0f172a">Panel ${pageNum}.1</text>
-
-          <rect x="56" y="398" width="330" height="360" rx="4" fill="#f1f5f9" stroke="#0f172a" stroke-width="3" />
-          <rect x="414" y="398" width="330" height="360" rx="4" fill="#e2e8f0" stroke="#0f172a" stroke-width="3" />
-          <circle cx="220" cy="540" r="68" fill="#ffffff" stroke="#0f172a" stroke-width="2.5" />
-          <text x="220" y="546" text-anchor="middle" font-family="Montserrat, sans-serif" font-size="15" font-weight="700" fill="#0f172a">Ch.${chapter.number} · P.${pageNum}</text>
-
-          <rect x="56" y="782" width="688" height="330" rx="4" fill="#f8fafc" stroke="#0f172a" stroke-width="3" />
-          <line x1="80" y1="810" x2="720" y2="1080" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="8 8" />
-          <text x="400" y="950" text-anchor="middle" font-family="Montserrat, sans-serif" font-size="20" font-weight="700" fill="#334155">${title.slice(0, 32)} — Page ${pageNum} of ${totalPages}</text>
+          <text x="400" y="590" text-anchor="middle" font-family="Montserrat, sans-serif" font-size="20" font-weight="700" fill="#334155">${title.slice(0, 32)} — Page ${pageNum} of ${totalPages}</text>
         `
         }
         <text x="400" y="1152" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="14" fill="${fg}" fill-opacity="0.5">${pageNum} / ${totalPages}</text>

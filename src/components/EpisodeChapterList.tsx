@@ -268,15 +268,15 @@ export const EpisodeChapterList: React.FC<EpisodeChapterListProps> = ({
   // Progressive batching keeps initial DOM nodes <= 48, so all 5 styles stay cleanly frosted & blurred
   const frostedCardSurface = translucent
     ? 'bg-[var(--sx-surface-container)]/26 dark:bg-[var(--sx-surface-container)]/32 backdrop-blur-lg backdrop-saturate-150 border-white/40 dark:border-white/12 shadow-[0_6px_24px_rgba(15,23,42,0.06)] ring-1 ring-inset ring-white/20 dark:ring-white/5'
-    : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)]';
+    : 'bg-[var(--sx-surface-container)]/52 dark:bg-[var(--sx-surface-container)]/48 backdrop-blur-lg border-[var(--sx-outline)]';
 
   const frostedWatchedSurface = translucent
     ? 'bg-black/14 dark:bg-black/46 backdrop-blur-lg backdrop-saturate-125 border-white/25 dark:border-white/10 shadow-[0_4px_18px_rgba(15,23,42,0.08)] ring-1 ring-inset ring-black/10 dark:ring-white/5'
-    : 'bg-black/12 dark:bg-black/40 border-[var(--sx-outline)]';
+    : 'bg-black/12 dark:bg-black/40 backdrop-blur-lg border-[var(--sx-outline)]';
 
   const downloadBtnSurface = translucent
     ? 'bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-md border border-white/30 dark:border-white/12 hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)]'
-    : 'bg-[var(--sx-surface-high)]/85 hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)]';
+    : 'sx-glass-control hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)]';
 
   const remainingCount = Math.max(0, items.length - clampedVisibleCount);
   const nextBatchCount = Math.min(EPISODE_RENDER_BATCH_SIZE, remainingCount);

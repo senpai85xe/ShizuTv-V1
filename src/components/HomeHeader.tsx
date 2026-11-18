@@ -57,7 +57,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
         className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-[var(--sx-radius)] text-xs font-bold border transition-all duration-150 active:scale-95 ${
           isTrackerMode
             ? 'bg-[var(--sx-primary-container)]/35 border-[var(--sx-primary)]/40 text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]'
-            : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]'
+            : 'sx-glass-panel border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]'
         }`}
       >
         {isTrackerMode ? (
@@ -75,7 +75,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
         onClick={() => navigate('/calendar')}
         title="Airing Calendar"
         aria-label="Airing Calendar"
-        className="p-2.5 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-all duration-150 active:scale-95"
+        className="p-2.5 rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-all duration-150 active:scale-95"
       >
         <Calendar className="w-4 h-4" />
       </button>
@@ -85,7 +85,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
         onClick={() => navigate('/settings')}
         title="Settings"
         aria-label="Settings"
-        className="p-2.5 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-all duration-150 active:scale-95"
+        className="p-2.5 rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-all duration-150 active:scale-95"
       >
         <Settings className="w-4 h-4" />
       </button>
@@ -112,7 +112,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
           <button
             type="button"
             onClick={() => navigate('/home')}
-            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 border border-[var(--sx-primary)]/20 flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-transform"
+            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 backdrop-blur-lg border border-[var(--sx-primary)]/20 flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-transform"
             aria-label="ShizuTv Home"
           >
             <ShizuTvLogo size={22} />
@@ -135,7 +135,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             onClick={handleToggleThemeWave}
             aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            className="relative w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 border border-[var(--sx-primary)]/25 flex items-center justify-center overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-92 shrink-0"
+            className="relative w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 backdrop-blur-lg border border-[var(--sx-primary)]/25 flex items-center justify-center overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-92 shrink-0"
           >
             <Sun
               className={`w-5 h-5 text-[var(--sx-on-surface)] absolute transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${
@@ -158,7 +158,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             onClick={onOpenProfile}
             aria-label="Open profile and quick menu"
             title="Profile & Quick Menu"
-            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 border border-[var(--sx-primary)]/25 flex items-center justify-center overflow-hidden transition-all active:scale-95 shrink-0"
+            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 backdrop-blur-lg border border-[var(--sx-primary)]/25 flex items-center justify-center overflow-hidden transition-all active:scale-95 shrink-0"
           >
             {avatarUrl ? (
               <SmartImage src={avatarUrl} alt={username} className="w-full h-full object-cover" />
@@ -179,7 +179,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
           <button
             type="button"
             onClick={() => navigate('/home')}
-            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 border border-[var(--sx-primary)]/20 flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-transform"
+            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 backdrop-blur-lg border border-[var(--sx-primary)]/20 flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-transform"
             aria-label="ShizuTv Home"
           >
             <ShizuTvLogo size={22} />
@@ -200,7 +200,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             onClick={onOpenProfile}
             aria-label="Open profile and quick menu"
             title="Profile & Quick Menu"
-            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 border border-[var(--sx-primary)]/25 flex items-center justify-center overflow-hidden transition-all active:scale-95 shrink-0"
+            className="w-11 h-11 rounded-full bg-[var(--sx-primary)]/15 hover:bg-[var(--sx-primary)]/25 backdrop-blur-lg border border-[var(--sx-primary)]/25 flex items-center justify-center overflow-hidden transition-all active:scale-95 shrink-0"
           >
             {avatarUrl ? (
               <SmartImage src={avatarUrl} alt={username} className="w-full h-full object-cover" />
@@ -223,7 +223,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             onClick={onOpenProfile}
             className="flex items-center gap-2.5 sm:gap-3 text-left min-w-0 group"
           >
-            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] flex items-center justify-center shadow-sm group-hover:border-[var(--sx-primary)]/50 transition-all duration-200 shrink-0">
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl sx-glass-panel border border-[var(--sx-outline)] flex items-center justify-center shadow-sm group-hover:border-[var(--sx-primary)]/50 transition-all duration-200 shrink-0">
               <ShizuTvLogo size={24} />
             </div>
             <div className="min-w-0">
@@ -257,7 +257,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
   // Original Style #5: Docked
   if (style === 'docked') {
     return (
-      <header className="w-full bg-[var(--sx-surface-container)] border-b border-[var(--sx-outline)] px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
+      <header className="w-full bg-[var(--sx-surface-container)]/72 backdrop-blur-xl border-b border-[var(--sx-outline)] px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
         <button
           type="button"
           onClick={onOpenProfile}
@@ -307,7 +307,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
         <button
           type="button"
           onClick={onOpenProfile}
-          className="flex items-center gap-3 px-3.5 py-2 rounded-full bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50 transition-colors min-w-0"
+          className="flex items-center gap-3 px-3.5 py-2 rounded-full sx-glass-panel border border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50 transition-colors min-w-0"
         >
           <div className="w-7 h-7 rounded-full overflow-hidden shrink-0">{avatar}</div>
           <span className="font-bold text-sm truncate">{username}</span>

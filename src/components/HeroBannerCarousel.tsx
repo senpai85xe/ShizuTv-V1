@@ -741,7 +741,7 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
                 type="button"
                 onClick={handlePrev}
                 aria-label="Previous featured slide"
-                className="w-8 h-8 rounded-lg flex items-center justify-center bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-primary)] hover:border-[var(--sx-primary)] transition-colors"
+                className="w-8 h-8 rounded-lg flex items-center justify-center sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-primary)] hover:border-[var(--sx-primary)] transition-colors"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -749,7 +749,7 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = ({
                 type="button"
                 onClick={handleNext}
                 aria-label="Next featured slide"
-                className="w-8 h-8 rounded-lg flex items-center justify-center bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-primary)] hover:border-[var(--sx-primary)] transition-colors"
+                className="w-8 h-8 rounded-lg flex items-center justify-center sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-primary)] hover:border-[var(--sx-primary)] transition-colors"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>

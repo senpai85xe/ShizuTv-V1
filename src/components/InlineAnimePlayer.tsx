@@ -27,7 +27,6 @@ import {
   Scaling,
   Settings,
   Sun,
-  Unlock,
   Users,
   Volume2,
   VolumeX,
@@ -165,6 +164,7 @@ interface InlineAnimePlayerProps {
   watchPartyMode?: InlineWatchPartyMode;
   onChangeEpisodeIndex: (nextIndex: number) => void;
   onStreamResolved?: (stream: VideoStream | null) => void;
+  onOpenSourcePicker?: () => void;
 }
 
 export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
@@ -184,6 +184,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   watchPartyMode,
   onChangeEpisodeIndex,
   onStreamResolved,
+  onOpenSourcePicker,
 }) => {
   const navigate = useNavigate();
   const {
@@ -549,11 +550,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   useEffect(() => {
     if (!isFullscreen) return;
     const syncViewport = () => {
-      const host = playerContainerRef.current;
-      const hostW = host?.clientWidth || 0;
-      const hostH = host?.clientHeight || 0;
-      const w = hostW > 0 ? hostW : window.visualViewport?.width || window.innerWidth;
-      const h = hostH > 0 ? hostH : window.visualViewport?.height || window.innerHeight;
+      const w = Math.round(window.visualViewport?.width || window.innerWidth || 390);
+      const h = Math.round(window.visualViewport?.height || window.innerHeight || 844);
       setViewportSize({ width: w, height: h });
       const orientType = window.screen?.orientation?.type || '';
       setNativeOrientationLandscape(Boolean(orientType.startsWith('landscape') && w > h));
@@ -653,9 +651,16 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !activeStreamUrl) {
-      if (video && video.getAttribute('src')) {
-        video.removeAttribute('src');
-        video.load();
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      if (video) {
+        if (!video.paused) video.pause();
+        if (video.getAttribute('src')) {
+          video.removeAttribute('src');
+          video.load();
+        }
       }
       return;
     }
@@ -1784,7 +1789,18 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           hasActiveOverlay,
         });
   const topAndBottomVisible = controlsVisible && !overlayBarState.hideBottomBar;
-  const centerClusterVisible = controlsVisible && !overlayBarState.hideCenterCluster;
+  const centerClusterVisible =
+    !streamError && controlsVisible && !overlayBarState.hideCenterCluster;
+
+  useEffect(() => {
+    if (hasActiveOverlay) {
+      if (hideTimerRef.current) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+      setShowControls(true);
+    }
+  }, [hasActiveOverlay]);
   const totalFsCommentsCount =
     (state.comments[getCommentsScopeKey(media.id, 'episode', currentEpisode.number)]?.length || 0) +
     (state.comments[getCommentsScopeKey(media.id, 'series', currentEpisode.number)]?.length || 0);
@@ -1858,7 +1874,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
         }}
         className={`bg-black text-white select-none ${
           isFullscreen
-            ? 'fixed inset-0 w-full h-full z-50 overflow-hidden'
+            ? 'fixed inset-0 w-[100dvw] h-[100dvh] z-50 overflow-hidden'
             : `relative w-full aspect-video border border-white/25 dark:border-white/15 transition-shadow duration-300 ${
                 playing && effectiveAmbientEnabled
                   ? 'shadow-[0_18px_52px_-12px_rgba(0,0,0,0.65),0_0_46px_-8px_color-mix(in srgb,var(--sx-primary)_45%,transparent)]'
@@ -1956,38 +1972,71 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               data-no-gesture="true"
               data-testid="inline-player-error"
               onClick={(e) => e.stopPropagation()}
-              className="absolute inset-0 z-30 flex flex-col items-center justify-center p-4 bg-black/75 backdrop-blur-md text-center gap-3"
+              className={
+                isFullscreen
+                  ? 'absolute inset-0 z-30 pointer-events-none flex items-center justify-center p-4 bg-black/55 backdrop-blur-[2px] text-center'
+                  : 'absolute inset-0 z-20 pointer-events-none bg-black/60 backdrop-blur-[2px]'
+              }
             >
-              <div className="max-w-sm rounded-2xl bg-zinc-950/90 border border-white/15 px-4 py-3.5 shadow-2xl space-y-2.5">
-                <div className="inline-flex items-center gap-1.5 text-xs font-extrabold text-amber-300">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>Stream Unavailable</span>
-                </div>
-                <p className="text-[11px] text-white/80 leading-relaxed">{streamError}</p>
-                <div className="flex flex-wrap items-center justify-center gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    data-testid="inline-player-retry-btn"
-                    onClick={() => setStreamRetryNonce((n) => n + 1)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-[11px] font-extrabold shadow hover:opacity-95 transition-opacity"
+              <div
+                className={
+                  isFullscreen
+                    ? 'flex items-center justify-center w-full pointer-events-none'
+                    : 'absolute inset-x-2 top-[42px] bottom-[40px] sm:inset-x-4 sm:top-12 sm:bottom-12 flex items-center justify-center pointer-events-none'
+                }
+              >
+                <div
+                  className={
+                    isFullscreen
+                      ? 'pointer-events-auto max-w-sm rounded-2xl bg-zinc-950/92 border border-white/15 px-4 py-3.5 shadow-2xl space-y-2.5 text-center'
+                      : 'pointer-events-auto w-full max-w-[330px] sm:max-w-sm max-h-full overflow-y-auto no-scrollbar rounded-2xl bg-zinc-950/92 border border-white/15 px-3 py-2 sm:px-4 sm:py-3 shadow-2xl space-y-1.5 sm:space-y-2 text-center'
+                  }
+                >
+                  <div className="inline-flex items-center gap-1.5 text-[11px] sm:text-xs font-extrabold text-amber-300">
+                    <AlertCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                    <span>Stream Unavailable</span>
+                  </div>
+                  <p
+                    title={streamError}
+                    className="text-[10.5px] sm:text-[11px] text-white/85 leading-snug line-clamp-2"
                   >
-                    <RefreshCw className="w-3 h-3" />
-                    <span>Retry</span>
-                  </button>
-                  {availableServers.length > 1 && (
+                    {streamError}
+                  </p>
+                  <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
                     <button
                       type="button"
-                      data-testid="inline-player-switch-server-btn"
-                      onClick={() => {
-                        const curIdx = availableServers.findIndex((s) => s.id === selectedServer?.id);
-                        const nextSrv = availableServers[(curIdx + 1) % availableServers.length];
-                        if (nextSrv) handleSelectServer(nextSrv);
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/12 hover:bg-white/20 border border-white/15 text-[11px] font-bold text-white transition-colors"
+                      data-testid="inline-player-retry-btn"
+                      onClick={() => setStreamRetryNonce((n) => n + 1)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-[10.5px] sm:text-[11px] font-extrabold shadow hover:opacity-95 transition-opacity"
                     >
-                      <span>Switch Server</span>
+                      <RefreshCw className="w-3 h-3" />
+                      <span>Retry</span>
                     </button>
-                  )}
+                    {availableServers.length > 1 && (
+                      <button
+                        type="button"
+                        data-testid="inline-player-switch-server-btn"
+                        onClick={() => {
+                          const curIdx = availableServers.findIndex((s) => s.id === selectedServer?.id);
+                          const nextSrv = availableServers[(curIdx + 1) % availableServers.length];
+                          if (nextSrv) handleSelectServer(nextSrv);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full bg-white/12 hover:bg-white/20 border border-white/15 text-[10.5px] sm:text-[11px] font-bold text-white transition-colors"
+                      >
+                        <span>Switch Server</span>
+                      </button>
+                    )}
+                    {onOpenSourcePicker && (
+                      <button
+                        type="button"
+                        data-testid="inline-player-change-source-btn"
+                        onClick={onOpenSourcePicker}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full bg-white/12 hover:bg-white/20 border border-white/15 text-[10.5px] sm:text-[11px] font-bold text-white transition-colors"
+                      >
+                        <span>Change Source</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -2227,7 +2276,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             )}
 
           {/* Active Subtitle Cue (instant frame-sync by default; optional animation when subtitleAnimation is enabled) */}
-          {activeCue && (
+          {!streamError && activeCue && (
             <div
               data-testid="inline-player-subtitle-overlay"
               style={{
@@ -2322,13 +2371,15 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                   type="button"
                   data-testid="fs-unlock-btn"
                   aria-label="Unlock screen controls"
+                  aria-pressed={isScreenLocked}
+                  data-locked="true"
                   onClick={(e) => {
                     e.stopPropagation();
                     handleToggleScreenLock();
                   }}
-                  className="sx-lock-pill-enter inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-black/70 hover:bg-black/85 backdrop-blur-2xl border border-white/20 text-xs font-extrabold text-white shadow-2xl transition-colors"
+                  className="sx-lock-pill-enter inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-black/75 hover:bg-black/90 backdrop-blur-2xl border border-[var(--sx-player-accent)]/60 text-xs font-extrabold text-white shadow-[0_10px_30px_rgba(0,0,0,0.65)] ring-1 ring-[var(--sx-player-accent)]/35 transition-colors"
                 >
-                  <Unlock className="w-4 h-4 text-[var(--sx-player-accent)]" />
+                  <Lock className="w-4 h-4 text-[var(--sx-player-accent)] animate-pulse" />
                   <span>Screen Locked · Tap to Unlock</span>
                 </button>
               )}
@@ -2351,8 +2402,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             }}
             className={`absolute inset-0 z-20 flex flex-col justify-between ${
               isFullscreen && rotationStage.cssRotated
-                ? 'pt-2.5 pb-2.5 pl-[max(0.75rem,env(safe-area-inset-top))] pr-[max(0.75rem,env(safe-area-inset-bottom))]'
-                : 'p-2.5 sm:p-4'
+                ? 'pt-3.5 pb-3.5 pl-[max(1.25rem,env(safe-area-inset-top))] pr-[max(1.25rem,env(safe-area-inset-bottom))]'
+                : 'p-3 sm:p-4'
             } ${isFullscreen ? 'pointer-events-auto' : 'pointer-events-none'}`}
           >
             {/* Top Overlay Row */}
@@ -2755,13 +2806,23 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                   {/* Left Side: Lock Button */}
                   <button
                     type="button"
-                    aria-label="Lock screen"
-                    title="Lock Screen Controls"
+                    aria-label={isScreenLocked ? 'Screen locked' : 'Lock screen'}
+                    aria-pressed={isScreenLocked}
+                    data-locked={isScreenLocked ? 'true' : 'false'}
+                    title={isScreenLocked ? 'Screen Locked' : 'Lock Screen Controls'}
                     data-testid="fs-lock-btn"
                     onClick={handleToggleScreenLock}
-                    className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-2xl border border-white/15 flex items-center justify-center text-white transition-all shrink-0"
+                    className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full backdrop-blur-2xl border flex items-center justify-center transition-all shrink-0 ${
+                      isScreenLocked
+                        ? 'bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] border-[var(--sx-player-accent)] shadow-[0_0_16px_color-mix(in_srgb,var(--sx-player-accent)_45%,transparent)]'
+                        : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
+                    }`}
                   >
-                    <Lock className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
+                    <Lock
+                      className={`w-[18px] h-[18px] sm:w-5 sm:h-5 ${
+                        isScreenLocked ? 'animate-pulse' : ''
+                      }`}
+                    />
                   </button>
 
                   {/* Right Side: 1. Rotate, 2. Video Fit, 3. Speed, 4. Subtitle, 5. Window PiP */}

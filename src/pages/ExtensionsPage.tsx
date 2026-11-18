@@ -34,6 +34,7 @@ import {
 import { useApp } from '../store/AppContext';
 import { ExtensionRepo, MediaType, SourceInfo, UnifiedMedia, getPreferredTitle } from '../types/media';
 import {
+  collectAvailableExtensionLanguages,
   ExtensionManagerFilter,
   ExtensionMediaTab,
   filterExtensions,
@@ -47,8 +48,8 @@ import {
 import { searchAniList } from '../services/anilist';
 import { searchJikan } from '../services/jikan';
 import {
-  resolveChaptersForMedia,
   resolveEpisodesWithDiagnostics,
+  resolveMangaChaptersAsync,
 } from '../services/sourceEngine';
 import { getBoundedStaggerDelay } from '../utils/appMotion';
 import {
@@ -228,13 +229,7 @@ export const ExtensionsPage: React.FC = () => {
 
   const availableLanguages = useMemo(() => {
     const pool = subTab === 'installed' ? allSources : state.repoCatalog;
-    const langs = new Set<string>();
-    for (const s of pool) {
-      if (matchesExtensionMediaTab(s, mediaTab) && s.lang) {
-        langs.add(s.lang.trim().toLowerCase());
-      }
-    }
-    return ['all', ...Array.from(langs).sort()];
+    return collectAvailableExtensionLanguages(pool, mediaTab);
   }, [allSources, state.repoCatalog, subTab, mediaTab]);
 
   const filteredInstalled = useMemo(
@@ -478,7 +473,15 @@ export const ExtensionsPage: React.FC = () => {
               sampleItems: episodes.slice(0, 3).map((e) => `Ep ${e.number}: ${e.title}`),
             });
           } else {
-            const chapters = resolveChaptersForMedia(matches[0]);
+            const { chapters, matchedTitle: sourceMatchTitle, sourceLabel } =
+              await resolveMangaChaptersAsync({
+                media: matches[0],
+                sourceId: source.id,
+                sourceName: source.name,
+                sourceBaseUrl: source.baseUrl,
+                sourceLang: source.lang,
+                bypassCache: true,
+              });
             const durationMs = Math.round(performance.now() - startedAt);
             const matchedTitle = getPreferredTitle(
               matches[0].title,
@@ -490,7 +493,7 @@ export const ExtensionsPage: React.FC = () => {
               status: chapters.length > 0 ? 'pass' : 'warn',
               durationMs,
               summary: `${chapters.length} chapters resolved`,
-              detail: `Matched "${matchedTitle}" (${matches[0].status || 'UNKNOWN'})`,
+              detail: `Matched "${sourceMatchTitle || matchedTitle}" via ${sourceLabel || source.name}`,
               matchedMediaId: matches[0].id,
               matchedTitle,
               sampleItems: chapters.slice(0, 3).map((c) => `Ch ${c.number}: ${c.title}`),

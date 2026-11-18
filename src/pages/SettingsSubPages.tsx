@@ -212,7 +212,7 @@ const SettingsShell: React.FC<{
           <button
             type="button"
             onClick={() => navigate('/settings')}
-            className="p-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors shrink-0"
+            className="p-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors shrink-0"
             aria-label="Back to Settings"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -243,7 +243,7 @@ const ToggleRow: React.FC<{
     data-testid={testId}
     aria-pressed={checked}
     onClick={() => onChange(!checked)}
-    className="w-full flex items-center justify-between gap-4 px-4 py-3.5 text-left hover:bg-[var(--sx-surface-high)] transition-colors"
+    className="w-full flex items-center justify-between gap-4 px-4 py-3.5 text-left hover:bg-[var(--sx-surface-high)]/55 transition-colors"
   >
     <div className="min-w-0">
       <div className="text-sm font-bold text-[var(--sx-on-surface)]">{label}</div>
@@ -253,7 +253,7 @@ const ToggleRow: React.FC<{
     </div>
     <div
       className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${
-        checked ? 'bg-[var(--sx-primary)]' : 'bg-[var(--sx-surface-high)] border border-[var(--sx-outline)]'
+        checked ? 'bg-[var(--sx-primary)]' : 'sx-glass-control border border-[var(--sx-outline)]'
       }`}
     >
       <div
@@ -300,7 +300,7 @@ export const ThemeSettingsPage: React.FC = () => {
                   className={`sx-card-animate sx-card-spring p-4 text-left border ${
                     active
                       ? 'bg-[var(--sx-primary)]/12 border-[var(--sx-primary)]'
-                      : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
+                      : 'sx-glass-panel border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
                   }`}
                 >
                 <div className="flex items-center justify-between gap-2">
@@ -341,7 +341,7 @@ export const ThemeSettingsPage: React.FC = () => {
         </h2>
         <div
           style={{ borderRadius: roundness }}
-          className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+          className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
         >
           <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -350,7 +350,7 @@ export const ThemeSettingsPage: React.FC = () => {
                 Switch between Dark, Light, or match your OS preference
               </p>
             </div>
-            <div className="flex items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+            <div className="flex items-center gap-1.5 sx-glass-control border border-[var(--sx-outline)]/60 p-1 rounded-xl">
               {(['dark', 'light', 'system'] as ThemeMode[]).map((mode) => (
                 <button
                   key={mode}
@@ -404,7 +404,7 @@ export const ThemeSettingsPage: React.FC = () => {
         </h2>
         <div
           style={{ borderRadius: roundness }}
-          className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+          className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
         >
           <ToggleRow
             label="Ambient Background Gradients"
@@ -424,7 +424,7 @@ export const ThemeSettingsPage: React.FC = () => {
                       className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
                         themePrefs.gradientStyle === style
                           ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
-                          : 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)]'
+                          : 'sx-glass-control border border-[var(--sx-outline)]/60 text-[var(--sx-on-surface-muted)]'
                       }`}
                     >
                       {style}
@@ -501,7 +501,7 @@ export const ThemeSettingsPage: React.FC = () => {
                   className={`sx-card-spring p-3.5 text-left border flex items-center gap-3 ${
                     active
                       ? 'bg-[var(--sx-primary)]/12 border-[var(--sx-primary)]'
-                      : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
+                      : 'sx-glass-panel border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
                   }`}
                 >
                   <div className="flex -space-x-1.5 shrink-0">
@@ -572,7 +572,7 @@ export const UiSettingsPage: React.FC = () => {
           </h2>
           <div
             style={{ borderRadius: roundness }}
-            className="p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] flex flex-col md:flex-row items-center gap-6"
+            className="p-5 sx-glass-panel border border-[var(--sx-outline)] flex flex-col md:flex-row items-center gap-6"
           >
             <div className="shrink-0 flex flex-col items-center gap-2">
               <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--sx-on-surface-muted)]">
@@ -620,7 +620,7 @@ export const UiSettingsPage: React.FC = () => {
                     className={`sx-card-animate sx-card-spring p-3 rounded-xl border text-left ${
                       active
                         ? 'bg-[var(--sx-primary)]/15 border-[var(--sx-primary)]'
-                        : 'bg-[var(--sx-surface-high)]/60 border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
+                        : 'sx-glass-control border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
                     }`}
                   >
                     <div className="flex items-center justify-between">
@@ -646,7 +646,7 @@ export const UiSettingsPage: React.FC = () => {
           </h2>
         <div
           style={{ borderRadius: roundness }}
-          className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+          className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
         >
           <div className="p-5 flex flex-col sm:flex-row items-center gap-6">
             <div className="shrink-0 flex flex-col items-center gap-2">
@@ -682,10 +682,14 @@ export const UiSettingsPage: React.FC = () => {
                   onChange={(e) =>
                     updateUiPrefs({ continueWatchingStyle: e.target.value as MediaCardStyle })
                   }
-                  className="px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold"
+                  className="px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold"
                 >
                   {MEDIA_CARD_STYLES.map((s) => (
-                    <option key={s.id} value={s.id}>
+                    <option
+                      key={s.id}
+                      value={s.id}
+                      className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                    >
                       {s.name}
                     </option>
                   ))}
@@ -704,10 +708,14 @@ export const UiSettingsPage: React.FC = () => {
                   onChange={(e) =>
                     updateUiPrefs({ continueReadingStyle: e.target.value as MediaCardStyle })
                   }
-                  className="px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold"
+                  className="px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold"
                 >
                   {MEDIA_CARD_STYLES.map((s) => (
-                    <option key={s.id} value={s.id}>
+                    <option
+                      key={s.id}
+                      value={s.id}
+                      className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]"
+                    >
                       {s.name}
                     </option>
                   ))}
@@ -727,7 +735,7 @@ export const UiSettingsPage: React.FC = () => {
           </h2>
           <div
             style={{ borderRadius: roundness }}
-            className="p-4 sm:p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-4 overflow-hidden"
+            className="p-4 sm:p-5 sx-glass-panel border border-[var(--sx-outline)] space-y-4 overflow-hidden"
           >
             <div className="space-y-2">
               <span className="block text-[10px] font-bold uppercase tracking-widest text-[var(--sx-on-surface-muted)]">
@@ -756,7 +764,7 @@ export const UiSettingsPage: React.FC = () => {
                     className={`sx-card-spring p-3 rounded-xl border text-left ${
                       active
                         ? 'bg-[var(--sx-primary)]/15 border-[var(--sx-primary)]'
-                        : 'bg-[var(--sx-surface-high)]/60 border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
+                        : 'sx-glass-control border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -782,14 +790,14 @@ export const UiSettingsPage: React.FC = () => {
         </h2>
         <div
           style={{ borderRadius: roundness }}
-          className="p-4 sm:p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-4 overflow-hidden"
+          className="p-4 sm:p-5 sx-glass-panel border border-[var(--sx-outline)] space-y-4 overflow-hidden"
         >
           <div className="space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--sx-on-surface-muted)]">
                 Live Preview
               </span>
-              <div className="inline-flex items-center p-0.5 rounded-lg bg-[var(--sx-surface-high)] border border-[var(--sx-outline)]">
+              <div className="inline-flex items-center p-0.5 rounded-lg sx-glass-control border border-[var(--sx-outline)]">
                 <button
                   type="button"
                   onClick={() => setEpisodePreviewKind('episode')}
@@ -815,7 +823,7 @@ export const UiSettingsPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="p-3 rounded-2xl bg-[var(--sx-surface)]/55 border border-[var(--sx-outline)]/60">
+            <div className="p-3 rounded-2xl bg-[var(--sx-surface)]/35 backdrop-blur-md border border-[var(--sx-outline)]/60">
               <EpisodeChapterList
                 items={
                   episodePreviewKind === 'chapter'
@@ -846,7 +854,7 @@ export const UiSettingsPage: React.FC = () => {
                   className={`sx-card-spring p-3 rounded-xl border text-left ${
                     active
                       ? 'bg-[var(--sx-primary)]/15 border-[var(--sx-primary)]'
-                      : 'bg-[var(--sx-surface-high)]/60 border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
+                      : 'sx-glass-control border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -875,7 +883,7 @@ export const UiSettingsPage: React.FC = () => {
           </h2>
           <div
             style={{ borderRadius: roundness }}
-            className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+            className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
           >
             <div className="p-4 space-y-3">
               <div className="text-sm font-bold">Navigation Rail Style</div>
@@ -892,7 +900,7 @@ export const UiSettingsPage: React.FC = () => {
                       className={`sx-card-spring p-3 rounded-xl border text-left transition-colors ${
                         active
                           ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)] shadow-sm'
-                          : 'bg-[var(--sx-surface-high)] border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
+                          : 'sx-glass-control border-[var(--sx-outline)] hover:border-[var(--sx-primary)]/50'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-1.5">
@@ -923,7 +931,7 @@ export const UiSettingsPage: React.FC = () => {
                     className={`sx-card-spring px-3.5 py-2 rounded-xl text-xs font-bold border ${
                       uiPrefs.homeHeaderStyle === h.id
                         ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)]'
-                        : 'bg-[var(--sx-surface-high)] border-[var(--sx-outline)]'
+                        : 'sx-glass-control border-[var(--sx-outline)]'
                     }`}
                   >
                     {h.label}
@@ -997,7 +1005,7 @@ export const HomeSectionsSettingsPage: React.FC = () => {
         <button
           type="button"
           onClick={() => setHomeSections(DEFAULT_HOME_SECTIONS)}
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold sx-glass-panel border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] transition-colors"
         >
           <RotateCcw className="w-3.5 h-3.5" />
           <span>Reset Default</span>
@@ -1006,7 +1014,7 @@ export const HomeSectionsSettingsPage: React.FC = () => {
     >
       <div
         style={{ borderRadius: roundness }}
-        className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+        className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
       >
         {state.homeSections.map((section, idx) => (
           <div key={section.id} className="flex items-center justify-between gap-3 px-4 py-3">
@@ -1019,7 +1027,7 @@ export const HomeSectionsSettingsPage: React.FC = () => {
                 >
                   {section.title}
                 </span>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)]">
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold sx-glass-control text-[var(--sx-on-surface-muted)]">
                   {section.type}
                 </span>
               </div>
@@ -1030,7 +1038,7 @@ export const HomeSectionsSettingsPage: React.FC = () => {
                 type="button"
                 onClick={() => move(idx, -1)}
                 disabled={idx === 0}
-                className="p-1.5 rounded-lg bg-[var(--sx-surface-high)] disabled:opacity-35 hover:text-[var(--sx-primary)]"
+                className="p-1.5 rounded-lg sx-glass-control disabled:opacity-35 hover:text-[var(--sx-primary)]"
                 aria-label="Move up"
               >
                 <ArrowUp className="w-3.5 h-3.5" />
@@ -1039,7 +1047,7 @@ export const HomeSectionsSettingsPage: React.FC = () => {
                 type="button"
                 onClick={() => move(idx, 1)}
                 disabled={idx === state.homeSections.length - 1}
-                className="p-1.5 rounded-lg bg-[var(--sx-surface-high)] disabled:opacity-35 hover:text-[var(--sx-primary)]"
+                className="p-1.5 rounded-lg sx-glass-control disabled:opacity-35 hover:text-[var(--sx-primary)]"
                 aria-label="Move down"
               >
                 <ArrowDown className="w-3.5 h-3.5" />
@@ -1049,7 +1057,7 @@ export const HomeSectionsSettingsPage: React.FC = () => {
                 onClick={() => toggleDisabled(section.id)}
                 className={`p-1.5 rounded-lg transition-colors ${
                   section.disabled
-                    ? 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)]'
+                    ? 'sx-glass-control text-[var(--sx-on-surface-muted)]'
                     : 'bg-[var(--sx-primary)]/15 text-[var(--sx-primary)]'
                 }`}
                 aria-label="Toggle visibility"
@@ -1074,7 +1082,7 @@ export const HomeSectionsSettingsPage: React.FC = () => {
       {/* Add Library Shelf Section */}
       <div
         style={{ borderRadius: roundness }}
-        className="p-4 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+        className="p-4 sx-glass-panel border border-[var(--sx-outline)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
       >
         <div>
           <div className="text-sm font-bold">Add Library Shelf Row</div>
@@ -1086,21 +1094,21 @@ export const HomeSectionsSettingsPage: React.FC = () => {
           <select
             value={newMediaType}
             onChange={(e) => setNewMediaType(e.target.value as 'ANIME' | 'MANGA')}
-            className="px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold"
+            className="px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold"
           >
-            <option value="ANIME">Anime</option>
-            <option value="MANGA">Manga</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="ANIME">Anime</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="MANGA">Manga</option>
           </select>
           <select
             value={newStatus}
             onChange={(e) => setNewStatus(e.target.value as TrackedStatus)}
-            className="px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold"
+            className="px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold"
           >
-            <option value="CURRENT">Current</option>
-            <option value="PLANNING">Planning</option>
-            <option value="COMPLETED">Completed</option>
-            <option value="PAUSED">Paused</option>
-            <option value="REPEATING">Repeating</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="CURRENT">Current</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="PLANNING">Planning</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="COMPLETED">Completed</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="PAUSED">Paused</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="REPEATING">Repeating</option>
           </select>
           <button
             type="button"
@@ -1193,7 +1201,7 @@ export const TrackingSettingsPage: React.FC = () => {
       {/* AniList Cloud Sync Card */}
       <div
         style={{ borderRadius: roundness }}
-        className="p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-4"
+        className="p-5 sx-glass-panel border border-[var(--sx-outline)] space-y-4"
       >
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -1223,21 +1231,21 @@ export const TrackingSettingsPage: React.FC = () => {
 
         {anilistProfile ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
-            <div className="p-3 rounded-xl bg-[var(--sx-surface-high)]">
+            <div className="p-3 rounded-xl sx-glass-control border border-[var(--sx-outline)]/60">
               <div className="text-[11px] text-[var(--sx-on-surface-muted)]">Anime</div>
               <div className="text-lg font-black tabular-nums">{anilistProfile.animeCount ?? 0}</div>
             </div>
-            <div className="p-3 rounded-xl bg-[var(--sx-surface-high)]">
+            <div className="p-3 rounded-xl sx-glass-control border border-[var(--sx-outline)]/60">
               <div className="text-[11px] text-[var(--sx-on-surface-muted)]">Episodes</div>
               <div className="text-lg font-black tabular-nums">
                 {anilistProfile.episodesWatched ?? 0}
               </div>
             </div>
-            <div className="p-3 rounded-xl bg-[var(--sx-surface-high)]">
+            <div className="p-3 rounded-xl sx-glass-control border border-[var(--sx-outline)]/60">
               <div className="text-[11px] text-[var(--sx-on-surface-muted)]">Manga</div>
               <div className="text-lg font-black tabular-nums">{anilistProfile.mangaCount ?? 0}</div>
             </div>
-            <div className="p-3 rounded-xl bg-[var(--sx-surface-high)]">
+            <div className="p-3 rounded-xl sx-glass-control border border-[var(--sx-outline)]/60">
               <div className="text-[11px] text-[var(--sx-on-surface-muted)]">Mean Score</div>
               <div className="text-lg font-black tabular-nums">{anilistProfile.meanScore ?? 0}</div>
             </div>
@@ -1279,7 +1287,7 @@ export const TrackingSettingsPage: React.FC = () => {
                   value={tokenInput}
                   onChange={(e) => setTokenInput(e.target.value)}
                   placeholder="Paste Bearer token or full redirect URL (#access_token=... / ?code=...)"
-                  className="flex-1 px-3.5 py-2.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
+                  className="flex-1 px-3.5 py-2.5 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
                 />
                 <button
                   type="submit"
@@ -1298,7 +1306,7 @@ export const TrackingSettingsPage: React.FC = () => {
       {/* Primary Tracker & Metadata Source */}
       <div
         style={{ borderRadius: roundness }}
-        className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+        className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
       >
         <div className="p-4 space-y-3">
           <div className="text-sm font-bold">Primary Library Tracker</div>
@@ -1313,7 +1321,7 @@ export const TrackingSettingsPage: React.FC = () => {
                   className={`p-3 rounded-xl border text-left transition-all flex items-center justify-between ${
                     active
                       ? 'bg-[var(--sx-primary)]/12 border-[var(--sx-primary)]'
-                      : 'bg-[var(--sx-surface-high)]/60 border-[var(--sx-outline)]'
+                      : 'sx-glass-control border-[var(--sx-outline)]'
                   }`}
                 >
                   <div>
@@ -1342,12 +1350,12 @@ export const TrackingSettingsPage: React.FC = () => {
                   e.target.value === 'auto' ? null : (e.target.value as TrackerType),
               })
             }
-            className="px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold"
+            className="px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold"
           >
-            <option value="auto">Auto (Follow Primary)</option>
-            <option value="anilist">AniList GraphQL</option>
-            <option value="myanimelist">MyAnimeList (Jikan v4)</option>
-            <option value="kitsu">Kitsu REST</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="auto">Auto (Follow Primary)</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="anilist">AniList GraphQL</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="myanimelist">MyAnimeList (Jikan v4)</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="kitsu">Kitsu REST</option>
           </select>
         </div>
       </div>
@@ -1371,7 +1379,7 @@ export const PlayerSettingsPage: React.FC = () => {
     >
       <div
         style={{ borderRadius: roundness }}
-        className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+        className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
       >
         <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -1385,7 +1393,7 @@ export const PlayerSettingsPage: React.FC = () => {
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+          <div className="flex flex-wrap items-center gap-1.5 sx-glass-control border border-[var(--sx-outline)]/60 p-1 rounded-xl">
             {(['auto', '1080p', '720p', '480p', '360p'] as const).map((q) => {
               const capped = playerPrefs.batterySaver && q !== '480p' && q !== '360p';
               return (
@@ -1414,7 +1422,7 @@ export const PlayerSettingsPage: React.FC = () => {
               Fit shows the full uncropped frame; Zoom crops to fill
             </p>
           </div>
-          <div className="flex items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+          <div className="flex items-center gap-1.5 sx-glass-control border border-[var(--sx-outline)]/60 p-1 rounded-xl">
             {(
               [
                 { id: 'contain', label: 'Fit (Full)' },
@@ -1496,7 +1504,7 @@ export const PlayerSettingsPage: React.FC = () => {
                 className={`px-2.5 py-1.5 rounded-lg text-xs font-mono-tabular font-bold ${
                   playerPrefs.defaultSpeed === spd
                     ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
-                    : 'bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)]'
+                    : 'sx-glass-control border border-[var(--sx-outline)]/60 text-[var(--sx-on-surface-muted)]'
                 }`}
               >
                 {spd}x
@@ -1560,7 +1568,7 @@ export const ReaderSettingsPage: React.FC = () => {
     >
       <div
         style={{ borderRadius: roundness }}
-        className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+        className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
       >
         <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -1572,7 +1580,7 @@ export const ReaderSettingsPage: React.FC = () => {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+          <div className="flex items-center gap-1.5 sx-glass-control border border-[var(--sx-outline)]/60 p-1 rounded-xl">
             {(['webtoon', 'single', 'double'] as const).map((m) => (
               <button
                 key={m}
@@ -1597,7 +1605,7 @@ export const ReaderSettingsPage: React.FC = () => {
               Left-to-Right (Western/Webtoon) or Right-to-Left (Traditional Manga)
             </p>
           </div>
-          <div className="flex items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+          <div className="flex items-center gap-1.5 sx-glass-control border border-[var(--sx-outline)]/60 p-1 rounded-xl">
             {(['ltr', 'rtl'] as const).map((d) => (
               <button
                 key={d}
@@ -1620,7 +1628,7 @@ export const ReaderSettingsPage: React.FC = () => {
             <div className="text-sm font-bold">Image Scaling</div>
             <p className="text-xs text-[var(--sx-on-surface-muted)]">How pages fit the viewport</p>
           </div>
-          <div className="flex items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+          <div className="flex items-center gap-1.5 sx-glass-control border border-[var(--sx-outline)]/60 p-1 rounded-xl">
             {(['width', 'height', 'original'] as const).map((fit) => (
               <button
                 key={fit}
@@ -1661,7 +1669,7 @@ export const ReaderSettingsPage: React.FC = () => {
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold ${
                   readerPrefs.background === bg.id
                     ? 'border-[var(--sx-primary)] bg-[var(--sx-primary)]/12'
-                    : 'border-[var(--sx-outline)] bg-[var(--sx-surface-high)]'
+                    : 'border-[var(--sx-outline)] sx-glass-control'
                 }`}
               >
                 <span
@@ -1690,7 +1698,7 @@ export const ContentSettingsPage: React.FC = () => {
     >
       <div
         style={{ borderRadius: roundness }}
-        className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+        className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
       >
         <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -1699,7 +1707,7 @@ export const ContentSettingsPage: React.FC = () => {
               Priority order when displaying anime & manga titles
             </p>
           </div>
-          <div className="flex items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+          <div className="flex items-center gap-1.5 sx-glass-control border border-[var(--sx-outline)]/60 p-1 rounded-xl">
             {(['english', 'romaji', 'native'] as TitlePreference[]).map((pref) => (
               <button
                 key={pref}
@@ -1724,7 +1732,7 @@ export const ContentSettingsPage: React.FC = () => {
               Controls whether mature entries appear in discovery & search
             </p>
           </div>
-          <div className="flex items-center gap-1.5 bg-[var(--sx-surface-high)] p-1 rounded-xl">
+          <div className="flex items-center gap-1.5 sx-glass-control border border-[var(--sx-outline)]/60 p-1 rounded-xl">
             {(
               [
                 { id: 'safe', label: 'Safe Only' },
@@ -1758,13 +1766,13 @@ export const ContentSettingsPage: React.FC = () => {
           <select
             value={contentPrefs.language}
             onChange={(e) => updateContentPrefs({ language: e.target.value })}
-            className="px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold"
+            className="px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold"
           >
-            <option value="en">English (en)</option>
-            <option value="ja">日本語 (ja)</option>
-            <option value="es">Español (es)</option>
-            <option value="fr">Français (fr)</option>
-            <option value="zh-HK">廣東話 (zh-HK)</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="en">English (en)</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="ja">日本語 (ja)</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="es">Español (es)</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="fr">Français (fr)</option>
+            <option className="bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)]" value="zh-HK">廣東話 (zh-HK)</option>
           </select>
         </div>
       </div>
@@ -1797,7 +1805,7 @@ export const SecuritySettingsPage: React.FC = () => {
     >
       <div
         style={{ borderRadius: roundness }}
-        className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+        className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
       >
         <ToggleRow
           label="Require PIN on Launch"
@@ -1825,7 +1833,7 @@ export const SecuritySettingsPage: React.FC = () => {
               value={pinDraft}
               onChange={(e) => setPinDraft(e.target.value.replace(/\D/g, ''))}
               placeholder="Enter 4–6 digit PIN"
-              className="flex-1 px-3.5 py-2.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-sm font-mono-tabular outline-none focus:border-[var(--sx-primary)]"
+              className="flex-1 px-3.5 py-2.5 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-sm font-mono-tabular outline-none focus:border-[var(--sx-primary)]"
             />
             <button
               type="submit"
@@ -1837,7 +1845,7 @@ export const SecuritySettingsPage: React.FC = () => {
               <button
                 type="button"
                 onClick={lockApp}
-                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)]"
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)]"
               >
                 <Lock className="w-3.5 h-3.5" />
                 <span>Lock Now</span>
@@ -1924,7 +1932,7 @@ export const BackupSettingsPage: React.FC = () => {
     >
       <div
         style={{ borderRadius: roundness }}
-        className="p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-4"
+        className="p-5 sx-glass-panel border border-[var(--sx-outline)] space-y-4"
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -1949,7 +1957,7 @@ export const BackupSettingsPage: React.FC = () => {
                 navigator.clipboard?.writeText(JSON.stringify(exportBackup(), null, 2));
                 setFeedback({ type: 'ok', text: 'Copied JSON manifest to clipboard.' });
               }}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold"
             >
               <Copy className="w-3.5 h-3.5" />
               <span>Copy</span>
@@ -1960,7 +1968,7 @@ export const BackupSettingsPage: React.FC = () => {
 
       <div
         style={{ borderRadius: roundness }}
-        className="p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] space-y-4"
+        className="p-5 sx-glass-panel border border-[var(--sx-outline)] space-y-4"
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -1969,7 +1977,7 @@ export const BackupSettingsPage: React.FC = () => {
               Upload a .json backup or paste manifest contents to preview before applying
             </p>
           </div>
-          <label className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold cursor-pointer hover:border-[var(--sx-primary)]">
+          <label className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold cursor-pointer hover:border-[var(--sx-primary)]">
             <Upload className="w-3.5 h-3.5" />
             <span>Choose File</span>
             <input type="file" accept="application/json" onChange={handleFile} className="hidden" />
@@ -1981,14 +1989,14 @@ export const BackupSettingsPage: React.FC = () => {
           value={rawJson}
           onChange={(e) => setRawJson(e.target.value)}
           placeholder='{"app": "ShizuTv", "version": "2.1.5", ...}'
-          className="w-full p-3 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-mono-tabular outline-none focus:border-[var(--sx-primary)]"
+          className="w-full p-3 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-mono-tabular outline-none focus:border-[var(--sx-primary)]"
         />
 
         {rawJson && !preview && (
           <button
             type="button"
             onClick={handleParsePaste}
-            className="px-4 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold"
+            className="px-4 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold"
           >
             Inspect Manifest
           </button>
@@ -2055,7 +2063,7 @@ export const BackupSettingsPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setConfirmReset(false)}
-              className="px-3 py-2 rounded-xl bg-[var(--sx-surface-high)] text-xs font-bold"
+              className="px-3 py-2 rounded-xl sx-glass-control text-xs font-bold"
             >
               Cancel
             </button>
@@ -2086,7 +2094,7 @@ export const DiscordSettingsPage: React.FC = () => {
     >
       <div
         style={{ borderRadius: roundness }}
-        className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
+        className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden"
       >
         <ToggleRow
           label="Enable Rich Presence Activity"
@@ -2112,7 +2120,7 @@ export const DiscordSettingsPage: React.FC = () => {
             type="text"
             value={discordPrefs.customState}
             onChange={(e) => updateDiscordPrefs({ customState: e.target.value })}
-            className="w-full px-3.5 py-2.5 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
+            className="w-full px-3.5 py-2.5 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-medium outline-none focus:border-[var(--sx-primary)]"
           />
         </div>
       </div>
@@ -2165,7 +2173,7 @@ export const LogsSettingsPage: React.FC = () => {
           <button
             type="button"
             onClick={() => navigate('/settings/diagnostics')}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] whitespace-nowrap"
           >
             <Activity className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
             <span>Episode Diagnostics</span>
@@ -2173,7 +2181,7 @@ export const LogsSettingsPage: React.FC = () => {
           <button
             type="button"
             onClick={clearLogs}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)]"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl sx-glass-panel border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)]"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Clear</span>
@@ -2190,7 +2198,7 @@ export const LogsSettingsPage: React.FC = () => {
             className={`px-3 py-1.5 rounded-xl text-xs font-bold ${
               filter === lvl
                 ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)]'
-                : 'bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)]'
+                : 'sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)]'
             }`}
           >
             {lvl}
@@ -2200,7 +2208,7 @@ export const LogsSettingsPage: React.FC = () => {
 
       <div
         style={{ borderRadius: roundness }}
-        className="bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden font-mono-tabular"
+        className="sx-glass-panel border border-[var(--sx-outline)] divide-y divide-[var(--sx-outline)] overflow-hidden font-mono-tabular"
       >
         {visible.length === 0 ? (
           <div className="p-8 text-center text-xs text-[var(--sx-on-surface-muted)] flex flex-col items-center gap-2">
@@ -2256,7 +2264,7 @@ export const AboutSettingsPage: React.FC = () => {
     <SettingsShell title="About ShizuTv" subtitle="Watch. Read. Track.">
       <div
         style={{ borderRadius: roundness }}
-        className="p-6 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] flex flex-col sm:flex-row items-center gap-5"
+        className="p-6 sx-glass-panel border border-[var(--sx-outline)] flex flex-col sm:flex-row items-center gap-5"
       >
         <div className="w-16 h-16 rounded-2xl bg-[var(--sx-primary)]/15 border border-[var(--sx-primary)]/30 flex items-center justify-center shrink-0">
           <ShonenXLogo size={36} className="text-[var(--sx-primary)]" />
@@ -2274,7 +2282,7 @@ export const AboutSettingsPage: React.FC = () => {
               (tech) => (
                 <span
                   key={tech}
-                  className="px-2.5 py-1 rounded-lg bg-[var(--sx-surface-high)] text-[11px] font-bold"
+                  className="px-2.5 py-1 rounded-lg sx-glass-control border border-[var(--sx-outline)]/60 text-[11px] font-bold"
                 >
                   {tech}
                 </span>
@@ -2286,7 +2294,7 @@ export const AboutSettingsPage: React.FC = () => {
 
       <div
         style={{ borderRadius: roundness }}
-        className="p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+        className="p-5 sx-glass-panel border border-[var(--sx-outline)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
       >
         <div>
           <div className="text-sm font-bold">Offline &amp; Image Cache</div>
@@ -2301,7 +2309,7 @@ export const AboutSettingsPage: React.FC = () => {
         <button
           type="button"
           onClick={() => void handleClearCache()}
-          className="px-4 py-2 rounded-xl bg-[var(--sx-surface-high)] border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] shrink-0"
+          className="px-4 py-2 rounded-xl sx-glass-control border border-[var(--sx-outline)] text-xs font-bold hover:border-[var(--sx-primary)] shrink-0"
         >
           Clear Cache
         </button>
@@ -2309,7 +2317,7 @@ export const AboutSettingsPage: React.FC = () => {
 
       <div
         style={{ borderRadius: roundness }}
-        className="p-5 bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs text-[var(--sx-on-surface-muted)] leading-relaxed"
+        className="p-5 sx-glass-panel border border-[var(--sx-outline)] text-xs text-[var(--sx-on-surface-muted)] leading-relaxed"
       >
         <strong className="text-[var(--sx-on-surface)]">Disclaimer:</strong> ShizuTv does not host,
         upload, or distribute copyrighted media files. Catalog metadata is retrieved directly from

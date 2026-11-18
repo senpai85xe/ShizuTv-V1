@@ -38,7 +38,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ compact = fa
         <button
           type="button"
           onClick={() => setShowIOSGuide(true)}
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-[var(--sx-surface-container)] text-[var(--sx-on-surface)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold sx-glass-panel text-[var(--sx-on-surface)] border border-[var(--sx-outline)] hover:border-[var(--sx-primary)] transition-colors"
         >
           <Smartphone className="w-3.5 h-3.5 text-[var(--sx-primary)] shrink-0" />
           <span>Install on iOS</span>
@@ -56,7 +56,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ compact = fa
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="sx-sheet-enter w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl bg-[var(--sx-surface-container)]/85 backdrop-blur-2xl backdrop-saturate-150 border border-[var(--sx-outline)] ring-1 ring-inset ring-white/10 p-5 shadow-2xl space-y-4"
+                className="sx-sheet-enter w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl sx-glass-modal border border-[var(--sx-outline)] p-5 shadow-2xl space-y-4"
               >
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-base font-extrabold tracking-tight">Install ShizuTv</h3>
@@ -64,7 +64,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ compact = fa
                     type="button"
                     onClick={() => setShowIOSGuide(false)}
                     aria-label="Close install instructions"
-                    className="p-1.5 rounded-xl bg-[var(--sx-surface-high)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]"
+                    className="p-1.5 rounded-xl sx-glass-control text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]"
                   >
                     <X className="w-4 h-4" />
                   </button>

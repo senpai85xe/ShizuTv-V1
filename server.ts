@@ -17,6 +17,10 @@ import {
   parseExtensionRepoManifest,
 } from './src/utils/extensionRepoParser.ts';
 import { resolveAnimeEpisodeStream } from './src/server/animeStreamResolver.ts';
+import {
+  resolveMangaChapterPagesServer,
+  resolveMangaChaptersServer,
+} from './src/server/mangaResolver.ts';
 import { rewriteM3u8Manifest } from './src/utils/streamResolverUtils.ts';
 import type { ExtensionRepo, SourceInfo } from './src/types/media.ts';
 
@@ -1329,6 +1333,88 @@ async function startServer() {
     }
   });
 
+  app.post('/api/manga/chapters', async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawTitles = (body.titles ?? {}) as Record<string, unknown>;
+    try {
+      const resolved = await resolveMangaChaptersServer({
+        mediaId: typeof body.mediaId === 'string' ? body.mediaId : 'unknown',
+        titles: {
+          overrideTitle:
+            typeof rawTitles.overrideTitle === 'string' ? rawTitles.overrideTitle : null,
+          english: typeof rawTitles.english === 'string' ? rawTitles.english : null,
+          romaji: typeof rawTitles.romaji === 'string' ? rawTitles.romaji : null,
+          native: typeof rawTitles.native === 'string' ? rawTitles.native : null,
+          synonyms: Array.isArray(rawTitles.synonyms)
+            ? rawTitles.synonyms.filter((s): s is string => typeof s === 'string')
+            : null,
+        },
+        sourceId: typeof body.sourceId === 'string' ? body.sourceId : undefined,
+        sourceName: typeof body.sourceName === 'string' ? body.sourceName : undefined,
+        sourceBaseUrl:
+          typeof body.sourceBaseUrl === 'string' ? body.sourceBaseUrl : undefined,
+        sourceLang: typeof body.sourceLang === 'string' ? body.sourceLang : undefined,
+        bypassCache: Boolean(body.bypassCache),
+      });
+      res.json(resolved);
+    } catch (err) {
+      res.status(404).json({
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Unable to resolve manga chapters from this source.',
+      });
+    }
+  });
+
+  app.post('/api/manga/pages', async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawTitles = (body.titles ?? {}) as Record<string, unknown>;
+    const rawChapter = (body.chapter ?? {}) as Record<string, unknown>;
+    const chNumRaw = Number(rawChapter.number);
+    const chNum = Number.isFinite(chNumRaw) && chNumRaw >= 0 ? chNumRaw : 1;
+    try {
+      const resolved = await resolveMangaChapterPagesServer({
+        mediaId: typeof body.mediaId === 'string' ? body.mediaId : 'unknown',
+        titles: {
+          overrideTitle:
+            typeof rawTitles.overrideTitle === 'string' ? rawTitles.overrideTitle : null,
+          english: typeof rawTitles.english === 'string' ? rawTitles.english : null,
+          romaji: typeof rawTitles.romaji === 'string' ? rawTitles.romaji : null,
+          native: typeof rawTitles.native === 'string' ? rawTitles.native : null,
+          synonyms: Array.isArray(rawTitles.synonyms)
+            ? rawTitles.synonyms.filter((s): s is string => typeof s === 'string')
+            : null,
+        },
+        chapter: {
+          id: typeof rawChapter.id === 'string' ? rawChapter.id : undefined,
+          number: chNum,
+          title: typeof rawChapter.title === 'string' ? rawChapter.title : undefined,
+          sourceChapterId:
+            typeof rawChapter.sourceChapterId === 'string'
+              ? rawChapter.sourceChapterId
+              : undefined,
+          chapterUrl:
+            typeof rawChapter.chapterUrl === 'string' ? rawChapter.chapterUrl : undefined,
+        },
+        sourceId: typeof body.sourceId === 'string' ? body.sourceId : undefined,
+        sourceName: typeof body.sourceName === 'string' ? body.sourceName : undefined,
+        sourceBaseUrl:
+          typeof body.sourceBaseUrl === 'string' ? body.sourceBaseUrl : undefined,
+        sourceLang: typeof body.sourceLang === 'string' ? body.sourceLang : undefined,
+        bypassCache: Boolean(body.bypassCache),
+      });
+      res.json(resolved);
+    } catch (err) {
+      res.status(404).json({
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Unable to load manga chapter pages from this source.',
+      });
+    }
+  });
+
   app.get('/api/stream/proxy', async (req, res) => {
     const targetUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
     const rawReferer =
@@ -1431,6 +1517,9 @@ async function startServer() {
       for (const hName of passthroughHeaders) {
         const val = upstream.headers.get(hName);
         if (val) res.setHeader(hName, val);
+      }
+      if (contentType.startsWith('image/') && !upstream.headers.get('cache-control')) {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
       }
 
       if (upstream.body) {

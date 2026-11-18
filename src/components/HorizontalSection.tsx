@@ -96,7 +96,7 @@ export const HorizontalSection: React.FC<HorizontalSectionProps> = ({
               type="button"
               onClick={() => scrollBy(-520)}
               aria-label={`Scroll ${title} left`}
-              className="p-1.5 rounded-lg bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors"
+              className="p-1.5 rounded-lg sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
@@ -104,7 +104,7 @@ export const HorizontalSection: React.FC<HorizontalSectionProps> = ({
               type="button"
               onClick={() => scrollBy(520)}
               aria-label={`Scroll ${title} right`}
-              className="p-1.5 rounded-lg bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors"
+              className="p-1.5 rounded-lg sx-glass-panel border border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] transition-colors"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
@@ -122,7 +122,7 @@ export const HorizontalSection: React.FC<HorizontalSectionProps> = ({
       </div>
 
       {error ? (
-        <div className="mx-4 sm:mx-6 p-5 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-red-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div className="mx-4 sm:mx-6 p-5 rounded-[var(--sx-radius)] sx-glass-panel border border-red-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
             <div>
@@ -138,7 +138,7 @@ export const HorizontalSection: React.FC<HorizontalSectionProps> = ({
             <button
               type="button"
               onClick={onRetry}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-[var(--sx-surface-high)] hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] rounded-lg transition-colors shrink-0"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold sx-glass-control hover:bg-[var(--sx-primary)] hover:text-[var(--sx-on-primary)] rounded-lg transition-colors shrink-0"
             >
               <RotateCw className="w-3.5 h-3.5" />
               Retry
@@ -160,7 +160,7 @@ export const HorizontalSection: React.FC<HorizontalSectionProps> = ({
           ))}
         </div>
       ) : isEmpty ? (
-        <div className="mx-4 sm:mx-6 py-6 px-4 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/60 border border-[var(--sx-outline)] text-center text-xs text-[var(--sx-on-surface-muted)]">
+        <div className="mx-4 sm:mx-6 py-6 px-4 rounded-[var(--sx-radius)] sx-glass-panel border border-[var(--sx-outline)] text-center text-xs text-[var(--sx-on-surface-muted)]">
           {emptyText}
         </div>
       ) : (
