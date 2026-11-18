@@ -4,17 +4,23 @@ import { resolveFallbackEpisodesCount } from '../services/sourceEngine';
 import {
   buildHlsQualityOptions,
   buildSubtitleBoxCssProps,
+  clampAutoSkipDestination,
   clampEpisodeIndex,
   computeAutoSkipTarget,
   computeFullscreenRotationStage,
   DEFAULT_AMBIENT_ENABLED,
   DEFAULT_AUTO_PIP_ENABLED,
+  DEFAULT_SUBTITLE_ANIMATION,
+  DEFAULT_SUBTITLE_BACKGROUND,
+  DEFAULT_SUBTITLE_PREVIEW_TEXT,
+  DEFAULT_SUBTITLE_SIZE,
   findActiveSubtitleCue,
   formatQualityLabel,
   formatScrubberPercent,
   getCommentsScopeKey,
   getEffectiveDurationSeconds,
   getEpisodeNavigationState,
+  getManualSkipInterval,
   getNextVideoFitMode,
   getVideoFitBadgeLabel,
   getVideoFitClass,
@@ -81,15 +87,29 @@ test('getEffectiveDurationSeconds prefers loaded video duration, then episode/me
   assert.equal(getEffectiveDurationSeconds(0, undefined, undefined), 1440);
 });
 
-test('computeAutoSkipTarget skips op/ed when enabled and active', () => {
+test('computeAutoSkipTarget skips op/ed/recap/mixed segments and hides manual skip button when auto-skip is enabled', () => {
   const intervals = [
+    { startTime: 0, endTime: 45, skipType: 'recap' },
     { startTime: 90, endTime: 180, skipType: 'op' },
+    { startTime: 240, endTime: 300, skipType: 'mixed-op' },
     { startTime: 1320, endTime: 1410, skipType: 'ed' },
   ];
-  assert.equal(computeAutoSkipTarget(95, intervals, false), null);
+  assert.equal(computeAutoSkipTarget(12, intervals, false), null);
+  assert.equal(computeAutoSkipTarget(12, intervals, true), 45);
   assert.equal(computeAutoSkipTarget(95, intervals, true), 180);
+  assert.equal(computeAutoSkipTarget(250, intervals, { autoSkipOp: true, autoSkipEd: false }), 300);
   assert.equal(computeAutoSkipTarget(500, intervals, true), null);
   assert.equal(computeAutoSkipTarget(1350, intervals, true), 1410);
+  assert.equal(computeAutoSkipTarget(1350, intervals, { autoSkipOp: true, autoSkipEd: false }), null);
+
+  // Manual skip button is suppressed when auto-skip is enabled for that interval type
+  assert.equal(getManualSkipInterval(12, intervals, true), undefined);
+  assert.equal(getManualSkipInterval(12, intervals, false)?.skipType, 'recap');
+  assert.equal(
+    getManualSkipInterval(1350, intervals, { autoSkipOp: true, autoSkipEd: false })?.skipType,
+    'ed',
+  );
+  assert.equal(clampAutoSkipDestination(1410, 1405), 1404.75);
 });
 
 test('shouldAutoStartPlayback keeps playback paused when autoPlayPref is false unless explicitly triggered', () => {
@@ -155,6 +175,10 @@ test('resolveFallbackEpisodesCount preserves full counts beyond 100 episodes', (
 test('fullscreen helpers resolve audio languages, comment scope keys, lock visibility, and OFF defaults', () => {
   assert.equal(DEFAULT_AMBIENT_ENABLED, false);
   assert.equal(DEFAULT_AUTO_PIP_ENABLED, false);
+  assert.equal(DEFAULT_SUBTITLE_SIZE, 13);
+  assert.equal(DEFAULT_SUBTITLE_BACKGROUND, false);
+  assert.equal(DEFAULT_SUBTITLE_ANIMATION, false);
+  assert.equal(DEFAULT_SUBTITLE_PREVIEW_TEXT, 'Welcome to our app');
 
   assert.equal(resolveAudioLanguageOption('hi').shortLabel, 'HI');
   assert.equal(resolveAudioLanguageOption('hi').serverCategory, 'dub');

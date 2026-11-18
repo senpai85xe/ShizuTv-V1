@@ -15,12 +15,18 @@ import {
   resolveDefaultHostAvatar,
   WatchPartyTrack,
 } from '../utils/watchParty';
+import {
+  AUDIO_LANGUAGE_OPTIONS,
+  AudioLanguageCode,
+  resolveAudioLanguageOption,
+} from '../utils/inlinePlayer';
 
 export interface CreateWatchRoomPayload {
   media: UnifiedMedia;
   episodes: UnifiedEpisode[];
   episodeIndex: number;
   track: WatchPartyTrack;
+  audioLanguage: AudioLanguageCode;
   roomName: string;
   isPublic: boolean;
   userName: string;
@@ -66,7 +72,9 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
   const [selectedAnime, setSelectedAnime] = useState<UnifiedMedia | null>(initialMedia);
   const [episodes, setEpisodes] = useState<UnifiedEpisode[]>(initialEpisodes ?? []);
   const [episodeNumber, setEpisodeNumber] = useState(initialEpisodeNumber || 1);
-  const [track, setTrack] = useState<WatchPartyTrack>('H-Sub');
+  const [audioLanguage, setAudioLanguage] = useState<AudioLanguageCode>(
+    () => resolveAudioLanguageOption(state.playerPrefs.audioLanguage).code,
+  );
   const [roomNameDraft, setRoomNameDraft] = useState('');
   const [isPublic, setIsPublic] = useState(true);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -77,6 +85,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
   useEffect(() => {
     if (!open) return;
     setValidationError(null);
+    setAudioLanguage(resolveAudioLanguageOption(state.playerPrefs.audioLanguage).code);
     initialEpisodeSeedRef.current = initialEpisodeNumber || 1;
     if (mode === 'change-anime') {
       setSelectedAnime(null);
@@ -86,7 +95,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
       setSelectedAnime(initialMedia);
       setSearchOpen(false);
     }
-  }, [open, initialMedia, initialEpisodeNumber, mode]);
+  }, [open, initialMedia, initialEpisodeNumber, mode, state.playerPrefs.audioLanguage]);
 
   // Load initial popular suggestions or search results when modal is open & no anime chosen
   useEffect(() => {
@@ -207,11 +216,15 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
       0,
       episodes.findIndex((ep) => ep.number === episodeNumber),
     );
+    const chosenAudio = resolveAudioLanguageOption(audioLanguage);
+    const derivedTrack: WatchPartyTrack =
+      chosenAudio.serverCategory === 'dub' ? 'Dub' : 'H-Sub';
     onSubmit({
       media: selectedAnime,
       episodes,
       episodeIndex: epIdx,
-      track,
+      track: derivedTrack,
+      audioLanguage: chosenAudio.code,
       roomName: roomNameDraft.trim() || defaultRoomName,
       isPublic,
       userName: displayName,
@@ -383,7 +396,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                 />
               </div>
 
-              {/* Track & Privacy Grid */}
+              {/* Audio Language & Privacy Grid */}
               <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
                 <div className="space-y-1">
                   <span
@@ -391,17 +404,20 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                       compact ? 'hidden sm:block' : 'block'
                     } text-[10px] font-extrabold tracking-[0.1em] uppercase text-white/60`}
                   >
-                    Track
+                    Audio Language
                   </span>
-                  <div className="grid grid-cols-2 p-0.5 rounded-xl bg-white/8 border border-white/12">
-                    {(['H-Sub', 'Dub'] as WatchPartyTrack[]).map((opt) => {
-                      const active = track === opt;
+                  <div className="grid grid-cols-4 p-0.5 rounded-xl bg-white/8 border border-white/12">
+                    {AUDIO_LANGUAGE_OPTIONS.map((opt) => {
+                      const active = audioLanguage === opt.code;
                       return (
                         <button
-                          key={opt}
+                          key={opt.code}
                           type="button"
-                          data-testid={`create-room-track-${opt.toLowerCase().replace(/[^a-z]/g, '')}`}
-                          onClick={() => setTrack(opt)}
+                          title={opt.label}
+                          aria-label={opt.label}
+                          aria-pressed={active}
+                          data-testid={`create-room-audio-${opt.code}`}
+                          onClick={() => setAudioLanguage(opt.code)}
                           className={`${
                             compact ? 'py-1 sm:py-1.5' : 'py-1.5'
                           } rounded-lg text-[10px] sm:text-[11px] font-extrabold whitespace-nowrap transition-colors ${
@@ -410,7 +426,7 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
                               : 'text-white/70 hover:text-white hover:bg-white/10'
                           }`}
                         >
-                          {opt}
+                          {opt.shortLabel}
                         </button>
                       );
                     })}
@@ -584,24 +600,26 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
 
               <div className="space-y-2">
                 <span className="block text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--sx-on-surface-muted)]">
-                  Track
+                  Audio Language
                 </span>
-                <div className="grid grid-cols-2 p-1 rounded-full bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12 min-h-[42px]">
-                  {(['H-Sub', 'Dub'] as WatchPartyTrack[]).map((opt) => {
-                    const active = track === opt;
+                <div className="grid grid-cols-2 gap-1.5 p-1.5 rounded-2xl bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12">
+                  {AUDIO_LANGUAGE_OPTIONS.map((opt) => {
+                    const active = audioLanguage === opt.code;
                     return (
                       <button
-                        key={opt}
+                        key={opt.code}
                         type="button"
-                        data-testid={`create-room-track-${opt.toLowerCase().replace(/[^a-z]/g, '')}`}
-                        onClick={() => setTrack(opt)}
-                        className={`rounded-full text-xs font-extrabold whitespace-nowrap transition-colors ${
+                        aria-pressed={active}
+                        data-testid={`create-room-audio-${opt.code}`}
+                        onClick={() => setAudioLanguage(opt.code)}
+                        className={`px-3 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap transition-colors flex items-center justify-center gap-1.5 ${
                           active
                             ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
-                            : 'text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+                            : 'text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)] hover:bg-white/25 dark:hover:bg-white/[0.06]'
                         }`}
                       >
-                        {opt}
+                        <span className="font-mono-tabular opacity-80">{opt.shortLabel}</span>
+                        <span>{opt.label.replace(/\s*\([^)]*\)/, '')}</span>
                       </button>
                     );
                   })}
@@ -774,24 +792,27 @@ export const CreateWatchRoomModal: React.FC<CreateWatchRoomModalProps> = ({
 
                   <div className="space-y-2">
                     <span className="block text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--sx-on-surface-muted)]">
-                      Track
+                      Audio Language
                     </span>
-                    <div className="grid grid-cols-2 p-1 rounded-full bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12 min-h-[44px]">
-                      {(['H-Sub', 'Dub'] as WatchPartyTrack[]).map((opt) => {
-                        const active = track === opt;
+                    <div className="grid grid-cols-4 p-1 rounded-full bg-white/30 dark:bg-white/[0.06] border border-white/45 dark:border-white/12 min-h-[44px]">
+                      {AUDIO_LANGUAGE_OPTIONS.map((opt) => {
+                        const active = audioLanguage === opt.code;
                         return (
                           <button
-                            key={opt}
+                            key={opt.code}
                             type="button"
-                            data-testid={`create-room-track-${opt.toLowerCase().replace(/[^a-z]/g, '')}`}
-                            onClick={() => setTrack(opt)}
+                            title={opt.label}
+                            aria-label={opt.label}
+                            aria-pressed={active}
+                            data-testid={`create-room-audio-${opt.code}`}
+                            onClick={() => setAudioLanguage(opt.code)}
                             className={`rounded-full text-xs font-extrabold whitespace-nowrap transition-colors ${
                               active
                                 ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] shadow-sm'
                                 : 'text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
                             }`}
                           >
-                            {opt}
+                            {opt.shortLabel}
                           </button>
                         );
                       })}

@@ -48,6 +48,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import {
+  DownloadTask,
   getPreferredTitle,
   getStatusLabel,
   MediaType,
@@ -61,8 +62,11 @@ import { searchAniList } from '../services/anilist';
 import { searchJikan } from '../services/jikan';
 import {
   INBUILT_SOURCES,
+  resolveChapterPages,
   resolveChaptersForMedia,
   resolveEpisodesForMedia,
+  resolveVideoServers,
+  resolveVideoStreamAsync,
 } from '../services/sourceEngine';
 import {
   filterAvailableSources,
@@ -83,9 +87,11 @@ import {
 } from '../components/Skeleton';
 import { EPISODE_CHAPTER_STYLES, EpisodeChapterStyle } from '../data/themePresets';
 import {
+  buildMediaScopeKey,
   formatChapterMetaLine,
   formatEpisodeMetaLine,
   getNextEpisodeChapterStyle,
+  isEpisodeOrChapterWatched,
   resolveEpisodeChapterStyle,
 } from '../utils/episodeChapterStyle';
 import {
@@ -94,6 +100,7 @@ import {
   filterByEpisodeRange,
   formatCompactNumber,
   formatNextAiringInfo,
+  getEpisodeRangeCount,
   partitionMediaRelations,
   stripHtmlTags,
 } from '../utils/detailsLayout';
@@ -139,7 +146,12 @@ export const DetailsPage: React.FC = () => {
     getLibraryEntry,
     upsertLibraryEntry,
     removeLibraryEntry,
+    toggleItemBookmark,
     enqueueDownload,
+    updateDownloadTask,
+    setRealDownloadActive,
+    toggleDownloadPause,
+    removeDownload,
     addComment,
     likeComment,
   } = useApp();
@@ -149,6 +161,7 @@ export const DetailsPage: React.FC = () => {
       media?: UnifiedMedia;
       initialTab?: DetailsTab;
       episodeIndex?: number;
+      episodeNumber?: number;
       startTime?: number;
       resumePlaying?: boolean;
       activeSubLang?: string;
@@ -210,7 +223,7 @@ export const DetailsPage: React.FC = () => {
   const [epFilter, setEpFilter] = useState('');
   const [epOrderAsc, setEpOrderAsc] = useState(true);
   const [selectedRangeId, setSelectedRangeId] = useState<string>('all');
-  const [onlyDownloaded, setOnlyDownloaded] = useState(false);
+  const [itemFilterMode, setItemFilterMode] = useState<'all' | 'downloaded' | 'bookmarked'>('all');
 
   const isManga = media.type === 'MANGA' || media.type === 'NOVEL';
   const availableSources = useMemo(() => {
@@ -335,7 +348,7 @@ export const DetailsPage: React.FC = () => {
 
     setLoadingDetails(true);
     setSelectedRangeId('all');
-    setOnlyDownloaded(false);
+    setItemFilterMode('all');
     setEpFilter('');
     setMatchedTitleOverride('');
     setMatchedOverrideMedia(null);
@@ -373,6 +386,13 @@ export const DetailsPage: React.FC = () => {
         if (cancelled) return;
         setEpisodes(eps);
         setSelectedRangeId('all');
+        if (typeof navMediaState?.episodeNumber === 'number') {
+          const idx = eps.findIndex((e) => e.number === navMediaState.episodeNumber);
+          if (idx >= 0) {
+            setHasPickedInlineEpisode(true);
+            setInlineEpisodeIndex(idx);
+          }
+        }
       })
       .catch(() => {
         // Keep previously loaded episodes on transient failure
@@ -495,6 +515,16 @@ export const DetailsPage: React.FC = () => {
     [state.history, media.id],
   );
 
+  const downloadTaskByNumber = useMemo(() => {
+    const map = new Map<number, DownloadTask>();
+    for (const d of state.downloads) {
+      if (d.mediaId === media.id) {
+        map.set(d.itemNumber, d);
+      }
+    }
+    return map;
+  }, [state.downloads, media.id]);
+
   const downloadedNumbers = useMemo(() => {
     const set = new Set<number>();
     for (const d of state.downloads) {
@@ -509,6 +539,23 @@ export const DetailsPage: React.FC = () => {
     () => state.downloads.filter((d) => d.mediaId === media.id).length,
     [state.downloads, media.id],
   );
+
+  const watchedSet = useMemo(() => {
+    const scopeKey = buildMediaScopeKey(media.id, media.type);
+    return new Set<number>(state.watchedItems[scopeKey] || []);
+  }, [state.watchedItems, media.id, media.type]);
+
+  const bookmarkedSet = useMemo(() => {
+    const set = new Set<number>();
+    for (const b of state.bookmarkedItems) {
+      if (b.mediaId === media.id && b.mediaType === media.type) {
+        set.add(b.itemNumber);
+      }
+    }
+    return set;
+  }, [state.bookmarkedItems, media.id, media.type]);
+
+  const mediaBookmarkedCount = bookmarkedSet.size;
 
   const { seasons, otherRelations } = useMemo(
     () => partitionMediaRelations(media.relations),
@@ -528,23 +575,25 @@ export const DetailsPage: React.FC = () => {
     const ranged = filterByEpisodeRange(episodes, activeRange);
     const ordered = epOrderAsc ? ranged : [...ranged].reverse();
     return ordered.filter((ep) => {
-      if (onlyDownloaded && !downloadedNumbers.has(ep.number)) return false;
+      if (itemFilterMode === 'downloaded' && !downloadedNumbers.has(ep.number)) return false;
+      if (itemFilterMode === 'bookmarked' && !bookmarkedSet.has(ep.number)) return false;
       if (!epFilter.trim()) return true;
       const q = epFilter.toLowerCase();
       return ep.title.toLowerCase().includes(q) || String(ep.number).includes(q);
     });
-  }, [episodes, activeRange, epOrderAsc, onlyDownloaded, downloadedNumbers, epFilter]);
+  }, [episodes, activeRange, epOrderAsc, itemFilterMode, downloadedNumbers, bookmarkedSet, epFilter]);
 
   const filteredChapters = useMemo(() => {
     const ranged = filterByEpisodeRange(chapters, activeRange);
     const ordered = epOrderAsc ? ranged : [...ranged].reverse();
     return ordered.filter((ch) => {
-      if (onlyDownloaded && !downloadedNumbers.has(ch.number)) return false;
+      if (itemFilterMode === 'downloaded' && !downloadedNumbers.has(ch.number)) return false;
+      if (itemFilterMode === 'bookmarked' && !bookmarkedSet.has(ch.number)) return false;
       if (!epFilter.trim()) return true;
       const q = epFilter.toLowerCase();
       return ch.title.toLowerCase().includes(q) || String(ch.number).includes(q);
     });
-  }, [chapters, activeRange, epOrderAsc, onlyDownloaded, downloadedNumbers, epFilter]);
+  }, [chapters, activeRange, epOrderAsc, itemFilterMode, downloadedNumbers, bookmarkedSet, epFilter]);
 
   const resumeIndex = useMemo(() => {
     if (isManga) {
@@ -563,6 +612,124 @@ export const DetailsPage: React.FC = () => {
   const hasStarted = Boolean(historyEntry) || currentProgress > 0;
   const activeInlineEpisodeIndex = hasPickedInlineEpisode ? inlineEpisodeIndex : resumeIndex;
   const activeInlineEpisode = episodes[activeInlineEpisodeIndex] ?? resumeItem;
+
+  const triggerBrowserFileDownload = (blob: Blob, filename: string) => {
+    if (typeof document === 'undefined' || typeof URL === 'undefined') return;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+
+  const handleDownloadItem = (item: { id: string; number: number; title: string }) => {
+    const existing = downloadTaskByNumber.get(item.number);
+    if (existing && existing.status !== 'completed') {
+      toggleDownloadPause(existing.id);
+      return;
+    }
+
+    const quality = isManga ? 'Chapter' : state.playerPrefs.defaultQuality;
+    const taskId = enqueueDownload(media, item.number, item.title, quality);
+    const safeTitle = (media.title.english || media.title.romaji || 'Media')
+      .replace(/[^a-z0-9\-_]+/gi, '_')
+      .slice(0, 40);
+
+    if (isManga) {
+      const ch = chapters.find((c) => c.number === item.number) ?? {
+        id: item.id,
+        number: item.number,
+        title: item.title,
+      };
+      setRealDownloadActive(taskId, true);
+      window.setTimeout(() => {
+        updateDownloadTask(taskId, { progress: 0.42, status: 'downloading' });
+        const pages = resolveChapterPages(media, ch);
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle} - Chapter ${ch.number}</title><style>body{margin:0;background:#111;color:#fff;font-family:sans-serif;text-align:center}img{max-width:860px;width:100%;display:block;margin:8px auto}</style></head><body><h2>${safeTitle} · Chapter ${ch.number}: ${ch.title}</h2>${pages.map((p, i) => `<img src="${p}" alt="Page ${i + 1}" />`).join('')}</body></html>`;
+        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        window.setTimeout(() => {
+          updateDownloadTask(taskId, {
+            progress: 1,
+            downloadedBytes: blob.size,
+            totalBytes: blob.size,
+            status: 'completed',
+          });
+          setRealDownloadActive(taskId, false);
+          triggerBrowserFileDownload(blob, `${safeTitle}_Ch${ch.number}.html`);
+        }, 350);
+      }, 300);
+      return;
+    }
+
+    const ep = episodes.find((e) => e.number === item.number) ?? {
+      id: item.id,
+      number: item.number,
+      title: item.title,
+    };
+    const servers = resolveVideoServers(selectedSourceId, activeSource?.name);
+    const firstServer = servers[0];
+    if (!firstServer) return;
+
+    void (async () => {
+      try {
+        const stream = await resolveVideoStreamAsync({
+          media,
+          episode: ep,
+          server: firstServer,
+          sourceId: selectedSourceId,
+          sourceName: activeSource?.name,
+          sourceBaseUrl: activeSource?.baseUrl,
+          overrideTitle: matchedTitleOverride.trim() || undefined,
+        });
+
+        const isDirectVideo =
+          !stream.isHls && !/\.m3u8(\?|$)/i.test(stream.url);
+        if (!isDirectVideo) return;
+
+        const resp = await fetch(stream.url);
+        if (!resp.ok || !resp.body) return;
+        setRealDownloadActive(taskId, true);
+        const totalHeader = Number(resp.headers.get('content-length') || 0);
+        const estimatedTotal = totalHeader > 0 ? totalHeader : 24 * 1024 * 1024;
+        const reader = resp.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let received = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            received += value.byteLength;
+            const ratio = Math.min(0.98, Math.max(0.08, received / estimatedTotal));
+            updateDownloadTask(taskId, {
+              progress: ratio,
+              downloadedBytes: received,
+              totalBytes: Math.max(estimatedTotal, received),
+              status: 'downloading',
+            });
+          }
+        }
+
+        const blob = new Blob(chunks as BlobPart[], { type: 'video/mp4' });
+        updateDownloadTask(taskId, {
+          progress: 1,
+          downloadedBytes: blob.size,
+          totalBytes: blob.size,
+          status: 'completed',
+        });
+        setRealDownloadActive(taskId, false);
+        triggerBrowserFileDownload(blob, `${safeTitle}_EP${ep.number}.mp4`);
+      } catch {
+        // Fallback to background worker progress completion if stream is HLS or cross-origin blocked
+        setRealDownloadActive(taskId, false);
+      }
+    })();
+  };
 
   const handleLaunchMedia = (indexOverride?: number) => {
     if (isManga && chapters.length > 0) {
@@ -638,7 +805,7 @@ export const DetailsPage: React.FC = () => {
     <div
       data-testid="details-page"
       data-restoring-scroll={isRestoringScroll ? 'true' : 'false'}
-      className="relative min-h-screen text-[var(--sx-on-surface)] overflow-x-hidden"
+      className="relative min-h-screen text-[var(--sx-on-surface)] overflow-x-clip"
     >
       {/* Full-bleed Ambient Blurred Poster Backdrop */}
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-[var(--sx-surface)]">
@@ -1603,115 +1770,238 @@ export const DetailsPage: React.FC = () => {
               const StyleIcon = styleIconMap[activeEpStyle];
 
               const listItems = isManga
-                ? filteredChapters.map((ch) => ({
-                    id: ch.id,
-                    number: ch.number,
-                    title: ch.title,
-                    meta: formatChapterMetaLine(ch),
-                    thumbnail: media.banner || media.cover || null,
-                    isCurrent: currentProgress + 1 === ch.number,
-                  }))
-                : filteredEpisodes.map((ep) => ({
-                    id: ep.id,
-                    number: ep.number,
-                    title: ep.title,
-                    meta: formatEpisodeMetaLine(ep),
-                    thumbnail: ep.thumbnail || media.banner || media.cover || null,
-                    isFiller: ep.isFiller,
-                    isCurrent:
+                ? filteredChapters.map((ch) => {
+                    const isCurrent = currentProgress + 1 === ch.number;
+                    return {
+                      id: ch.id,
+                      number: ch.number,
+                      title: ch.title,
+                      meta: formatChapterMetaLine(ch),
+                      thumbnail: media.banner || media.cover || null,
+                      isCurrent,
+                      isWatched: isEpisodeOrChapterWatched({
+                        itemNumber: ch.number,
+                        currentProgress,
+                        watchedSet,
+                        isCurrent,
+                      }),
+                      isBookmarked: bookmarkedSet.has(ch.number),
+                      downloadTask: downloadTaskByNumber.get(ch.number) ?? null,
+                    };
+                  })
+                : filteredEpisodes.map((ep) => {
+                    const isCurrent =
                       activeTab === 'watch' && activeInlineEpisode
                         ? ep.number === activeInlineEpisode.number
-                        : currentProgress + 1 === ep.number,
-                  }));
+                        : currentProgress + 1 === ep.number;
+                    return {
+                      id: ep.id,
+                      number: ep.number,
+                      title: ep.title,
+                      meta: formatEpisodeMetaLine(ep),
+                      thumbnail: ep.thumbnail || media.banner || media.cover || null,
+                      isFiller: ep.isFiller,
+                      isCurrent,
+                      isWatched: isEpisodeOrChapterWatched({
+                        itemNumber: ep.number,
+                        currentProgress,
+                        watchedSet,
+                        isCurrent,
+                      }),
+                      isBookmarked: bookmarkedSet.has(ep.number),
+                      downloadTask: downloadTaskByNumber.get(ep.number) ?? null,
+                    };
+                  });
 
               return (
                 <>
-                  <div className="flex flex-wrap items-center justify-between gap-2.5">
-                    <div className="relative flex-1 min-w-[200px]">
-                      <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  {/* Sticky Search + Controls Toolbar while scrolling Episodes / Chapters */}
+                  <div
+                    data-testid="episode-sticky-toolbar"
+                    className="sticky top-0 z-30 pt-2.5 pb-1 -mx-1 px-1 space-y-2.5"
+                  >
+                    {/* Episode Search Input */}
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2 z-10 pointer-events-none" />
                       <input
                         type="text"
+                        data-testid="details-episode-search-input"
                         value={epFilter}
                         onChange={(e) => setEpFilter(e.target.value)}
                         placeholder={isManga ? 'Search chapters...' : 'Search episodes...'}
-                        className="w-full pl-10 pr-3 py-2.5 rounded-full bg-[var(--sx-surface-container)]/32 dark:bg-[var(--sx-surface-container)]/36 backdrop-blur-lg backdrop-saturate-150 border border-white/45 dark:border-white/12 ring-1 ring-inset ring-white/20 dark:ring-white/5 text-xs font-semibold focus:outline-none focus:border-[var(--sx-primary)]"
+                        className="w-full pl-10 pr-3 py-2.5 rounded-full bg-[var(--sx-surface-container)]/48 dark:bg-[var(--sx-surface-container)]/54 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/5 shadow-md text-xs font-semibold focus:outline-none focus:border-[var(--sx-primary)]"
                       />
                     </div>
 
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={() => setOnlyDownloaded((v) => !v)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-full border text-xs font-bold transition-colors ${
-                          onlyDownloaded
-                            ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-transparent'
-                            : 'bg-[var(--sx-surface-container)]/32 dark:bg-[var(--sx-surface-container)]/36 backdrop-blur-lg backdrop-saturate-150 border-white/45 dark:border-white/12 hover:border-[var(--sx-primary)]'
-                        }`}
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        <span className="tabular-nums">Downloaded ({downloadedAnyCount})</span>
-                      </button>
+                    {/* Episode / Chapter Filter, Style, Sort & Range Card */}
+                    <div
+                      data-testid="episode-controls-card"
+                      className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/48 dark:bg-[var(--sx-surface-container)]/54 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 shadow-[0_12px_34px_rgba(15,23,42,0.14)] ring-1 ring-inset ring-white/25 dark:ring-white/5 p-2.5 sm:p-3 space-y-2.5"
+                    >
+                      {/* Top Row: Online / Downloaded / Bookmarked + Ep Style & Sort By actions */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0 overflow-x-auto no-scrollbar">
+                          <button
+                            type="button"
+                            data-testid="details-filter-online"
+                            aria-label={`Online (${rawItemsCount})`}
+                            title={`Online (${rawItemsCount})`}
+                            aria-pressed={itemFilterMode === 'all'}
+                            onClick={() => setItemFilterMode('all')}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-extrabold whitespace-nowrap border transition-colors ${
+                              itemFilterMode === 'all'
+                                ? 'rounded-full bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 border-[var(--sx-primary)]/35 text-[var(--sx-primary)] shadow-sm'
+                                : 'rounded-xl bg-[var(--sx-surface-high)]/65 dark:bg-white/6 border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
+                            }`}
+                          >
+                            <Radio className="w-3.5 h-3.5 shrink-0" />
+                            <span
+                              className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums leading-none ${
+                                itemFilterMode === 'all'
+                                  ? 'bg-[var(--sx-primary)]/18 text-[var(--sx-primary)]'
+                                  : 'bg-[var(--sx-surface-container)]/85 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
+                              }`}
+                            >
+                              {rawItemsCount}
+                            </span>
+                          </button>
 
-                      <button
-                        type="button"
-                        data-testid="details-episode-style-toggle"
-                        onClick={() =>
-                          updateUiPrefs({
-                            episodeChapterStyle: getNextEpisodeChapterStyle(activeEpStyle),
-                          })
-                        }
-                        title={`Switch layout (current: ${styleDef.name})`}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-[var(--sx-surface-container)]/32 dark:bg-[var(--sx-surface-container)]/36 backdrop-blur-lg backdrop-saturate-150 border border-white/45 dark:border-white/12 text-xs font-bold hover:border-[var(--sx-primary)] transition-colors"
-                      >
-                        <StyleIcon className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
-                        <span>{styleDef.name}</span>
-                      </button>
+                          <button
+                            type="button"
+                            data-testid="details-filter-downloaded"
+                            aria-label={`Downloaded (${downloadedAnyCount})`}
+                            title={`Downloaded (${downloadedAnyCount})`}
+                            aria-pressed={itemFilterMode === 'downloaded'}
+                            onClick={() =>
+                              setItemFilterMode((m) => (m === 'downloaded' ? 'all' : 'downloaded'))
+                            }
+                            className={`inline-flex items-center justify-center w-8 h-8 rounded-full border transition-colors shrink-0 ${
+                              itemFilterMode === 'downloaded'
+                                ? 'bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 border-[var(--sx-primary)]/35 text-[var(--sx-primary)] shadow-sm'
+                                : 'bg-[var(--sx-surface-high)]/65 dark:bg-white/6 border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
+                            }`}
+                          >
+                            <Download className="w-3.5 h-3.5 shrink-0" />
+                          </button>
 
-                      <button
-                        type="button"
-                        onClick={() => setEpOrderAsc((v) => !v)}
-                        aria-label="Toggle episode sort order"
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-[var(--sx-surface-container)]/32 dark:bg-[var(--sx-surface-container)]/36 backdrop-blur-lg backdrop-saturate-150 border border-white/45 dark:border-white/12 text-xs font-bold hover:border-[var(--sx-primary)] transition-colors"
-                      >
-                        <ArrowDownUp className="w-3.5 h-3.5" />
-                        <span>{epOrderAsc ? 'Asc' : 'Desc'}</span>
-                      </button>
+                          <button
+                            type="button"
+                            data-testid="details-filter-bookmarked"
+                            aria-label={`Bookmarked (${mediaBookmarkedCount})`}
+                            title={`Bookmarked (${mediaBookmarkedCount})`}
+                            aria-pressed={itemFilterMode === 'bookmarked'}
+                            onClick={() =>
+                              setItemFilterMode((m) => (m === 'bookmarked' ? 'all' : 'bookmarked'))
+                            }
+                            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full border text-xs font-extrabold transition-colors shrink-0 ${
+                              itemFilterMode === 'bookmarked'
+                                ? 'bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 border-[var(--sx-primary)]/35 text-[var(--sx-primary)] shadow-sm'
+                                : 'bg-[var(--sx-surface-high)]/65 dark:bg-white/6 border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
+                            }`}
+                          >
+                            <Bookmark
+                              className={`w-3.5 h-3.5 shrink-0 ${
+                                mediaBookmarkedCount > 0 ? 'fill-current text-[var(--sx-primary)]' : ''
+                              }`}
+                            />
+                            {mediaBookmarkedCount > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums leading-none bg-[var(--sx-primary)]/15 text-[var(--sx-primary)]">
+                                {mediaBookmarkedCount}
+                              </span>
+                            )}
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            data-testid="details-episode-style-toggle"
+                            onClick={() =>
+                              updateUiPrefs({
+                                episodeChapterStyle: getNextEpisodeChapterStyle(activeEpStyle),
+                              })
+                            }
+                            aria-label={`Layout style: ${styleDef.name}`}
+                            title={`Switch layout (current: ${styleDef.name})`}
+                            className="inline-flex items-center justify-center gap-1.5 w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-full bg-[var(--sx-surface-high)]/75 dark:bg-white/8 border border-[var(--sx-outline)] text-xs font-extrabold text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors whitespace-nowrap"
+                          >
+                            <StyleIcon className="w-3.5 h-3.5 text-[var(--sx-primary)] shrink-0" />
+                            <span className="hidden sm:inline">{styleDef.name}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            data-testid="details-episode-sort-toggle"
+                            onClick={() => setEpOrderAsc((v) => !v)}
+                            aria-label={`Sort order: ${epOrderAsc ? 'Ascending' : 'Descending'}`}
+                            title={`Sort order: ${epOrderAsc ? 'Asc' : 'Desc'}`}
+                            className="inline-flex items-center justify-center gap-1.5 w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-full bg-[var(--sx-surface-high)]/75 dark:bg-white/8 border border-[var(--sx-outline)] text-xs font-extrabold text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors whitespace-nowrap"
+                          >
+                            <ArrowDownUp className="w-3.5 h-3.5 text-[var(--sx-primary)] shrink-0" />
+                            <span className="hidden sm:inline">{epOrderAsc ? 'Asc' : 'Desc'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Bottom Row: All + Episode / Chapter Range Pills with Count Badges */}
+                      {rawItemsCount > 0 && (
+                        <div
+                          data-testid="episode-range-pills"
+                          className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-0.5"
+                        >
+                          <button
+                            type="button"
+                            data-testid="episode-range-all"
+                            onClick={() => setSelectedRangeId('all')}
+                            className={`inline-flex items-center gap-2 px-3 py-1.5 text-xs font-extrabold whitespace-nowrap border transition-colors tabular-nums shrink-0 ${
+                              selectedRangeId === 'all'
+                                ? 'rounded-full bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 border-[var(--sx-primary)]/35 text-[var(--sx-primary)] shadow-sm'
+                                : 'rounded-xl bg-[var(--sx-surface-high)]/65 dark:bg-white/6 border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
+                            }`}
+                          >
+                            <span>All</span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums leading-none ${
+                                selectedRangeId === 'all'
+                                  ? 'bg-[var(--sx-primary)]/18 text-[var(--sx-primary)]'
+                                  : 'bg-[var(--sx-surface-container)]/85 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
+                              }`}
+                            >
+                              {rawItemsCount}
+                            </span>
+                          </button>
+                          {episodeRanges.map((range) => {
+                            const isSelected = selectedRangeId === range.id;
+                            const rangeCount = getEpisodeRangeCount(range);
+                            return (
+                              <button
+                                key={range.id}
+                                type="button"
+                                data-testid={`episode-range-${range.id}`}
+                                onClick={() => setSelectedRangeId(range.id)}
+                                className={`inline-flex items-center gap-2 px-3 py-1.5 text-xs font-extrabold whitespace-nowrap border transition-colors tabular-nums shrink-0 ${
+                                  isSelected
+                                    ? 'rounded-full bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 border-[var(--sx-primary)]/35 text-[var(--sx-primary)] shadow-sm'
+                                    : 'rounded-xl bg-[var(--sx-surface-high)]/65 dark:bg-white/6 border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
+                                }`}
+                              >
+                                <span>{range.label}</span>
+                                <span
+                                  className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums leading-none ${
+                                    isSelected
+                                      ? 'bg-[var(--sx-primary)]/18 text-[var(--sx-primary)]'
+                                      : 'bg-[var(--sx-surface-container)]/85 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
+                                  }`}
+                                >
+                                  {rangeCount}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </div>
-
-                  {/* Episode / Chapter Range Pills */}
-                  {episodeRanges.length > 0 && (
-                    <div
-                      data-testid="episode-range-pills"
-                      className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setSelectedRangeId('all')}
-                        className={`px-3.5 py-1.5 rounded-full text-xs font-extrabold whitespace-nowrap border transition-colors tabular-nums ${
-                          selectedRangeId === 'all'
-                            ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-transparent shadow-sm'
-                            : 'bg-[var(--sx-surface-container)]/32 dark:bg-[var(--sx-surface-container)]/36 backdrop-blur-lg backdrop-saturate-150 border-white/45 dark:border-white/12 text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
-                        }`}
-                      >
-                        All ({rawItemsCount})
-                      </button>
-                      {episodeRanges.map((range) => (
-                        <button
-                          key={range.id}
-                          type="button"
-                          onClick={() => setSelectedRangeId(range.id)}
-                          className={`px-3.5 py-1.5 rounded-full text-xs font-extrabold whitespace-nowrap border transition-colors tabular-nums ${
-                            selectedRangeId === range.id
-                              ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-transparent shadow-sm'
-                              : 'bg-[var(--sx-surface-container)]/32 dark:bg-[var(--sx-surface-container)]/36 backdrop-blur-lg backdrop-saturate-150 border-white/45 dark:border-white/12 text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
-                          }`}
-                        >
-                          {range.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
 
                   {(loadingDetails || resolvingEpisodes) && rawItemsCount === 0 ? (
                     <EpisodeListSkeleton style={activeEpStyle} />
@@ -1721,7 +2011,9 @@ export const DetailsPage: React.FC = () => {
                         No {isManga ? 'chapters' : 'episodes'} match your filter
                       </p>
                       <p className="text-xs text-[var(--sx-on-surface-muted)]">
-                        Try clearing the search box or switching range to All.
+                        {itemFilterMode === 'bookmarked'
+                          ? `Bookmark favorite ${isManga ? 'chapters' : 'episodes'} in Classic style to see them here.`
+                          : 'Try clearing the search box or switching range to All.'}
                       </p>
                     </div>
                   ) : (
@@ -1741,16 +2033,14 @@ export const DetailsPage: React.FC = () => {
                         }
                       }}
                       onDownloadItem={(item) => {
-                        if (isManga) {
-                          enqueueDownload(media, item.number, item.title);
-                        } else {
-                          enqueueDownload(
-                            media,
-                            item.number,
-                            item.title,
-                            state.playerPrefs.defaultQuality,
-                          );
-                        }
+                        handleDownloadItem(item);
+                      }}
+                      onDeleteDownload={(item) => {
+                        const existing = downloadTaskByNumber.get(item.number);
+                        if (existing) removeDownload(existing.id);
+                      }}
+                      onToggleBookmark={(item) => {
+                        toggleItemBookmark(media, item.number, item.title, item.thumbnail);
                       }}
                     />
                   )}
@@ -2381,7 +2671,7 @@ export const DetailsPage: React.FC = () => {
 
                 {/* Search Sources Input */}
                 <div className="relative shrink-0">
-                  <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2 z-10 pointer-events-none" />
                   <input
                     type="text"
                     data-testid="source-picker-search"
@@ -2543,7 +2833,7 @@ export const DetailsPage: React.FC = () => {
                 {/* Top Search Bar + List/Grid Layout Toggle (matching reference) */}
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="relative flex-1 min-w-0">
-                    <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <Search className="w-4 h-4 text-[var(--sx-on-surface-muted)] absolute left-3.5 top-1/2 -translate-y-1/2 z-10 pointer-events-none" />
                     <input
                       type="text"
                       data-testid="wrong-title-search-input"

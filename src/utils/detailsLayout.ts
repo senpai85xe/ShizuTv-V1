@@ -43,6 +43,14 @@ export function filterByEpisodeRange<T extends { number: number }>(
 }
 
 /**
+ * Returns the number of episodes or chapters spanned by an EpisodeRange.
+ */
+export function getEpisodeRangeCount(range: Pick<EpisodeRange, 'start' | 'end'>): number {
+  if (!Number.isFinite(range.start) || !Number.isFinite(range.end)) return 0;
+  return Math.max(0, range.end - range.start + 1);
+}
+
+/**
  * Partitions AniList relations into direct story continuity entries (PREQUEL / SEQUEL)
  * for the "Seasons" strip vs all other relations (ADAPTATION, SIDE_STORY, ALTERNATIVE, etc.).
  */

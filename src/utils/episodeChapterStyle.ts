@@ -51,7 +51,7 @@ export function getEpisodeChapterContainerClass(
         ? 'grid grid-cols-4 gap-2'
         : 'grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2';
     case 'compact':
-      return 'flex flex-col divide-y divide-[var(--sx-outline)]/60 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] overflow-hidden';
+      return 'flex flex-col divide-y divide-white/25 dark:divide-white/10 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/28 dark:bg-[var(--sx-surface-container)]/32 backdrop-blur-lg backdrop-saturate-150 border border-white/45 dark:border-white/12 shadow-[0_6px_24px_rgba(15,23,42,0.06)] ring-1 ring-inset ring-white/20 dark:ring-white/5 overflow-hidden';
     case 'cover':
       return previewMode
         ? 'grid grid-cols-1 md:grid-cols-2 gap-2'
@@ -117,5 +117,36 @@ export function shouldUseLightweightEpisodeRow(totalCount: number): boolean {
 
 export function shouldAnimateEpisodeRow(index: number, previewMode = false): boolean {
   return !previewMode && index >= 0 && index < MAX_ANIMATED_EPISODE_ROWS;
+}
+
+export function buildMediaItemKey(
+  mediaId: string,
+  mediaType: string,
+  itemNumber: number,
+): string {
+  return `${mediaId}-${mediaType}-${itemNumber}`;
+}
+
+export function buildMediaScopeKey(mediaId: string, mediaType: string): string {
+  return `${mediaId}-${mediaType}`;
+}
+
+export function isEpisodeOrChapterWatched(params: {
+  itemNumber: number;
+  currentProgress: number;
+  watchedSet?: ReadonlySet<number>;
+  isCurrent?: boolean;
+}): boolean {
+  const { itemNumber, currentProgress, watchedSet, isCurrent } = params;
+  if (isCurrent) return false;
+  if (Number.isFinite(currentProgress) && currentProgress > 0 && itemNumber <= currentProgress) {
+    return true;
+  }
+  return Boolean(watchedSet && watchedSet.has(itemNumber));
+}
+
+export function formatDownloadProgressPercent(progress: number): number {
+  if (!Number.isFinite(progress)) return 0;
+  return Math.max(0, Math.min(100, Math.round(progress * 100)));
 }
 

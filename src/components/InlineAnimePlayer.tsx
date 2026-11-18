@@ -49,18 +49,20 @@ import {
   AudioLanguageOption,
   buildHlsQualityOptions,
   buildSubtitleBoxCssProps,
+  clampAutoSkipDestination,
   clampEpisodeIndex,
-  computeAutoSkipTarget,
   computeFullscreenRotationStage,
   findActiveSubtitleCue,
   formatScrubberPercent,
   getCommentsScopeKey,
   getEffectiveDurationSeconds,
   getEpisodeNavigationState,
+  getManualSkipInterval,
   getNextVideoFitMode,
   getVideoFitBadgeLabel,
   getVideoFitClass,
   HlsQualityOption,
+  isAutoSkipEligible,
   parseSubtitleText,
   PLAYBACK_SPEED_OPTIONS,
   resolveAudioLanguageOption,
@@ -211,6 +213,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
 
   const [stream, setStream] = useState<VideoStream | null>(null);
   const [streamLoading, setStreamLoading] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [streamRetryNonce, setStreamRetryNonce] = useState(0);
   const [mirrorIndex, setMirrorIndex] = useState(0);
@@ -221,10 +225,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     const serverToUse = selectedServer || rawServers[0];
     setStream(null);
     setStreamLoading(true);
+    setIsBuffering(false);
+    setAutoplayBlocked(false);
     setStreamError(null);
     setMirrorIndex(0);
     setHasVideoFrame(false);
     setPlaying(false);
+    setCurrentTime(pendingStartTimeRef.current ?? 0);
+    setDuration(0);
 
     resolveVideoStreamAsync({
       media,
@@ -293,6 +301,12 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const pipConsumedOnMountRef = useRef(false);
   const isApplyingRemoteSyncRef = useRef(false);
   const lastAppliedSyncSeqRef = useRef<number>(0);
+  const lastDoubleTapAtRef = useRef<number>(0);
+  const lastAutoSkippedRef = useRef<string>('');
+  const lastHistorySavedAtRef = useRef<number>(0);
+  const attemptAutoSkipRef = useRef<(videoEl: HTMLVideoElement | null, rawTime?: number) => void>(
+    () => {},
+  );
 
   const ambientEnabled = state.playerPrefs.ambientGlow;
   const effectiveAmbientEnabled = ambientEnabled && !state.playerPrefs.batterySaver;
@@ -530,7 +544,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     showCreateWatchPartyModal,
   ]);
 
-  // Cleanup timers on unmount
+  // Cleanup timers & native fullscreen on unmount
   useEffect(() => {
     return () => {
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
@@ -539,6 +553,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       if (hudHideTimerRef.current) window.clearTimeout(hudHideTimerRef.current);
       if (tapToggleTimerRef.current) window.clearTimeout(tapToggleTimerRef.current);
       if (gestureGuideTimerRef.current) window.clearTimeout(gestureGuideTimerRef.current);
+      if (wantsFullscreenRef.current && document.fullscreenElement) {
+        wantsFullscreenRef.current = false;
+        document.exitFullscreen().catch(() => {});
+      }
     };
   }, []);
 
@@ -574,6 +592,8 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     const resumePlay = pendingResumePlayRef.current;
 
     setHasVideoFrame(false);
+    setIsBuffering(false);
+    setAutoplayBlocked(false);
     setCurrentTime(resumeAt ?? 0);
     setDuration(0);
     setPlaying(false);
@@ -601,7 +621,12 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       }
       video.playbackRate = speed;
       if (shouldStart) {
-        video.play().catch(() => {});
+        video.play().catch(() => {
+          if (!cancelled) {
+            setAutoplayBlocked(true);
+            setIsBuffering(false);
+          }
+        });
       } else if (!video.paused) {
         video.pause();
       }
@@ -765,18 +790,18 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     return () => window.cancelAnimationFrame(rafId);
   }, [effectiveAmbientEnabled, playing, isFullscreen]);
 
-  // Record Watch History & advance progress when playing an episode
-  useEffect(() => {
-    if (!playing) return;
+  // Record Watch History & advance progress when playing or pausing an episode
+  const persistPlaybackHistory = (posSeconds: number, durSeconds: number) => {
+    lastHistorySavedAtRef.current = Date.now();
     recordHistory({
       mediaId: media.id,
       mediaType: media.type,
       media,
       episodeNumber: currentEpisode.number,
       episodeTitle: currentEpisode.title,
-      positionSeconds: Math.floor(currentTime),
+      positionSeconds: Math.max(0, Math.floor(posSeconds)),
       durationSeconds: Math.floor(
-        getEffectiveDurationSeconds(duration, currentEpisode.durationSeconds, media.duration),
+        getEffectiveDurationSeconds(durSeconds, currentEpisode.durationSeconds, media.duration),
       ),
     });
 
@@ -790,8 +815,21 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
         existing.notes,
       );
     }
+  };
+
+  useEffect(() => {
+    if (!playing) return;
+    persistPlaybackHistory(videoRef.current?.currentTime ?? currentTime, duration);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, currentEpisode.number]);
+
+  useEffect(() => {
+    if (!playing) return;
+    if (Date.now() - lastHistorySavedAtRef.current >= 10000) {
+      persistPlaybackHistory(currentTime, duration);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, Math.floor(currentTime / 10)]);
 
   const mergedSkipIntervals = useMemo<SkipInterval[]>(() => {
     const base = [...skipIntervals];
@@ -822,18 +860,73 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     return base;
   }, [skipIntervals, stream?.intro, stream?.outro]);
 
-  // Auto-skip OP/ED when enabled
-  const autoSkipTarget = computeAutoSkipTarget(currentTime, mergedSkipIntervals, autoSkip);
+  // Auto-skip OP/Recap/ED reliably (including intervals starting at 0s or arriving after metadata)
   useEffect(() => {
-    if (autoSkipTarget !== null && videoRef.current) {
-      videoRef.current.currentTime = autoSkipTarget;
-      setCurrentTime(autoSkipTarget);
-    }
-  }, [autoSkipTarget]);
+    lastAutoSkippedRef.current = '';
+  }, [currentEpisode.id, state.playerPrefs.autoSkipOp, state.playerPrefs.autoSkipEd]);
 
-  const activeSkip = mergedSkipIntervals.find(
-    (s) => currentTime >= s.startTime && currentTime < s.endTime - 0.5,
-  );
+  const attemptAutoSkip = (videoEl: HTMLVideoElement | null, rawTime?: number) => {
+    if (!videoEl || videoEl.readyState < 1) return;
+    const t =
+      typeof rawTime === 'number' && Number.isFinite(rawTime)
+        ? rawTime
+        : videoEl.currentTime || 0;
+    const matched = mergedSkipIntervals.find(
+      (s) =>
+        isAutoSkipEligible(s.skipType, {
+          autoSkipOp: state.playerPrefs.autoSkipOp,
+          autoSkipEd: state.playerPrefs.autoSkipEd,
+        }) &&
+        t >= s.startTime &&
+        t < s.endTime - 0.5,
+    );
+    if (!matched) return;
+    const key = `${currentEpisode.id}:${matched.skipType}:${matched.startTime}:${matched.endTime}`;
+    if (lastAutoSkippedRef.current === key) return;
+    const dest = clampAutoSkipDestination(matched.endTime, videoEl.duration || duration);
+    if (dest > t + 0.25) {
+      lastAutoSkippedRef.current = key;
+      try {
+        videoEl.currentTime = dest;
+        setCurrentTime(dest);
+        emitWatchPartySync('seek', dest, !videoEl.paused);
+      } catch {
+        // Ignore seek errors before ready
+      }
+    }
+  };
+  attemptAutoSkipRef.current = attemptAutoSkip;
+
+  useEffect(() => {
+    attemptAutoSkipRef.current(videoRef.current);
+  }, [mergedSkipIntervals, state.playerPrefs.autoSkipOp, state.playerPrefs.autoSkipEd]);
+
+  // High-frequency time sync while playing so subtitles match audio frame-accurately & auto-skip triggers immediately
+  useEffect(() => {
+    if (!playing) return;
+    let rafId = 0;
+    let lastSyncAt = 0;
+    const tick = (now: number) => {
+      const v = videoRef.current;
+      if (v && !v.paused && !v.ended) {
+        const liveTime = v.currentTime || 0;
+        attemptAutoSkipRef.current(v, liveTime);
+        const intervalMs = state.playerPrefs.batterySaver ? 75 : 30;
+        if (now - lastSyncAt >= intervalMs) {
+          lastSyncAt = now;
+          setCurrentTime(liveTime);
+        }
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [playing, state.playerPrefs.batterySaver]);
+
+  const activeSkip = getManualSkipInterval(currentTime, mergedSkipIntervals, {
+    autoSkipOp: state.playerPrefs.autoSkipOp,
+    autoSkipEd: state.playerPrefs.autoSkipEd,
+  });
 
   const trackKey = `${currentEpisode.id}:${activeSubLang}`;
   const activeTrack =
@@ -1092,6 +1185,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
 
   const handleWatchPartyModalSubmit = (payload: CreateWatchRoomPayload) => {
     setShowCreateWatchPartyModal(false);
+    if (payload.audioLanguage) {
+      updatePlayerPrefs({ audioLanguage: payload.audioLanguage });
+    }
     const v = videoRef.current;
     const snapTime = Math.max(0, Math.floor(v?.currentTime ?? currentTime ?? 0));
     if (v && !v.paused) {
@@ -1108,6 +1204,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
           episodes: payload.episodes,
           episodeIndex: payload.episodeIndex,
           track: payload.track,
+          audioLanguage: payload.audioLanguage,
           roomName: payload.roomName,
           isPublic: payload.isPublic,
           userName: payload.userName,
@@ -1540,6 +1637,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       tapToggleTimerRef.current = null;
     }
     if (isScreenLocked) return;
+    const now = Date.now();
+    if (now - lastDoubleTapAtRef.current < 260) return;
+    lastDoubleTapAtRef.current = now;
     const { stageLocalX, stageWidth } = mapStageGestureCoordinates({
       dx: 0,
       dy: 0,
@@ -1578,6 +1678,12 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   const progressPercent = formatScrubberPercent(currentTime, effectiveDuration);
   const backdropArtwork = currentEpisode.thumbnail || media.banner || media.cover || '';
   const animeTitle = getPreferredTitle(media.title, state.contentPrefs.titlePreference);
+  const awaitingAutoFrame =
+    Boolean(activeStreamUrl) &&
+    !hasVideoFrame &&
+    !autoplayBlocked &&
+    (autoPlay || playing || pendingResumePlayRef.current);
+  const isLoadingOrBuffering = !streamError && (streamLoading || isBuffering || awaitingAutoFrame);
   const hasActiveOverlay =
     showAudioLangMenu ||
     showCommentsModal ||
@@ -1592,11 +1698,14 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     showSpeedMenu,
     showAudioLangMenu,
   });
-  const controlsVisible = shouldShowFullscreenControls({
-    isLocked: isScreenLocked,
-    controlsVisible: isFullscreen ? showControls : showControls || !playing,
-    hasActiveOverlay,
-  });
+  const controlsVisible =
+    isLoadingOrBuffering && !hasActiveOverlay
+      ? false
+      : shouldShowFullscreenControls({
+          isLocked: isScreenLocked,
+          controlsVisible: isFullscreen ? showControls : showControls || !playing,
+          hasActiveOverlay,
+        });
   const topAndBottomVisible = controlsVisible && !overlayBarState.hideBottomBar;
   const centerClusterVisible = controlsVisible && !overlayBarState.hideCenterCluster;
   const totalFsCommentsCount =
@@ -1736,21 +1845,26 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               />
             </>
           )}
-          {!hasVideoFrame && !streamError && (
+          {isLoadingOrBuffering && (
             <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 overflow-hidden z-[5]"
+              data-testid="inline-player-buffering"
+              aria-live="polite"
+              className="pointer-events-none absolute inset-0 z-[25] flex items-center justify-center overflow-hidden p-4"
             >
-              <div
-                className="absolute inset-0 opacity-55"
-                style={{
-                  background:
-                    'radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--sx-player-accent) 26%, transparent), transparent 65%)',
-                }}
-              />
-              <div className="sx-buffering-shimmer w-1/2 h-full bg-gradient-to-r from-transparent via-white/15 to-transparent skew-x-[-20deg]" />
-              <div className="absolute bottom-11 sm:bottom-14 left-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/15 text-[10px] font-bold text-white/90 shadow-lg">
-                <span className="w-1.5 h-1.5 rounded-full bg-[var(--sx-player-accent)] animate-ping" />
+              {!hasVideoFrame && (
+                <>
+                  <div
+                    className="absolute inset-0 opacity-55"
+                    style={{
+                      background:
+                        'radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--sx-player-accent) 26%, transparent), transparent 65%)',
+                    }}
+                  />
+                  <div className="sx-buffering-shimmer pointer-events-none absolute inset-y-0 left-0 w-1/2 h-full bg-gradient-to-r from-transparent via-white/15 to-transparent skew-x-[-20deg]" />
+                </>
+              )}
+              <div className="relative z-10 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black/70 backdrop-blur-xl border border-white/15 text-xs font-bold text-white/95 shadow-2xl">
+                <span className="w-3.5 h-3.5 rounded-full border-2 border-[var(--sx-player-accent)] border-t-transparent animate-spin shrink-0" />
                 <span>
                   {streamLoading
                     ? `Resolving EP ${currentEpisode.number} stream...`
@@ -1806,6 +1920,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             ref={videoRef}
             autoPlay={false}
             playsInline
+            preload="auto"
             style={{ filter: `brightness(${brightness})` }}
             onClick={(e) => {
               if (Date.now() - lastPointerTapAtRef.current < 400) return;
@@ -1816,17 +1931,37 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               handleStageDoubleTap(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect());
             }}
             onPlay={() => {
+              setAutoplayBlocked(false);
               setPlaying(true);
               scheduleHideControls(true);
               triggerGestureGuide();
             }}
             onPause={() => {
               setPlaying(false);
+              setIsBuffering(false);
               setShowControls(true);
+              persistPlaybackHistory(videoRef.current?.currentTime ?? currentTime, duration);
             }}
-            onLoadedData={() => setHasVideoFrame(true)}
-            onPlaying={() => setHasVideoFrame(true)}
+            onWaiting={(e) => {
+              if (!e.currentTarget.paused && !e.currentTarget.ended) {
+                setIsBuffering(true);
+              }
+            }}
+            onCanPlay={() => {
+              setIsBuffering(false);
+              attemptAutoSkip(videoRef.current);
+            }}
+            onLoadedData={() => {
+              setHasVideoFrame(true);
+              setIsBuffering(false);
+            }}
+            onPlaying={() => {
+              setHasVideoFrame(true);
+              setIsBuffering(false);
+              attemptAutoSkip(videoRef.current);
+            }}
             onError={() => {
+              setIsBuffering(false);
               if (!activeStreamUrl) return;
               if (stream?.mirrors && mirrorIndex + 1 < stream.mirrors.length) {
                 setMirrorIndex((i) => i + 1);
@@ -1834,9 +1969,21 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                 setStreamError('Video playback failed on this server. Try retrying or switching servers.');
               }
             }}
-            onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
-            onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
+            onTimeUpdate={() => {
+              const t = videoRef.current?.currentTime || 0;
+              setCurrentTime(t);
+              attemptAutoSkip(videoRef.current, t);
+            }}
+            onLoadedMetadata={() => {
+              setDuration(videoRef.current?.duration || 0);
+              attemptAutoSkip(videoRef.current);
+            }}
             onEnded={() => {
+              setIsBuffering(false);
+              persistPlaybackHistory(
+                videoRef.current?.duration || duration,
+                videoRef.current?.duration || duration,
+              );
               if (autoNext && navState.hasNext) {
                 onChangeEpisodeIndex(navState.nextIndex);
               } else {
@@ -2002,7 +2149,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               </div>
             )}
 
-          {/* Active Subtitle Cue (positioned cleanly above controls / bottom edge) */}
+          {/* Active Subtitle Cue (instant frame-sync by default; optional animation when subtitleAnimation is enabled) */}
           {activeCue && (
             <div
               data-testid="inline-player-subtitle-overlay"
@@ -2016,7 +2163,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                       }px)`
                     : undefined,
               }}
-              className={`pointer-events-none absolute inset-x-3 sm:inset-x-5 flex justify-center z-20 transition-all duration-200 ${
+              className={`pointer-events-none absolute inset-x-3 sm:inset-x-5 flex justify-center z-20 ${
+                state.playerPrefs.subtitleAnimation ? 'transition-all duration-200' : ''
+              } ${
                 state.playerPrefs.subtitlePosition === 'top'
                   ? 'top-16 sm:top-18'
                   : topAndBottomVisible
@@ -2027,16 +2176,20 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
               }`}
             >
               <p
-                key={activeCue.text}
+                key={state.playerPrefs.subtitleAnimation ? activeCue.text : 'static-sub'}
                 style={buildSubtitleBoxCssProps(
                   state.playerPrefs,
                   isFullscreen
                     ? state.playerPrefs.subtitleSize
                     : Math.max(11, Math.min(state.playerPrefs.subtitleSize, 16)),
                 )}
-                className={`sx-player-subtitle-enter px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-xl text-center max-w-[94%] sm:max-w-xl leading-tight sm:leading-snug whitespace-pre-line ${
+                className={`${
+                  state.playerPrefs.subtitleAnimation
+                    ? 'sx-player-subtitle-enter transition-all duration-200'
+                    : ''
+                } px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-xl text-center max-w-[94%] sm:max-w-xl leading-tight sm:leading-snug whitespace-pre-line ${
                   !isFullscreen && controlsVisible ? 'line-clamp-2' : 'line-clamp-3'
-                } transition-all duration-200 ${
+                } ${
                   state.playerPrefs.subtitleBackground
                     ? 'backdrop-blur-md border border-white/10'
                     : ''
@@ -2499,8 +2652,13 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
                     type="button"
                     onClick={() => {
                       if (videoRef.current) {
-                        videoRef.current.currentTime = activeSkip.endTime;
-                        setCurrentTime(activeSkip.endTime);
+                        const dest = clampAutoSkipDestination(
+                          activeSkip.endTime,
+                          videoRef.current.duration || duration,
+                        );
+                        videoRef.current.currentTime = dest;
+                        setCurrentTime(dest);
+                        emitWatchPartySync('seek', dest, !videoRef.current.paused);
                       }
                     }}
                     className="sx-player-skip-pill inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white text-black text-[11px] font-extrabold shadow-lg hover:bg-[var(--sx-player-accent)] hover:text-[var(--sx-player-on-accent)] transition-colors"
@@ -2823,6 +2981,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
             ]
           }
           activeSubLang={activeSubLang}
+          activeTrackLang={activeTrack?.lang}
           onChangeSubLang={(lang) => setActiveSubLang(lang)}
           cues={effectiveCues}
           currentTime={currentTime}

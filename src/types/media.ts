@@ -215,6 +215,17 @@ export interface DownloadTask {
   createdAt: string;
 }
 
+export interface BookmarkedMediaItem {
+  id: string;
+  mediaId: string;
+  mediaType: MediaType;
+  media: UnifiedMedia;
+  itemNumber: number;
+  itemTitle: string;
+  thumbnail?: string | null;
+  addedAt: string;
+}
+
 export interface CalendarEntry {
   id: string;
   episode: number;

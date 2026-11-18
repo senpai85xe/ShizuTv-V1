@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Cloud, Folder, Search, RefreshCw } from 'lucide-react';
+import { Bookmark, BookOpen, Cloud, Folder, Play, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import {
   getPreferredTitle,
@@ -10,8 +10,10 @@ import {
   TrackedStatus,
 } from '../types/media';
 import { fetchAniListUserLibrary } from '../services/anilist';
+import { resolveChaptersForMedia } from '../services/sourceEngine';
 import { MediaCard } from '../components/MediaCard';
 import { MediaCardSkeleton } from '../components/MediaCardSkeleton';
+import { SmartImage } from '../components/SmartImage';
 import { getMediaGridClassName } from '../utils/mediaCard';
 import { useSlidingPill } from '../hooks/useSlidingPill';
 
@@ -26,9 +28,10 @@ const STATUS_TABS: TrackedStatus[] = [
 
 export const LibraryPage: React.FC = () => {
   const navigate = useNavigate();
-  const { state } = useApp();
+  const { state, toggleItemBookmark } = useApp();
   const [mediaType, setMediaType] = useState<MediaType>('ANIME');
   const [status, setStatus] = useState<TrackedStatus>('CURRENT');
+  const [showBookmarks, setShowBookmarks] = useState(false);
   const [mode, setMode] = useState<'local' | 'cloud'>(
     state.anilistToken && state.primaryTracker === 'anilist' ? 'cloud' : 'local',
   );
@@ -58,11 +61,11 @@ export const LibraryPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (mode === 'cloud' && state.anilistToken) {
+    if (!showBookmarks && mode === 'cloud' && state.anilistToken) {
       void loadCloud();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, mediaType, status, state.anilistToken]);
+  }, [showBookmarks, mode, mediaType, status, state.anilistToken]);
 
   const rawEntries =
     mode === 'cloud'
@@ -75,6 +78,21 @@ export const LibraryPage: React.FC = () => {
     return t.includes(filterQuery.toLowerCase());
   });
 
+  const bookmarkedForType = state.bookmarkedItems.filter((item) => {
+    if (item.mediaType !== mediaType) return false;
+    if (!filterQuery.trim()) return true;
+    const mediaTitle = getPreferredTitle(
+      item.media.title,
+      state.contentPrefs.titlePreference,
+    ).toLowerCase();
+    const q = filterQuery.toLowerCase();
+    return mediaTitle.includes(q) || item.itemTitle.toLowerCase().includes(q) || String(item.itemNumber).includes(q);
+  });
+
+  const totalBookmarksForType = state.bookmarkedItems.filter(
+    (item) => item.mediaType === mediaType,
+  ).length;
+
   const modePill = useSlidingPill<HTMLDivElement>(mode, Boolean(state.anilistToken));
   const mediaTypePill = useSlidingPill<HTMLDivElement>(mediaType);
 
@@ -84,15 +102,21 @@ export const LibraryPage: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight">
-            {getStatusLabel(status, mediaType)}
+            {showBookmarks
+              ? `Bookmarked ${mediaType === 'MANGA' ? 'Chapters' : mediaType === 'NOVEL' ? 'Chapters' : 'Episodes'}`
+              : getStatusLabel(status, mediaType)}
           </h1>
           <p className="text-xs text-[var(--sx-on-surface-muted)]">
-            {mode === 'cloud' ? 'Synced from AniList Cloud' : 'Stored in Local Library'}
+            {showBookmarks
+              ? 'Your saved favorite episodes & chapters ready to replay anytime'
+              : mode === 'cloud'
+                ? 'Synced from AniList Cloud'
+                : 'Stored in Local Library'}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {state.anilistToken && (
+          {state.anilistToken && !showBookmarks && (
             <div
               ref={modePill.containerRef}
               className="relative flex items-center gap-1 p-1 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)]"
@@ -177,16 +201,44 @@ export const LibraryPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Status Filter Tabs + Search */}
+      {/* Status Filter Tabs + Bookmarks + Search */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+          <button
+            type="button"
+            data-testid="library-bookmarks-tab"
+            onClick={() => setShowBookmarks((v) => !v)}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 border transition-colors ${
+              showBookmarks
+                ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)]'
+                : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
+            }`}
+          >
+            <Bookmark className={`w-3.5 h-3.5 ${showBookmarks ? 'fill-current' : ''}`} />
+            <span>Bookmarks</span>
+            {totalBookmarksForType > 0 && (
+              <span
+                className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums leading-none ${
+                  showBookmarks
+                    ? 'bg-white/20 text-[var(--sx-on-primary)]'
+                    : 'bg-[var(--sx-primary)]/15 text-[var(--sx-primary)]'
+                }`}
+              >
+                {totalBookmarksForType}
+              </span>
+            )}
+          </button>
+
           {STATUS_TABS.map((s) => (
             <button
               key={s}
               type="button"
-              onClick={() => setStatus(s)}
+              onClick={() => {
+                setShowBookmarks(false);
+                setStatus(s);
+              }}
               className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 border transition-colors ${
-                status === s
+                !showBookmarks && status === s
                   ? 'bg-[var(--sx-primary)] text-[var(--sx-on-primary)] border-[var(--sx-primary)]'
                   : 'bg-[var(--sx-surface-container)] border-[var(--sx-outline)] text-[var(--sx-on-surface-muted)] hover:text-[var(--sx-on-surface)]'
               }`}
@@ -203,11 +255,11 @@ export const LibraryPage: React.FC = () => {
               type="text"
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
-              placeholder="Filter library..."
+              placeholder={showBookmarks ? 'Filter bookmarks...' : 'Filter library...'}
               className="w-full pl-8 pr-3 py-2 rounded-xl bg-[var(--sx-surface-container)] border border-[var(--sx-outline)] text-xs focus:outline-none focus:border-[var(--sx-primary)]"
             />
           </div>
-          {mode === 'cloud' && (
+          {mode === 'cloud' && !showBookmarks && (
             <button
               type="button"
               onClick={loadCloud}
@@ -220,8 +272,117 @@ export const LibraryPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Grid */}
-      {loadingCloud ? (
+      {/* Content */}
+      {showBookmarks ? (
+        bookmarkedForType.length === 0 ? (
+          <div className="py-16 text-center rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/40 backdrop-blur-lg border border-white/25 dark:border-white/10 space-y-3">
+            <Bookmark className="w-8 h-8 mx-auto text-[var(--sx-on-surface-muted)]" />
+            <p className="text-base font-bold">
+              No bookmarked {mediaType === 'ANIME' ? 'episodes' : 'chapters'} yet
+            </p>
+            <p className="text-xs text-[var(--sx-on-surface-muted)] max-w-md mx-auto">
+              Tap the bookmark button on any {mediaType === 'ANIME' ? 'episode' : 'chapter'} in Classic layout to save your favorites here.
+            </p>
+          </div>
+        ) : (
+          <div
+            data-testid="library-bookmarks-grid"
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
+          >
+            {bookmarkedForType.map((item) => {
+              const mediaTitle = getPreferredTitle(
+                item.media.title,
+                state.contentPrefs.titlePreference,
+              );
+              const isItemManga = item.mediaType === 'MANGA' || item.mediaType === 'NOVEL';
+              return (
+                <div
+                  key={item.id}
+                  data-testid={`library-bookmark-card-${item.id}`}
+                  className="group relative flex items-center gap-3 p-3 rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/35 dark:bg-[var(--sx-surface-container)]/40 backdrop-blur-lg border border-white/35 dark:border-white/12 shadow-sm hover:border-[var(--sx-primary)]/60 transition-colors"
+                >
+                  <div className="relative w-24 aspect-video rounded-xl overflow-hidden bg-black/30 shrink-0">
+                    <SmartImage
+                      src={item.thumbnail || item.media.banner || item.media.cover}
+                      alt={item.itemTitle}
+                      fallbackTitle={`${isItemManga ? 'CH' : 'EP'} ${item.itemNumber}`}
+                      fit="cover"
+                      className="w-full h-full"
+                    />
+                  </div>
+
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.5 rounded bg-[var(--sx-primary)]/16 text-[var(--sx-primary)] text-[9px] font-extrabold uppercase">
+                        {isItemManga ? 'CH' : 'EP'} {item.itemNumber}
+                      </span>
+                      <span className="text-[11px] font-semibold text-[var(--sx-on-surface-muted)] truncate">
+                        {mediaTitle}
+                      </span>
+                    </div>
+                    <p className="text-xs font-extrabold text-[var(--sx-on-surface)] truncate">
+                      {item.itemTitle}
+                    </p>
+                    <div className="pt-1 flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        data-testid={`library-bookmark-play-${item.id}`}
+                        onClick={() => {
+                          if (isItemManga) {
+                            const chapters = resolveChaptersForMedia(item.media);
+                            const idx = chapters.findIndex((c) => c.number === item.itemNumber);
+                            navigate('/reader', {
+                              state: {
+                                media: item.media,
+                                chapters,
+                                chapterIndex: idx >= 0 ? idx : 0,
+                              },
+                            });
+                          } else {
+                            navigate(`/details/${item.mediaType.toLowerCase()}/${item.mediaId}`, {
+                              state: {
+                                media: item.media,
+                                initialTab: 'watch',
+                                episodeNumber: item.itemNumber,
+                                resumePlaying: true,
+                              },
+                            });
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-[10px] font-extrabold hover:opacity-90 transition-opacity"
+                      >
+                        {isItemManga ? (
+                          <BookOpen className="w-3 h-3" />
+                        ) : (
+                          <Play className="w-3 h-3 fill-current" />
+                        )}
+                        <span>{isItemManga ? 'Read' : 'Watch'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        data-testid={`library-bookmark-remove-${item.id}`}
+                        onClick={() =>
+                          toggleItemBookmark(
+                            item.media,
+                            item.itemNumber,
+                            item.itemTitle,
+                            item.thumbnail,
+                          )
+                        }
+                        title="Remove bookmark"
+                        aria-label={`Remove ${item.itemTitle} from bookmarks`}
+                        className="p-1.5 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 text-[var(--sx-on-surface-muted)] hover:text-red-500 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      ) : loadingCloud ? (
         <div
           aria-busy="true"
           aria-label="Loading cloud library"

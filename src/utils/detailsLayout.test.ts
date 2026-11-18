@@ -7,6 +7,7 @@ import {
   formatCompactNumber,
   formatNextAiringInfo,
   formatPlayerTime,
+  getEpisodeRangeCount,
   partitionMediaRelations,
   stripHtmlTags,
 } from './detailsLayout';
@@ -21,6 +22,9 @@ describe('detailsLayout helpers', () => {
       { id: '13-24', label: '13 - 24', start: 13, end: 24 },
       { id: '25-25', label: '25 - 25', start: 25, end: 25 },
     ]);
+    assert.equal(getEpisodeRangeCount({ start: 1, end: 25 }), 25);
+    assert.equal(getEpisodeRangeCount({ start: 26, end: 50 }), 25);
+    assert.equal(getEpisodeRangeCount({ start: 25, end: 25 }), 1);
   });
 
   it('filterByEpisodeRange returns items within inclusive range or all when null', () => {

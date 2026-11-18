@@ -170,7 +170,7 @@ export const PlayerEpisodeDrawer: React.FC<PlayerEpisodeDrawerProps> = ({
 
           <div className="flex items-center gap-1.5 flex-1 justify-end min-w-0 max-w-[56%] sm:max-w-[62%]">
             <div className="relative flex-1 min-w-[74px] max-w-[180px]">
-              <Search className="w-3 h-3 text-white/55 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <Search className="w-3 h-3 text-white/55 absolute left-2.5 top-1/2 -translate-y-1/2 z-10 pointer-events-none" />
               <input
                 type="text"
                 value={query}

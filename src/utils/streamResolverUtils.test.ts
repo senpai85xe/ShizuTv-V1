@@ -131,20 +131,27 @@ test('extractMegaPlayStreamUrl supports object, sources array, array, and string
   assert.equal(extractMegaPlayStreamUrl({ file: 'not-a-url' }), null);
 });
 
-test('mapSubtitleTracksFromSources skips thumbnails, normalizes languages, and proxies VTT URLs', () => {
+test('mapSubtitleTracksFromSources skips thumbnails, normalizes languages, assigns unique lang codes, and proxies VTT URLs', () => {
   const mapped = mapSubtitleTracksFromSources(
     [
       { file: 'https://cdn.example.com/thumbnails.vtt', kind: 'thumbnails' },
       { file: 'https://cdn.example.com/ar.vtt', label: 'Arabic', kind: 'captions' },
+      { file: 'https://cdn.example.com/es-1.vtt', label: 'Spanish (Spain)', kind: 'captions' },
+      { file: 'https://cdn.example.com/es-2.vtt', label: 'Spanish (Latin America)', kind: 'captions' },
+      { file: 'https://cdn.example.com/es-3.vtt', label: 'Spanish - Castellano', kind: 'captions' },
       { file: 'https://cdn.example.com/eng.vtt', label: 'English', kind: 'captions', default: true },
     ],
     '/api/stream/proxy',
     'https://megaplay.buzz/',
   );
-  assert.equal(mapped.length, 2);
+  assert.equal(mapped.length, 5);
   assert.equal(mapped[0].lang, 'en');
   assert.ok(mapped[0].url.startsWith('/api/stream/proxy?'));
-  assert.equal(mapped[1].lang, 'ar');
+  const langs = mapped.map((t) => t.lang);
+  assert.equal(new Set(langs).size, langs.length);
+  assert.ok(langs.includes('es'));
+  assert.ok(langs.includes('es-la'));
+  assert.ok(langs.includes('es-2'));
 });
 
 test('detectAvailableAudiosFromSources reports only actually present languages on the source', () => {

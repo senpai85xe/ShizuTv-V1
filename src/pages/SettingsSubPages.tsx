@@ -1536,6 +1536,13 @@ export const PlayerSettingsPage: React.FC = () => {
           checked={playerPrefs.subtitleBackground}
           onChange={(subtitleBackground) => updatePlayerPrefs({ subtitleBackground })}
         />
+
+        <ToggleRow
+          label="Subtitle Transition Animation"
+          description="Animate caption lines smoothly when they appear on screen"
+          checked={Boolean(playerPrefs.subtitleAnimation)}
+          onChange={(subtitleAnimation) => updatePlayerPrefs({ subtitleAnimation })}
+        />
       </div>
     </SettingsShell>
   );

@@ -65,21 +65,84 @@ export function getEffectiveDurationSeconds(
   return 24 * 60;
 }
 
+export type AutoSkipModeInput =
+  | boolean
+  | {
+      autoSkipOp: boolean;
+      autoSkipEd: boolean;
+    };
+
+export function isOpeningOrRecapSkipType(skipType: string): boolean {
+  return skipType === 'op' || skipType === 'mixed-op' || skipType === 'recap';
+}
+
+export function isEndingSkipType(skipType: string): boolean {
+  return skipType === 'ed' || skipType === 'mixed-ed';
+}
+
+export function isAutoSkipEligible(
+  skipType: string,
+  autoSkip: AutoSkipModeInput,
+): boolean {
+  if (typeof autoSkip === 'boolean') {
+    if (!autoSkip) return false;
+    return isOpeningOrRecapSkipType(skipType) || isEndingSkipType(skipType);
+  }
+  if (isOpeningOrRecapSkipType(skipType)) {
+    return Boolean(autoSkip.autoSkipOp);
+  }
+  if (isEndingSkipType(skipType)) {
+    return Boolean(autoSkip.autoSkipEd);
+  }
+  return false;
+}
+
+export function clampAutoSkipDestination(
+  targetEnd: number,
+  durationSeconds?: number | null,
+): number {
+  if (!Number.isFinite(targetEnd) || targetEnd <= 0) return 0;
+  if (
+    typeof durationSeconds === 'number' &&
+    Number.isFinite(durationSeconds) &&
+    durationSeconds > 1
+  ) {
+    return Math.min(targetEnd, Math.max(0, durationSeconds - 0.25));
+  }
+  return targetEnd;
+}
+
 export function computeAutoSkipTarget(
   currentTime: number,
   intervals: InlineSkipInterval[],
-  autoSkipEnabled: boolean,
+  autoSkip: AutoSkipModeInput,
 ): number | null {
-  if (!autoSkipEnabled || !Array.isArray(intervals) || intervals.length === 0) {
+  if (!Array.isArray(intervals) || intervals.length === 0 || !Number.isFinite(currentTime)) {
     return null;
   }
   const active = intervals.find(
     (s) =>
-      (s.skipType === 'op' || s.skipType === 'ed') &&
+      isAutoSkipEligible(s.skipType, autoSkip) &&
       currentTime >= s.startTime &&
       currentTime < s.endTime - 0.5,
   );
   return active ? active.endTime : null;
+}
+
+export function getManualSkipInterval<T extends InlineSkipInterval>(
+  currentTime: number,
+  intervals: T[],
+  autoSkip: AutoSkipModeInput,
+): T | undefined {
+  if (!Array.isArray(intervals) || intervals.length === 0 || !Number.isFinite(currentTime)) {
+    return undefined;
+  }
+  return intervals.find(
+    (s) =>
+      !isAutoSkipEligible(s.skipType, autoSkip) &&
+      currentTime >= s.startTime &&
+      currentTime < s.endTime - 0.5,
+  );
 }
 
 /**
@@ -536,6 +599,10 @@ export function buildSubtitleBoxCssProps(
 
 export const DEFAULT_AMBIENT_ENABLED = false;
 export const DEFAULT_AUTO_PIP_ENABLED = false;
+export const DEFAULT_SUBTITLE_SIZE = 13;
+export const DEFAULT_SUBTITLE_BACKGROUND = false;
+export const DEFAULT_SUBTITLE_ANIMATION = false;
+export const DEFAULT_SUBTITLE_PREVIEW_TEXT = 'Welcome to our app';
 
 export type AudioLanguageCode = 'ja' | 'en' | 'hi' | 'es';
 

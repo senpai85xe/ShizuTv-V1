@@ -321,7 +321,8 @@ export function mapSubtitleTracksFromSources(
 ): MappedSubtitleTrack[] {
   if (!Array.isArray(tracks) || tracks.length === 0) return [];
   const mapped: MappedSubtitleTrack[] = [];
-  const seenLangs = new Set<string>();
+  const seenTracks = new Set<string>();
+  const usedLangCodes = new Set<string>();
 
   for (const track of tracks) {
     if (!track || typeof track.file !== 'string') continue;
@@ -334,21 +335,34 @@ export function mapSubtitleTracksFromSources(
 
     const label = String(track.label || 'Subtitles').trim();
     const lower = label.toLowerCase();
-    let lang = 'other';
-    if (lower.includes('english')) lang = 'en';
-    else if (lower.includes('japanese')) lang = 'ja';
-    else if (lower.includes('spanish')) lang = 'es';
-    else if (lower.includes('french')) lang = 'fr';
-    else if (lower.includes('german')) lang = 'de';
-    else if (lower.includes('italian')) lang = 'it';
-    else if (lower.includes('portuguese')) lang = 'pt';
-    else if (lower.includes('arabic')) lang = 'ar';
-    else if (lower.includes('russian')) lang = 'ru';
-    else lang = lower.replace(/[^a-z]/g, '').slice(0, 6) || 'sub';
+    let baseLang = 'other';
+    if (lower.includes('english')) baseLang = 'en';
+    else if (lower.includes('japanese')) baseLang = 'ja';
+    else if (lower.includes('spanish') || lower.includes('español') || lower.includes('espanol')) {
+      baseLang =
+        lower.includes('latin') || lower.includes('latam') || lower.includes('419')
+          ? 'es-la'
+          : 'es';
+    } else if (lower.includes('french')) baseLang = 'fr';
+    else if (lower.includes('german')) baseLang = 'de';
+    else if (lower.includes('italian')) baseLang = 'it';
+    else if (lower.includes('portuguese')) {
+      baseLang = lower.includes('brazil') || lower.includes('br') ? 'pt-br' : 'pt';
+    } else if (lower.includes('arabic')) baseLang = 'ar';
+    else if (lower.includes('russian')) baseLang = 'ru';
+    else baseLang = lower.replace(/[^a-z]/g, '').slice(0, 6) || 'sub';
 
-    const uniqueKey = `${lang}:${label}`;
-    if (seenLangs.has(uniqueKey)) continue;
-    seenLangs.add(uniqueKey);
+    const uniqueTrackKey = `${baseLang}:${label}:${rawFile}`;
+    if (seenTracks.has(uniqueTrackKey)) continue;
+    seenTracks.add(uniqueTrackKey);
+
+    let lang = baseLang;
+    let suffix = 2;
+    while (usedLangCodes.has(lang)) {
+      lang = `${baseLang}-${suffix}`;
+      suffix += 1;
+    }
+    usedLangCodes.add(lang);
 
     mapped.push({
       lang,

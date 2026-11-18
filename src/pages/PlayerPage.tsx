@@ -41,9 +41,13 @@ import { clampSeekTarget, formatPlayerTime } from '../utils/detailsLayout';
 import {
   buildHlsQualityOptions,
   buildSubtitleBoxCssProps,
+  clampAutoSkipDestination,
   findActiveSubtitleCue,
+  getEffectiveDurationSeconds,
+  getManualSkipInterval,
   getVideoFitClass,
   HlsQualityOption,
+  isAutoSkipEligible,
   parseSubtitleText,
   resolveAvailableAudioOptions,
   resolveBatterySaverHlsLevel,
@@ -116,6 +120,8 @@ export const PlayerPage: React.FC = () => {
 
   const [stream, setStream] = useState<VideoStream | null>(null);
   const [streamLoading, setStreamLoading] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [streamRetryNonce, setStreamRetryNonce] = useState(0);
   const [mirrorIndex, setMirrorIndex] = useState(0);
@@ -125,10 +131,14 @@ export const PlayerPage: React.FC = () => {
     const controller = new AbortController();
     setStream(null);
     setStreamLoading(true);
+    setIsBuffering(false);
+    setAutoplayBlocked(false);
     setStreamError(null);
     setMirrorIndex(0);
     setHasVideoFrame(false);
     setPlaying(false);
+    setCurrentTime(pendingStartTimeRef.current ?? 0);
+    setDuration(0);
 
     resolveVideoStreamAsync({
       media,
@@ -185,6 +195,12 @@ export const PlayerPage: React.FC = () => {
   );
   const pendingResumePlayRef = useRef<boolean>(Boolean(routeState.resumePlaying));
   const handledPipExitRef = useRef(false);
+  const lastDoubleTapAtRef = useRef<number>(0);
+  const lastAutoSkippedRef = useRef<string>('');
+  const lastHistorySavedAtRef = useRef<number>(0);
+  const attemptAutoSkipRef = useRef<(videoEl: HTMLVideoElement | null, rawTime?: number) => void>(
+    () => {},
+  );
 
   const [playing, setPlaying] = useState(false);
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
@@ -278,6 +294,8 @@ export const PlayerPage: React.FC = () => {
     const resumePlay = pendingResumePlayRef.current;
 
     setHasVideoFrame(false);
+    setIsBuffering(false);
+    setAutoplayBlocked(false);
     setPlaying(false);
     setCurrentTime(resumeAt ?? 0);
     setDuration(0);
@@ -302,7 +320,12 @@ export const PlayerPage: React.FC = () => {
       }
       video.playbackRate = speed;
       if (shouldStart) {
-        video.play().catch(() => {});
+        video.play().catch(() => {
+          if (!cancelled) {
+            setAutoplayBlocked(true);
+            setIsBuffering(false);
+          }
+        });
       } else if (!video.paused) {
         video.pause();
       }
@@ -385,15 +408,18 @@ export const PlayerPage: React.FC = () => {
   }, [media.idMal, currentEpisode.number]);
 
   // Record Watch History & update library progress if watching
-  useEffect(() => {
+  const persistPlaybackHistory = (posSeconds: number, durSeconds: number) => {
+    lastHistorySavedAtRef.current = Date.now();
     recordHistory({
       mediaId: media.id,
       mediaType: media.type,
       media,
       episodeNumber: currentEpisode.number,
       episodeTitle: currentEpisode.title,
-      positionSeconds: Math.floor(currentTime),
-      durationSeconds: Math.floor(duration || 1440),
+      positionSeconds: Math.max(0, Math.floor(posSeconds)),
+      durationSeconds: Math.floor(
+        getEffectiveDurationSeconds(durSeconds, currentEpisode.durationSeconds, media.duration),
+      ),
     });
 
     const existing = getLibraryEntry(media.id);
@@ -406,8 +432,21 @@ export const PlayerPage: React.FC = () => {
         existing.notes,
       );
     }
+  };
+
+  useEffect(() => {
+    if (!playing) return;
+    persistPlaybackHistory(videoRef.current?.currentTime ?? currentTime, duration);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [epIndex]);
+  }, [epIndex, playing]);
+
+  useEffect(() => {
+    if (!playing) return;
+    if (Date.now() - lastHistorySavedAtRef.current >= 10000) {
+      persistPlaybackHistory(currentTime, duration);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, Math.floor(currentTime / 10)]);
 
   const scheduleHideControls = (currentlyPlaying = playing) => {
     setShowControls(true);
@@ -648,6 +687,9 @@ export const PlayerPage: React.FC = () => {
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
       if (seekFeedbackTimerRef.current) window.clearTimeout(seekFeedbackTimerRef.current);
       if (hudHideTimerRef.current) window.clearTimeout(hudHideTimerRef.current);
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
     };
   }, []);
 
@@ -856,21 +898,72 @@ export const PlayerPage: React.FC = () => {
     return base;
   }, [skipIntervals, stream?.intro, stream?.outro]);
 
-  // Active AniSkip / stream intro-outro interval
-  const activeSkip = mergedSkipIntervals.find(
-    (s) => currentTime >= s.startTime && currentTime < s.endTime - 0.5,
-  );
-
-  // Auto-skip OP/ED if enabled
+  // Auto-skip OP/Recap/ED reliably & suppress manual button when enabled
   useEffect(() => {
-    if (!activeSkip) return;
-    if (
-      (activeSkip.skipType === 'op' && state.playerPrefs.autoSkipOp) ||
-      (activeSkip.skipType === 'ed' && state.playerPrefs.autoSkipEd)
-    ) {
-      if (videoRef.current) videoRef.current.currentTime = activeSkip.endTime;
+    lastAutoSkippedRef.current = '';
+  }, [currentEpisode.id, state.playerPrefs.autoSkipOp, state.playerPrefs.autoSkipEd]);
+
+  const attemptAutoSkip = (videoEl: HTMLVideoElement | null, rawTime?: number) => {
+    if (!videoEl || videoEl.readyState < 1) return;
+    const t =
+      typeof rawTime === 'number' && Number.isFinite(rawTime)
+        ? rawTime
+        : videoEl.currentTime || 0;
+    const matched = mergedSkipIntervals.find(
+      (s) =>
+        isAutoSkipEligible(s.skipType, {
+          autoSkipOp: state.playerPrefs.autoSkipOp,
+          autoSkipEd: state.playerPrefs.autoSkipEd,
+        }) &&
+        t >= s.startTime &&
+        t < s.endTime - 0.5,
+    );
+    if (!matched) return;
+    const key = `${currentEpisode.id}:${matched.skipType}:${matched.startTime}:${matched.endTime}`;
+    if (lastAutoSkippedRef.current === key) return;
+    const dest = clampAutoSkipDestination(matched.endTime, videoEl.duration || duration);
+    if (dest > t + 0.25) {
+      lastAutoSkippedRef.current = key;
+      try {
+        videoEl.currentTime = dest;
+        setCurrentTime(dest);
+      } catch {
+        // Ignore seek errors before ready
+      }
     }
-  }, [activeSkip, state.playerPrefs.autoSkipOp, state.playerPrefs.autoSkipEd]);
+  };
+  attemptAutoSkipRef.current = attemptAutoSkip;
+
+  useEffect(() => {
+    attemptAutoSkipRef.current(videoRef.current);
+  }, [mergedSkipIntervals, state.playerPrefs.autoSkipOp, state.playerPrefs.autoSkipEd]);
+
+  // High-frequency time sync while playing for zero-lag subtitle matching and reliable auto-skip
+  useEffect(() => {
+    if (!playing) return;
+    let rafId = 0;
+    let lastSyncAt = 0;
+    const tick = (now: number) => {
+      const v = videoRef.current;
+      if (v && !v.paused && !v.ended) {
+        const liveTime = v.currentTime || 0;
+        attemptAutoSkipRef.current(v, liveTime);
+        const intervalMs = state.playerPrefs.batterySaver ? 75 : 30;
+        if (now - lastSyncAt >= intervalMs) {
+          lastSyncAt = now;
+          setCurrentTime(liveTime);
+        }
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [playing, state.playerPrefs.batterySaver]);
+
+  const activeSkip = getManualSkipInterval(currentTime, mergedSkipIntervals, {
+    autoSkipOp: state.playerPrefs.autoSkipOp,
+    autoSkipEd: state.playerPrefs.autoSkipEd,
+  });
 
   // Active subtitle cue with live edits, remote VTT loading & sync offset
   const trackKey = `${currentEpisode.id}:${activeSubLang}`;
@@ -949,8 +1042,17 @@ export const PlayerPage: React.FC = () => {
       : progressRatio;
   const volumePercent = Math.round((muted ? 0 : volume) * 100);
   const brightnessPercent = Math.round(brightness * 100);
+  const awaitingAutoFrame =
+    Boolean(activeStreamUrl) &&
+    !hasVideoFrame &&
+    !autoplayBlocked &&
+    (autoPlay || playing || pendingResumePlayRef.current);
+  const isLoadingOrBuffering = !streamError && (streamLoading || isBuffering || awaitingAutoFrame);
+  const hasActiveOverlay = showServerMenu || showSettingsMenu || showEpisodeDrawer || showShortcuts;
   const controlsVisible =
-    showControls || !playing || showServerMenu || showSettingsMenu || showEpisodeDrawer;
+    isLoadingOrBuffering && !hasActiveOverlay
+      ? false
+      : showControls || !playing || hasActiveOverlay;
 
   const activeQualityLabel = useMemo(() => {
     const effectivePref = resolveEffectiveStreamQuality(
@@ -997,21 +1099,26 @@ export const PlayerPage: React.FC = () => {
           }`}
         />
       )}
-      {!hasVideoFrame && !streamError && (
+      {isLoadingOrBuffering && (
         <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 overflow-hidden z-[1]"
+          data-testid="player-buffering"
+          aria-live="polite"
+          className="pointer-events-none absolute inset-0 z-[25] flex items-center justify-center overflow-hidden p-4"
         >
-          <div
-            className="absolute inset-0 opacity-60"
-            style={{
-              background:
-                'radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--sx-player-accent) 24%, transparent), transparent 65%)',
-            }}
-          />
-          <div className="sx-buffering-shimmer w-1/2 h-full bg-gradient-to-r from-transparent via-white/15 to-transparent skew-x-[-20deg]" />
-          <div className="absolute top-20 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/15 text-[11px] font-bold text-white/90 shadow-lg">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--sx-player-accent)] animate-ping" />
+          {!hasVideoFrame && (
+            <>
+              <div
+                className="absolute inset-0 opacity-60"
+                style={{
+                  background:
+                    'radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--sx-player-accent) 24%, transparent), transparent 65%)',
+                }}
+              />
+              <div className="sx-buffering-shimmer pointer-events-none absolute inset-y-0 left-0 w-1/2 h-full bg-gradient-to-r from-transparent via-white/15 to-transparent skew-x-[-20deg]" />
+            </>
+          )}
+          <div className="relative z-10 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black/70 backdrop-blur-xl border border-white/15 text-xs font-bold text-white/95 shadow-2xl">
+            <span className="w-3.5 h-3.5 rounded-full border-2 border-[var(--sx-player-accent)] border-t-transparent animate-spin shrink-0" />
             <span>
               {streamLoading
                 ? `Resolving EP ${currentEpisode.number} stream...`
@@ -1062,6 +1169,7 @@ export const PlayerPage: React.FC = () => {
         ref={videoRef}
         autoPlay={false}
         playsInline
+        preload="auto"
         style={brightness < 1 ? { filter: `brightness(${brightness})` } : undefined}
         onClick={() => {
           if (showServerMenu || showSettingsMenu || showEpisodeDrawer) {
@@ -1078,21 +1186,44 @@ export const PlayerPage: React.FC = () => {
         }}
         onDoubleClick={(e) => {
           if (suppressNextClickRef.current) return;
+          const now = Date.now();
+          if (now - lastDoubleTapAtRef.current < 260) return;
+          lastDoubleTapAtRef.current = now;
           const rect = e.currentTarget.getBoundingClientRect();
           const isLeft = e.clientX - rect.left < rect.width / 2;
           seekBy(isLeft ? -10 : 10);
         }}
         onPlay={() => {
+          setAutoplayBlocked(false);
           setPlaying(true);
           scheduleHideControls(true);
         }}
         onPause={() => {
           setPlaying(false);
+          setIsBuffering(false);
           setShowControls(true);
+          persistPlaybackHistory(videoRef.current?.currentTime ?? currentTime, duration);
         }}
-        onLoadedData={() => setHasVideoFrame(true)}
-        onPlaying={() => setHasVideoFrame(true)}
+        onWaiting={(e) => {
+          if (!e.currentTarget.paused && !e.currentTarget.ended) {
+            setIsBuffering(true);
+          }
+        }}
+        onCanPlay={() => {
+          setIsBuffering(false);
+          attemptAutoSkip(videoRef.current);
+        }}
+        onLoadedData={() => {
+          setHasVideoFrame(true);
+          setIsBuffering(false);
+        }}
+        onPlaying={() => {
+          setHasVideoFrame(true);
+          setIsBuffering(false);
+          attemptAutoSkip(videoRef.current);
+        }}
         onError={() => {
+          setIsBuffering(false);
           if (!activeStreamUrl) return;
           if (stream?.mirrors && mirrorIndex + 1 < stream.mirrors.length) {
             setMirrorIndex((i) => i + 1);
@@ -1100,9 +1231,21 @@ export const PlayerPage: React.FC = () => {
             setStreamError('Video playback failed on this server. Try retrying or switching servers.');
           }
         }}
-        onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
-        onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
+        onTimeUpdate={() => {
+          const t = videoRef.current?.currentTime || 0;
+          setCurrentTime(t);
+          attemptAutoSkip(videoRef.current, t);
+        }}
+        onLoadedMetadata={() => {
+          setDuration(videoRef.current?.duration || 0);
+          attemptAutoSkip(videoRef.current);
+        }}
         onEnded={() => {
+          setIsBuffering(false);
+          persistPlaybackHistory(
+            videoRef.current?.duration || duration,
+            videoRef.current?.duration || duration,
+          );
           if (state.playerPrefs.autoNextEpisode && epIndex < episodes.length - 1) {
             setEpIndex((i) => i + 1);
           } else {
@@ -1215,7 +1358,9 @@ export const PlayerPage: React.FC = () => {
                   }px)`
                 : undefined,
           }}
-          className={`pointer-events-none absolute inset-x-6 flex justify-center z-20 transition-all duration-200 ${
+          className={`pointer-events-none absolute inset-x-6 flex justify-center z-20 ${
+            state.playerPrefs.subtitleAnimation ? 'transition-all duration-200' : ''
+          } ${
             state.playerPrefs.subtitlePosition === 'top'
               ? 'top-20'
               : controlsVisible
@@ -1224,9 +1369,13 @@ export const PlayerPage: React.FC = () => {
           }`}
         >
           <p
-            key={activeCue.text}
+            key={state.playerPrefs.subtitleAnimation ? activeCue.text : 'static-sub'}
             style={buildSubtitleBoxCssProps(state.playerPrefs, state.playerPrefs.subtitleSize)}
-            className={`sx-player-subtitle-enter px-4 py-1.5 rounded-2xl text-center max-w-3xl leading-snug whitespace-pre-line transition-all duration-200 ${
+            className={`${
+              state.playerPrefs.subtitleAnimation
+                ? 'sx-player-subtitle-enter transition-all duration-200'
+                : ''
+            } px-4 py-1.5 rounded-2xl text-center max-w-3xl leading-snug whitespace-pre-line ${
               state.playerPrefs.subtitleBackground ? 'backdrop-blur-md border border-white/10' : ''
             }`}
           >
@@ -1243,8 +1392,8 @@ export const PlayerPage: React.FC = () => {
       >
         {/* Top Frosted Floating Header */}
         <div
-          className={`pointer-events-auto relative flex items-center justify-between gap-2 sm:gap-3 transition-transform duration-300 ${
-            controlsVisible ? 'translate-y-0' : '-translate-y-3'
+          className={`relative flex items-center justify-between gap-2 sm:gap-3 transition-transform duration-300 ${
+            controlsVisible ? 'pointer-events-auto translate-y-0' : 'pointer-events-none -translate-y-3'
           }`}
         >
           <div className="flex items-center gap-2 min-w-0 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full bg-black/55 backdrop-blur-2xl border border-white/15 shadow-xl max-w-[56%] sm:max-w-[60%]">
@@ -1401,8 +1550,8 @@ export const PlayerPage: React.FC = () => {
 
         {/* Bottom Floating Frosted Control Dock */}
         <div
-          className={`pointer-events-auto space-y-2.5 transition-transform duration-300 ${
-            controlsVisible ? 'translate-y-0' : 'translate-y-3'
+          className={`space-y-2.5 transition-transform duration-300 ${
+            controlsVisible ? 'pointer-events-auto translate-y-0' : 'pointer-events-none translate-y-3'
           }`}
         >
           {/* Quick Skip Pills Row */}
@@ -1411,7 +1560,14 @@ export const PlayerPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  if (videoRef.current) videoRef.current.currentTime = activeSkip.endTime;
+                  if (videoRef.current) {
+                    const dest = clampAutoSkipDestination(
+                      activeSkip.endTime,
+                      videoRef.current.duration || duration,
+                    );
+                    videoRef.current.currentTime = dest;
+                    setCurrentTime(dest);
+                  }
                 }}
                 className="sx-player-skip-pill inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--sx-player-accent)] text-[var(--sx-player-on-accent)] text-xs font-extrabold shadow-xl hover:scale-105 transition-transform"
               >
@@ -1721,6 +1877,7 @@ export const PlayerPage: React.FC = () => {
           ]
         }
         activeSubLang={activeSubLang}
+        activeTrackLang={activeTrack?.lang}
         onChangeSubLang={(lang) => setActiveSubLang(lang)}
         cues={effectiveCues}
         currentTime={currentTime}

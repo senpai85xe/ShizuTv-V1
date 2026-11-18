@@ -1,16 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildMediaItemKey,
+  buildMediaScopeKey,
   computeInitialVisibleEpisodeCount,
   computeNextVisibleEpisodeCount,
   DEFAULT_EPISODE_CHAPTER_STYLE,
   EPISODE_CHAPTER_STYLE_ORDER,
   EPISODE_RENDER_BATCH_SIZE,
   formatChapterMetaLine,
+  formatDownloadProgressPercent,
   formatEpisodeDurationLabel,
   formatEpisodeMetaLine,
   getEpisodeChapterContainerClass,
   getNextEpisodeChapterStyle,
+  isEpisodeOrChapterWatched,
   LARGE_EPISODE_LIST_THRESHOLD,
   MAX_ANIMATED_EPISODE_ROWS,
   resolveEpisodeChapterStyle,
@@ -35,10 +39,12 @@ test('getNextEpisodeChapterStyle cycles through all 5 styles in order', () => {
   assert.equal(getNextEpisodeChapterStyle('cover'), 'classic');
 });
 
-test('getEpisodeChapterContainerClass outputs distinct layout classes per style', () => {
+test('getEpisodeChapterContainerClass outputs distinct layout classes per style with frosted blur for compact', () => {
   assert.match(getEpisodeChapterContainerClass('grid', false), /\bgrid-cols-2\b/);
   assert.match(getEpisodeChapterContainerClass('box', false), /\bgrid-cols-4\b/);
-  assert.match(getEpisodeChapterContainerClass('compact', false), /\bdivide-y\b/);
+  const compactCls = getEpisodeChapterContainerClass('compact', false);
+  assert.match(compactCls, /\bdivide-y\b/);
+  assert.match(compactCls, /\bbackdrop-blur-lg\b/);
   assert.match(getEpisodeChapterContainerClass('cover', false), /\bgrid-cols-1\b/);
   assert.match(getEpisodeChapterContainerClass('classic', true), /\bgrid-cols-1\b/);
 });
@@ -88,5 +94,24 @@ test('progressive episode rendering batches 100+ lists without capping total acc
   assert.equal(shouldAnimateEpisodeRow(0, false), true);
   assert.equal(shouldAnimateEpisodeRow(MAX_ANIMATED_EPISODE_ROWS, false), false);
   assert.equal(shouldAnimateEpisodeRow(0, true), false);
+});
+
+test('watched state, bookmark keys, and download percentage helpers behave predictably', () => {
+  assert.equal(buildMediaItemKey('21', 'ANIME', 5), '21-ANIME-5');
+  assert.equal(buildMediaScopeKey('21', 'ANIME'), '21-ANIME');
+
+  const watched = new Set([7, 12]);
+  assert.equal(isEpisodeOrChapterWatched({ itemNumber: 2, currentProgress: 3, watchedSet: watched }), true);
+  assert.equal(isEpisodeOrChapterWatched({ itemNumber: 7, currentProgress: 0, watchedSet: watched }), true);
+  assert.equal(isEpisodeOrChapterWatched({ itemNumber: 8, currentProgress: 3, watchedSet: watched }), false);
+  assert.equal(
+    isEpisodeOrChapterWatched({ itemNumber: 3, currentProgress: 3, watchedSet: watched, isCurrent: true }),
+    false,
+  );
+
+  assert.equal(formatDownloadProgressPercent(Number.NaN), 0);
+  assert.equal(formatDownloadProgressPercent(-0.2), 0);
+  assert.equal(formatDownloadProgressPercent(0.467), 47);
+  assert.equal(formatDownloadProgressPercent(1.4), 100);
 });
 

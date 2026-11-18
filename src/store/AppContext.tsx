@@ -1,6 +1,7 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AdultContentMode,
+  BookmarkedMediaItem,
   CommentEntry,
   DownloadTask,
   ExtensionRepo,
@@ -24,11 +25,16 @@ import {
   AudioLanguageCode,
   DEFAULT_AMBIENT_ENABLED,
   DEFAULT_AUTO_PIP_ENABLED,
+  DEFAULT_SUBTITLE_ANIMATION,
+  DEFAULT_SUBTITLE_BACKGROUND,
+  DEFAULT_SUBTITLE_SIZE,
   SubtitleEdgeStylePref,
   SubtitleFontFamilyPref,
   SubtitleFontWeightPref,
 } from '../utils/inlinePlayer';
 import {
+  buildMediaItemKey,
+  buildMediaScopeKey,
   DEFAULT_EPISODE_CHAPTER_STYLE,
   resolveEpisodeChapterStyle,
 } from '../utils/episodeChapterStyle';
@@ -114,6 +120,8 @@ export interface PlayerPrefs {
   subtitleEdgeStyle: SubtitleEdgeStylePref;
   subtitleBgOpacity: number;
   subtitleBottomOffset: number;
+  subtitleAnimation: boolean;
+  playerPrefsV?: number;
 }
 
 export interface ReaderPrefs {
@@ -218,6 +226,8 @@ interface PersistedState {
   profiles: Partial<Record<TrackerType, TrackerProfile>>;
   library: LibraryEntry[];
   history: HistoryEntry[];
+  watchedItems: Record<string, number[]>;
+  bookmarkedItems: BookmarkedMediaItem[];
   downloads: DownloadTask[];
   repos: ExtensionRepo[];
   repoCatalog: SourceInfo[];
@@ -263,8 +273,8 @@ const DEFAULT_STATE: PersistedState = {
     defaultSpeed: 1.0,
     videoFit: 'contain',
     subtitleEnabled: true,
-    subtitleSize: 18,
-    subtitleBackground: true,
+    subtitleSize: DEFAULT_SUBTITLE_SIZE,
+    subtitleBackground: DEFAULT_SUBTITLE_BACKGROUND,
     subtitleColor: '#ffffff',
     subtitleOffsetSeconds: 0,
     subtitlePosition: 'bottom',
@@ -273,6 +283,8 @@ const DEFAULT_STATE: PersistedState = {
     subtitleEdgeStyle: 'shadow',
     subtitleBgOpacity: 75,
     subtitleBottomOffset: 0,
+    subtitleAnimation: DEFAULT_SUBTITLE_ANIMATION,
+    playerPrefsV: 2,
   },
   readerPrefs: {
     mode: 'webtoon',
@@ -301,6 +313,8 @@ const DEFAULT_STATE: PersistedState = {
   },
   library: [],
   history: [],
+  watchedItems: {},
+  bookmarkedItems: [],
   downloads: [],
   repos: [],
   repoCatalog: [],
@@ -343,6 +357,13 @@ function loadInitialState(): PersistedState {
     return {
       ...DEFAULT_STATE,
       ...parsed,
+      watchedItems:
+        parsed.watchedItems && typeof parsed.watchedItems === 'object'
+          ? (parsed.watchedItems as Record<string, number[]>)
+          : DEFAULT_STATE.watchedItems,
+      bookmarkedItems: Array.isArray(parsed.bookmarkedItems)
+        ? (parsed.bookmarkedItems as BookmarkedMediaItem[])
+        : DEFAULT_STATE.bookmarkedItems,
       repos: parsedRepos,
       repoCatalog: parsedRepoCatalog,
       customSources: parsedCustomSources,
@@ -356,7 +377,27 @@ function loadInitialState(): PersistedState {
       },
       contentPrefs: { ...DEFAULT_STATE.contentPrefs, ...(parsed.contentPrefs || {}) },
       discoveryPrefs: { ...DEFAULT_STATE.discoveryPrefs, ...(parsed.discoveryPrefs || {}) },
-      playerPrefs: { ...DEFAULT_STATE.playerPrefs, ...(parsed.playerPrefs || {}) },
+      playerPrefs: (() => {
+        const stored = parsed.playerPrefs || {};
+        const merged: PlayerPrefs = { ...DEFAULT_STATE.playerPrefs, ...stored };
+        if (stored.playerPrefsV !== 2) {
+          return {
+            ...merged,
+            autoPip: DEFAULT_AUTO_PIP_ENABLED,
+            subtitleSize:
+              stored.subtitleSize === 18 || typeof stored.subtitleSize !== 'number'
+                ? DEFAULT_SUBTITLE_SIZE
+                : stored.subtitleSize,
+            subtitleBackground:
+              stored.subtitleBackground === true || typeof stored.subtitleBackground !== 'boolean'
+                ? DEFAULT_SUBTITLE_BACKGROUND
+                : stored.subtitleBackground,
+            subtitleAnimation: DEFAULT_SUBTITLE_ANIMATION,
+            playerPrefsV: 2,
+          };
+        }
+        return merged;
+      })(),
       readerPrefs: { ...DEFAULT_STATE.readerPrefs, ...(parsed.readerPrefs || {}) },
       discordPrefs: { ...DEFAULT_STATE.discordPrefs, ...(parsed.discordPrefs || {}) },
       securityPrefs: { ...DEFAULT_STATE.securityPrefs, ...(parsed.securityPrefs || {}) },
@@ -413,8 +454,15 @@ interface AppContextValue {
   removeLibraryEntry: (mediaId: string) => void;
   getLibraryEntry: (mediaId: string) => LibraryEntry | undefined;
 
-  // History
+  // History & Watched / Bookmarks
   recordHistory: (entry: Omit<HistoryEntry, 'id' | 'updatedAt'>) => void;
+  markItemWatched: (mediaId: string, mediaType: MediaType, itemNumber: number) => void;
+  toggleItemBookmark: (
+    media: UnifiedMedia,
+    itemNumber: number,
+    itemTitle: string,
+    thumbnail?: string | null,
+  ) => void;
   removeHistoryItem: (id: string) => void;
   clearHistoryForMedia: (mediaId: string) => void;
 
@@ -424,7 +472,12 @@ interface AppContextValue {
     itemNumber: number,
     itemTitle: string,
     quality?: string,
+  ) => string;
+  updateDownloadTask: (
+    id: string,
+    patch: Partial<Pick<DownloadTask, 'progress' | 'downloadedBytes' | 'totalBytes' | 'status'>>,
   ) => void;
+  setRealDownloadActive: (id: string, active: boolean) => void;
   toggleDownloadPause: (id: string) => void;
   removeDownload: (id: string) => void;
   clearCompletedDownloads: () => void;
@@ -540,10 +593,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     applyThemeToDocument(document.documentElement, state.themePrefs, prefersDark);
   }, [state.themePrefs]);
 
-  // Simulated background download worker for queued download tasks
+  const realDownloadActiveRef = useRef<Set<string>>(new Set());
+  const [workerWakeNonce, setWorkerWakeNonce] = useState(0);
+
+  const setRealDownloadActive = useCallback((id: string, active: boolean) => {
+    if (active) {
+      realDownloadActiveRef.current.add(id);
+    } else {
+      realDownloadActiveRef.current.delete(id);
+      setWorkerWakeNonce((n) => n + 1);
+    }
+  }, []);
+
+  // Simulated fallback worker for queued download tasks not driven by an active live stream fetch
   useEffect(() => {
     const hasActive = state.downloads.some(
-      (d) => d.status === 'downloading' || d.status === 'pending',
+      (d) =>
+        (d.status === 'downloading' || d.status === 'pending') &&
+        !realDownloadActiveRef.current.has(d.id),
     );
     if (!hasActive) return;
 
@@ -551,13 +618,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setState((prev) => {
         let changed = false;
         const nextDownloads = prev.downloads.map((task) => {
+          if (realDownloadActiveRef.current.has(task.id)) return task;
           if (task.status === 'pending') {
             changed = true;
             return { ...task, status: 'downloading' as const };
           }
           if (task.status === 'downloading') {
             changed = true;
-            const nextProgress = Math.min(1, task.progress + 0.12);
+            const nextProgress = Math.min(1, task.progress + 0.14);
             const nextBytes = Math.round(task.totalBytes * nextProgress);
             return {
               ...task,
@@ -570,10 +638,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         return changed ? { ...prev, downloads: nextDownloads } : prev;
       });
-    }, 800);
+    }, 650);
 
     return () => clearInterval(timer);
-  }, [state.downloads]);
+  }, [state.downloads, workerWakeNonce]);
 
   const updateThemePrefs = useCallback((patch: Partial<ThemePrefs>) => {
     setState((prev) => ({
@@ -807,15 +875,110 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (prev.contentPrefs.incognitoMode) {
         return prev;
       }
+      const prevSameMedia = prev.history.find(
+        (h) => h.mediaId === entry.mediaId && h.mediaType === entry.mediaType,
+      );
       const withoutSameMedia = prev.history.filter(
         (h) => !(h.mediaId === entry.mediaId && h.mediaType === entry.mediaType),
       );
+
+      const scopeKey = buildMediaScopeKey(entry.mediaId, entry.mediaType);
+      const currentWatchedSet = new Set(prev.watchedItems[scopeKey] || []);
+      let watchedChanged = false;
+
+      if (
+        typeof entry.chapterNumber === 'number' &&
+        Number.isFinite(entry.chapterNumber) &&
+        !currentWatchedSet.has(entry.chapterNumber)
+      ) {
+        currentWatchedSet.add(entry.chapterNumber);
+        watchedChanged = true;
+      }
+      if (typeof entry.episodeNumber === 'number' && Number.isFinite(entry.episodeNumber)) {
+        if (
+          prevSameMedia?.episodeNumber &&
+          prevSameMedia.episodeNumber !== entry.episodeNumber &&
+          !currentWatchedSet.has(prevSameMedia.episodeNumber)
+        ) {
+          currentWatchedSet.add(prevSameMedia.episodeNumber);
+          watchedChanged = true;
+        }
+        const pos = entry.positionSeconds ?? 0;
+        const dur = entry.durationSeconds ?? 0;
+        const reachedThreshold = pos >= 8 || (dur > 0 && pos / dur >= 0.75);
+        if (reachedThreshold && !currentWatchedSet.has(entry.episodeNumber)) {
+          currentWatchedSet.add(entry.episodeNumber);
+          watchedChanged = true;
+        }
+      }
+
       return {
         ...prev,
         history: [fullEntry, ...withoutSameMedia].slice(0, 100),
+        watchedItems: watchedChanged
+          ? {
+              ...prev.watchedItems,
+              [scopeKey]: Array.from(currentWatchedSet),
+            }
+          : prev.watchedItems,
       };
     });
   }, []);
+
+  const markItemWatched = useCallback(
+    (mediaId: string, mediaType: MediaType, itemNumber: number) => {
+      if (!Number.isFinite(itemNumber)) return;
+      const scopeKey = buildMediaScopeKey(mediaId, mediaType);
+      setState((prev) => {
+        if (prev.contentPrefs.incognitoMode) return prev;
+        const existing = prev.watchedItems[scopeKey] || [];
+        if (existing.includes(itemNumber)) return prev;
+        return {
+          ...prev,
+          watchedItems: {
+            ...prev.watchedItems,
+            [scopeKey]: [...existing, itemNumber],
+          },
+        };
+      });
+    },
+    [],
+  );
+
+  const toggleItemBookmark = useCallback(
+    (
+      media: UnifiedMedia,
+      itemNumber: number,
+      itemTitle: string,
+      thumbnail?: string | null,
+    ) => {
+      const id = buildMediaItemKey(media.id, media.type, itemNumber);
+      setState((prev) => {
+        const exists = prev.bookmarkedItems.some((b) => b.id === id);
+        if (exists) {
+          return {
+            ...prev,
+            bookmarkedItems: prev.bookmarkedItems.filter((b) => b.id !== id),
+          };
+        }
+        const nextItem: BookmarkedMediaItem = {
+          id,
+          mediaId: media.id,
+          mediaType: media.type,
+          media,
+          itemNumber,
+          itemTitle,
+          thumbnail: thumbnail ?? media.banner ?? media.cover ?? null,
+          addedAt: new Date().toISOString(),
+        };
+        return {
+          ...prev,
+          bookmarkedItems: [nextItem, ...prev.bookmarkedItems],
+        };
+      });
+    },
+    [],
+  );
 
   const removeHistoryItem = useCallback((id: string) => {
     setState((prev) => ({
@@ -850,14 +1013,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           progress: 0.05,
           totalBytes,
           downloadedBytes: Math.round(totalBytes * 0.05),
-          status: 'pending',
+          status: 'downloading',
           createdAt: new Date().toISOString(),
         };
         return { ...prev, downloads: [task, ...prev.downloads] };
       });
-      addLog('INFO', 'Downloads', `Queued ${title} #${itemNumber}`);
+      addLog('INFO', 'Downloads', `Downloading ${title} #${itemNumber}`);
+      return id;
     },
     [addLog],
+  );
+
+  const updateDownloadTask = useCallback(
+    (
+      id: string,
+      patch: Partial<Pick<DownloadTask, 'progress' | 'downloadedBytes' | 'totalBytes' | 'status'>>,
+    ) => {
+      setState((prev) => ({
+        ...prev,
+        downloads: prev.downloads.map((d) => (d.id === id ? { ...d, ...patch } : d)),
+      }));
+    },
+    [],
   );
 
   const toggleDownloadPause = useCallback((id: string) => {
@@ -1213,6 +1390,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         readerPrefs: state.readerPrefs,
         library: state.library,
         history: state.history,
+        watchedItems: state.watchedItems,
+        bookmarkedItems: state.bookmarkedItems,
         repos: state.repos,
       },
     };
@@ -1275,9 +1454,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     removeLibraryEntry,
     getLibraryEntry,
     recordHistory,
+    markItemWatched,
+    toggleItemBookmark,
     removeHistoryItem,
     clearHistoryForMedia,
     enqueueDownload,
+    updateDownloadTask,
+    setRealDownloadActive,
     toggleDownloadPause,
     removeDownload,
     clearCompletedDownloads,

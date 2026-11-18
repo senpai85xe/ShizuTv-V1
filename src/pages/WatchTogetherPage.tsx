@@ -41,7 +41,7 @@ const watchGlassControlClass =
 
 export const WatchTogetherPage: React.FC = () => {
   const navigate = useNavigate();
-  const { state } = useApp();
+  const { state, updatePlayerPrefs } = useApp();
 
   const clientId = useMemo(() => getOrCreateWatchPartyClientId(), []);
   const displayName = resolveDefaultDisplayName(state.profiles);
@@ -229,6 +229,9 @@ export const WatchTogetherPage: React.FC = () => {
 
   const handleCreateRoomSubmit = (payload: CreateWatchRoomPayload) => {
     setCreateOpen(false);
+    if (payload.audioLanguage) {
+      updatePlayerPrefs({ audioLanguage: payload.audioLanguage });
+    }
     navigate('/watch-together/new', {
       state: {
         autoCreateWatchParty: {
@@ -238,6 +241,7 @@ export const WatchTogetherPage: React.FC = () => {
           userName: payload.userName,
           roomName: payload.roomName,
           track: payload.track,
+          audioLanguage: payload.audioLanguage,
           isPublic: payload.isPublic,
           hostAvatar: payload.hostAvatar,
           currentTime: 0,
