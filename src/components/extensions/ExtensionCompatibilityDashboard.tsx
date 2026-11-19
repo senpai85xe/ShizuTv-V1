@@ -5,11 +5,14 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock,
+  Cpu,
   HelpCircle,
   History,
+  Info,
   Loader2,
   Play,
   ShieldCheck,
+  Smartphone,
   XCircle,
 } from 'lucide-react';
 import type {
@@ -17,6 +20,7 @@ import type {
   CompatibilityDashboardCounts,
   CompatibilityDisplayStatus,
   ExtensionCompatibilitySnapshot,
+  ExtensionRuntimeRequirement,
   SourceReliabilityLevel,
 } from '../../utils/extensionDiagnostics';
 import { formatDiagnosticTimestamp } from '../../utils/extensionDiagnostics';
@@ -54,6 +58,39 @@ export function getReliabilityBadgeClasses(level: SourceReliabilityLevel): strin
       return 'bg-[var(--sx-on-surface)]/6 dark:bg-white/[0.08] border-white/25 dark:border-white/10 text-[var(--sx-on-surface-muted)]';
   }
 }
+
+export function getRuntimeRequirementBadgeClasses(
+  req: ExtensionRuntimeRequirement,
+): string {
+  switch (req) {
+    case 'web-compatible':
+      return 'bg-emerald-500/14 border-emerald-500/30 text-emerald-700 dark:text-emerald-300';
+    case 'android-native':
+      return 'bg-sky-500/14 border-sky-500/32 text-sky-700 dark:text-sky-300';
+    case 'unsupported':
+      return 'bg-orange-500/14 border-orange-500/32 text-orange-700 dark:text-orange-300';
+    case 'unverified':
+    default:
+      return 'bg-[var(--sx-on-surface)]/8 dark:bg-white/10 border-white/30 dark:border-white/12 text-[var(--sx-on-surface-muted)]';
+  }
+}
+
+export const RuntimeRequirementIcon: React.FC<{
+  requirement: ExtensionRuntimeRequirement;
+  className?: string;
+}> = ({ requirement, className = 'w-3 h-3' }) => {
+  switch (requirement) {
+    case 'web-compatible':
+      return <Cpu className={`${className} shrink-0`} />;
+    case 'android-native':
+      return <Smartphone className={`${className} shrink-0`} />;
+    case 'unsupported':
+      return <Ban className={`${className} shrink-0`} />;
+    case 'unverified':
+    default:
+      return <HelpCircle className={`${className} shrink-0`} />;
+  }
+};
 
 export const CompatibilityStatusIcon: React.FC<{
   status: CompatibilityDisplayStatus;
@@ -111,7 +148,7 @@ export const ExtensionCompatibilitySummaryBar: React.FC<
               Compatibility Dashboard
             </h2>
             <p className="text-[11px] text-[var(--sx-on-surface-muted)]">
-              Playback stays Unverified until a Full Diagnostic verifies real stream resolution.
+              Playback stays Unverified until a Full Diagnostic verifies real stream resolution. Aniyomi APKs are not installed or executed in Web Phase 1.
             </p>
           </div>
         </div>
@@ -146,6 +183,16 @@ export const ExtensionCompatibilitySummaryBar: React.FC<
             <span className="font-mono-tabular">{item.count}</span>
           </span>
         ))}
+        {counts.androidNative > 0 && (
+          <span
+            data-testid="dashboard-count-android-native"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-sky-500/30 bg-sky-500/12 text-sky-700 dark:text-sky-300 text-[10px] font-extrabold"
+          >
+            <Smartphone className="w-3 h-3" />
+            <span>Android Runtime Required:</span>
+            <span className="font-mono-tabular">{counts.androidNative}</span>
+          </span>
+        )}
         {counts.metadataOnly > 0 && (
           <span
             data-testid="dashboard-count-metadata-only"
@@ -184,7 +231,7 @@ export const ExtensionCompatibilityCardPanel: React.FC<
       className="pt-2.5 mt-2 border-t border-white/25 dark:border-white/10 space-y-2"
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Overall Status + Reliability + Timestamps + Manual Run Full Diagnostic */}
+      {/* Overall Status + Runtime Requirement + Reliability + Timestamps + Manual Run Full Diagnostic */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <span
@@ -195,6 +242,16 @@ export const ExtensionCompatibilityCardPanel: React.FC<
           >
             <CompatibilityStatusIcon status={snapshot.overallStatus} className="w-3 h-3" />
             <span>{snapshot.overallLabel}</span>
+          </span>
+
+          <span
+            data-testid={`compatibility-runtime-${snapshot.sourceId}`}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${getRuntimeRequirementBadgeClasses(
+              snapshot.runtimeRequirement,
+            )}`}
+          >
+            <RuntimeRequirementIcon requirement={snapshot.runtimeRequirement} className="w-3 h-3" />
+            <span>{snapshot.runtimeRequirementLabel}</span>
           </span>
 
           <span
@@ -240,6 +297,18 @@ export const ExtensionCompatibilityCardPanel: React.FC<
           <span>{isRunning ? 'Testing...' : 'Run Full Diagnostic'}</span>
         </button>
       </div>
+
+      {snapshot.isNativePackageMetadataOnly && snapshot.runtimeRequirement === 'android-native' && (
+        <div
+          data-testid={`compatibility-native-notice-${snapshot.sourceId}`}
+          className="px-2.5 py-1.5 rounded-lg bg-sky-500/10 border border-sky-500/25 text-[10px] font-semibold text-sky-700 dark:text-sky-300 flex items-center gap-1.5"
+        >
+          <Info className="w-3.5 h-3.5 shrink-0" />
+          <span>
+            Metadata saved locally · Aniyomi APK/DEX package is not installed or executable in this browser.
+          </span>
+        </div>
+      )}
 
       {/* 4 Separate Capability Statuses: Anime Search, Episode Listing, Audio Language, Video Playback */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">

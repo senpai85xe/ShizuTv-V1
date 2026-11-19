@@ -55,6 +55,7 @@ import {
   ExtensionDiagnosticReport,
   formatCapabilityBadgeText,
   formatDiagnosticTimestamp,
+  isAniyomiPackageSource,
   loadPersistedExtensionDiagnostics,
   savePersistedExtensionDiagnostic,
   summarizeCompatibilityCounts,
@@ -64,6 +65,8 @@ import { getBoundedStaggerDelay } from '../utils/appMotion';
 import {
   ExtensionCompatibilityCardPanel,
   ExtensionCompatibilitySummaryBar,
+  getRuntimeRequirementBadgeClasses,
+  RuntimeRequirementIcon,
 } from '../components/extensions/ExtensionCompatibilityDashboard';
 import {
   EXT_FROSTED_ACTIVE_BUBBLE,
@@ -133,7 +136,7 @@ const MEDIA_TAB_OPTIONS: ReadonlyArray<SegmentedOption<ExtensionMediaTab>> = [
 ];
 
 const SUBTAB_OPTIONS: ReadonlyArray<SegmentedOption<ExtensionSubTab>> = [
-  { id: 'installed', label: 'Installed', testId: 'extensions-subtab-installed' },
+  { id: 'installed', label: 'Saved & Installed', testId: 'extensions-subtab-installed' },
   { id: 'available', label: 'Available', testId: 'extensions-subtab-available' },
 ];
 
@@ -1525,6 +1528,14 @@ export const ExtensionsPage: React.FC = () => {
                                   }
                                   return null;
                                 })()}
+                                {snapshot.isNativePackageMetadataOnly && (
+                                  <span
+                                    data-testid={`badge-native-metadata-${src.id}`}
+                                    className="px-2 py-0.5 rounded-md bg-sky-500/14 border border-sky-500/30 text-sky-700 dark:text-sky-300 text-[10px] font-extrabold uppercase"
+                                  >
+                                    Metadata Only
+                                  </span>
+                                )}
                                 {!isActive && (
                                   <span className="px-2 py-0.5 rounded-md bg-amber-500/16 border border-amber-500/25 text-amber-700 dark:text-amber-300 text-[10px] font-extrabold uppercase">
                                     Disabled
@@ -1543,12 +1554,16 @@ export const ExtensionsPage: React.FC = () => {
                               aria-label={
                                 src.type === 'inbuilt'
                                   ? `Disable ${src.name}`
-                                  : `Uninstall ${src.name}`
+                                  : isAniyomiPackageSource(src)
+                                    ? `Remove saved metadata for ${src.name}`
+                                    : `Uninstall ${src.name}`
                               }
                               title={
                                 src.type === 'inbuilt'
                                   ? 'Disable inbuilt source'
-                                  : 'Uninstall extension'
+                                  : isAniyomiPackageSource(src)
+                                    ? 'Remove saved metadata'
+                                    : 'Uninstall extension'
                               }
                               className="w-9 h-9 rounded-xl bg-red-500/14 dark:bg-red-500/18 backdrop-blur-md border border-red-500/28 text-red-600 dark:text-red-400 hover:bg-red-500/24 flex items-center justify-center transition-all duration-200"
                             >
@@ -1717,6 +1732,12 @@ export const ExtensionsPage: React.FC = () => {
             <div className="space-y-4">
               {groupedAvailable.map(({ group, items }) => {
                 const uninstalledInGroup = items.filter((i) => !installedIds.has(i.id));
+                const allNativeInGroup =
+                  uninstalledInGroup.length > 0 &&
+                  uninstalledInGroup.every((i) => isAniyomiPackageSource(i));
+                const someNativeInGroup = uninstalledInGroup.some((i) =>
+                  isAniyomiPackageSource(i),
+                );
                 return (
                   <div key={group} className="space-y-2">
                     <div className="flex items-center justify-between gap-2 px-1">
@@ -1729,7 +1750,11 @@ export const ExtensionsPage: React.FC = () => {
                           onClick={() => installAllCatalogExtensions(uninstalledInGroup)}
                           className="text-xs font-extrabold text-[var(--sx-primary)] hover:opacity-80 transition-opacity"
                         >
-                          Install All ({uninstalledInGroup.length})
+                          {allNativeInGroup
+                            ? `Save Metadata (${uninstalledInGroup.length})`
+                            : someNativeInGroup
+                              ? `Save / Add All (${uninstalledInGroup.length})`
+                              : `Install All (${uninstalledInGroup.length})`}
                         </button>
                       )}
                     </div>
@@ -1737,6 +1762,12 @@ export const ExtensionsPage: React.FC = () => {
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
                       {items.map((src, idx) => {
                         const alreadyInstalled = installedIds.has(src.id);
+                        const isAniyomiNative = isAniyomiPackageSource(src);
+                        const availableSnapshot = buildExtensionCompatibilitySnapshot(
+                          src,
+                          diagnosticsBySourceId[src.id],
+                          mediaTab,
+                        );
                         const delay = getBoundedStaggerDelay(idx, 18, 10);
                         return (
                           <div
@@ -1756,7 +1787,28 @@ export const ExtensionsPage: React.FC = () => {
                                   </span>
                                   <span className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/12 backdrop-blur-sm border border-[var(--sx-primary)]/20 text-[var(--sx-primary)] text-[10px] font-extrabold uppercase">
                                     {formatExtensionVersion(src.version)}
+                                    {src.versionCode ? ` (#${src.versionCode})` : ''}
                                   </span>
+                                  <span
+                                    data-testid={`available-runtime-${src.id}`}
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${getRuntimeRequirementBadgeClasses(
+                                      availableSnapshot.runtimeRequirement,
+                                    )}`}
+                                  >
+                                    <RuntimeRequirementIcon
+                                      requirement={availableSnapshot.runtimeRequirement}
+                                      className="w-2.5 h-2.5"
+                                    />
+                                    <span>{availableSnapshot.runtimeRequirementLabel}</span>
+                                  </span>
+                                  {alreadyInstalled && isAniyomiNative && (
+                                    <span
+                                      data-testid={`available-saved-${src.id}`}
+                                      className="px-2 py-0.5 rounded-md bg-emerald-500/14 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-[10px] font-extrabold uppercase"
+                                    >
+                                      Metadata Saved
+                                    </span>
+                                  )}
                                   {src.isNsfw && (
                                     <span className="px-2 py-0.5 rounded-md bg-red-500/16 border border-red-500/30 text-red-600 dark:text-red-300 text-[10px] font-extrabold uppercase">
                                       18+
@@ -1782,9 +1834,22 @@ export const ExtensionsPage: React.FC = () => {
                               disabled={alreadyInstalled}
                               onClick={() => installCatalogExtension(src)}
                               aria-label={
-                                alreadyInstalled
-                                  ? `${src.name} installed`
-                                  : `Install ${src.name}`
+                                isAniyomiNative
+                                  ? alreadyInstalled
+                                    ? `${src.name} metadata saved`
+                                    : `Save metadata for ${src.name}`
+                                  : alreadyInstalled
+                                    ? `${src.name} installed`
+                                    : `Install ${src.name}`
+                              }
+                              title={
+                                isAniyomiNative
+                                  ? alreadyInstalled
+                                    ? 'Metadata saved locally (APK not installed in Phase 1)'
+                                    : 'Save repository metadata (APK not downloaded in Phase 1)'
+                                  : alreadyInstalled
+                                    ? 'Added'
+                                    : 'Add source'
                               }
                               className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 backdrop-blur-md border transition-all duration-200 ${
                                 alreadyInstalled
@@ -1815,6 +1880,12 @@ export const ExtensionsPage: React.FC = () => {
         (() => {
           const isActive = state.discoveryPrefs.activeSources.includes(inspectSource.id);
           const idx = allSources.findIndex((s) => s.id === inspectSource.id);
+          const inspectSnapshot = buildExtensionCompatibilitySnapshot(
+            inspectSource,
+            diagnosticsBySourceId[inspectSource.id],
+            mediaTab,
+          );
+          const isAniyomiInspect = isAniyomiPackageSource(inspectSource);
           const modal = (
             <div
               className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/55 backdrop-blur-md p-0 sm:p-4 sx-backdrop-enter"
@@ -1825,7 +1896,7 @@ export const ExtensionsPage: React.FC = () => {
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className={`w-full sm:max-w-md ${EXT_FROSTED_SHEET} rounded-t-3xl sm:rounded-3xl p-5 space-y-4 sx-sheet-enter`}
+                className={`w-full sm:max-w-md max-h-[88vh] overflow-y-auto ${EXT_FROSTED_SHEET} rounded-t-3xl sm:rounded-3xl p-5 space-y-4 sx-sheet-enter`}
               >
                 <div className="w-10 h-1 rounded-full bg-[var(--sx-on-surface-muted)]/30 mx-auto sm:hidden" />
 
@@ -1836,7 +1907,8 @@ export const ExtensionsPage: React.FC = () => {
                       <h3 className="text-base font-extrabold truncate">{inspectSource.name}</h3>
                       <p className="text-xs text-[var(--sx-on-surface-muted)]">
                         {formatExtensionLangChip(inspectSource.lang)} ·{' '}
-                        {formatExtensionVersion(inspectSource.version)} ·{' '}
+                        {formatExtensionVersion(inspectSource.version)}
+                        {inspectSource.versionCode ? ` (code ${inspectSource.versionCode})` : ''} ·{' '}
                         {getExtensionManagerType(inspectSource).toUpperCase()}
                       </p>
                     </div>
@@ -1851,21 +1923,86 @@ export const ExtensionsPage: React.FC = () => {
                   </button>
                 </div>
 
-                {(inspectSource.description || inspectSource.baseUrl) && (
-                  <div className="p-3 rounded-2xl bg-[var(--sx-on-surface)]/5 dark:bg-white/[0.06] border border-white/35 dark:border-white/10 space-y-1 text-xs">
-                    {inspectSource.description && <p>{inspectSource.description}</p>}
+                {/* Runtime Requirement & Phase 1 Honesty Notice */}
+                <div
+                  data-testid="inspect-extension-metadata"
+                  className="p-3 rounded-2xl bg-[var(--sx-on-surface)]/5 dark:bg-white/[0.06] border border-white/35 dark:border-white/10 space-y-2 text-xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-[var(--sx-on-surface-muted)]">
+                      Runtime Requirement
+                    </span>
+                    <span
+                      data-testid="inspect-runtime-badge"
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${getRuntimeRequirementBadgeClasses(
+                        inspectSnapshot.runtimeRequirement,
+                      )}`}
+                    >
+                      <RuntimeRequirementIcon
+                        requirement={inspectSnapshot.runtimeRequirement}
+                        className="w-3 h-3"
+                      />
+                      <span>{inspectSnapshot.runtimeRequirementLabel}</span>
+                    </span>
+                  </div>
+
+                  {isAniyomiInspect && inspectSnapshot.runtimeRequirement === 'android-native' && (
+                    <p
+                      data-testid="inspect-phase1-honesty-note"
+                      className="px-2.5 py-1.5 rounded-xl bg-sky-500/12 border border-sky-500/25 text-[11px] font-semibold text-sky-700 dark:text-sky-300"
+                    >
+                      Metadata stored locally from repository manifest. APK download and Android DEX execution are disabled in Phase 1.
+                    </p>
+                  )}
+
+                  {inspectSource.description && <p>{inspectSource.description}</p>}
+
+                  <div className="grid grid-cols-1 gap-1 pt-1 border-t border-white/20 dark:border-white/10 text-[11px] font-mono-tabular text-[var(--sx-on-surface-muted)]">
+                    {inspectSource.pkg && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-sans font-bold shrink-0 whitespace-nowrap">Package ID</span>
+                        <span className="truncate">{inspectSource.pkg}</span>
+                      </div>
+                    )}
+                    {inspectSource.apkName && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-sans font-bold shrink-0 whitespace-nowrap">APK Artifact</span>
+                        <span className="truncate">{inspectSource.apkName}</span>
+                      </div>
+                    )}
+                    {inspectSource.libVersion && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-sans font-bold shrink-0 whitespace-nowrap">Lib Version</span>
+                        <span>{inspectSource.libVersion}</span>
+                      </div>
+                    )}
+                    {inspectSource.versionCode !== undefined && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-sans font-bold shrink-0 whitespace-nowrap">Version Code</span>
+                        <span>{inspectSource.versionCode}</span>
+                      </div>
+                    )}
                     {inspectSource.baseUrl && (
-                      <p className="text-[11px] font-mono-tabular text-[var(--sx-on-surface-muted)] flex items-center gap-1.5 truncate">
-                        <Globe className="w-3 h-3 shrink-0" />
-                        <span className="truncate">{inspectSource.baseUrl}</span>
-                      </p>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-sans font-bold shrink-0">Host URL</span>
+                        <span className="truncate inline-flex items-center gap-1">
+                          <Globe className="w-3 h-3 shrink-0" />
+                          <span className="truncate">{inspectSource.baseUrl}</span>
+                        </span>
+                      </div>
+                    )}
+                    {inspectSource.repoBaseUrl && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-sans font-bold shrink-0">Repo Base</span>
+                        <span className="truncate">{inspectSource.repoBaseUrl}</span>
+                      </div>
                     )}
                   </div>
-                )}
+                </div>
 
                 {getSourcePlayabilityStatus(inspectSource, mediaTab) === 'metadata-only' ? (
                   <div className="p-3 rounded-2xl bg-orange-500/12 border border-orange-500/25 text-xs text-orange-700 dark:text-orange-300 font-bold">
-                    Metadata-only catalog source: kept in your installed extensions list, and hidden from video/manga player pickers because it does not host playable streams or chapters.
+                    Metadata-only catalog source: kept in your saved extensions list, and hidden from video/manga player pickers because it does not host playable streams or chapters.
                   </div>
                 ) : getSourcePlayabilityStatus(inspectSource, mediaTab) === 'novel-unsupported' ? (
                   <div className="p-3 rounded-2xl bg-slate-500/12 border border-slate-500/25 text-xs text-[var(--sx-on-surface-muted)] font-bold">
@@ -1876,7 +2013,7 @@ export const ExtensionsPage: React.FC = () => {
                     <div>
                       <div className="text-xs font-extrabold">Enable in Source Picker</div>
                       <div className="text-[11px] text-[var(--sx-on-surface-muted)]">
-                        Controls whether this extension appears on Watch &amp; Read tabs
+                        Controls whether this source appears on Watch &amp; Read tabs
                       </div>
                     </div>
                     <button

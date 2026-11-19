@@ -47,14 +47,22 @@ export function formatExtensionVersion(version?: string | null): string {
 }
 
 export function getExtensionManagerType(source: SourceInfo): Exclude<ExtensionManagerFilter, 'all'> {
-  if (source.id.startsWith('ext-ay-')) return 'aniyomi';
-  if (source.id.startsWith('ext-cs-')) return 'cloudstream';
-  if (source.id.startsWith('ext-my-')) return 'mangayomi';
-  if (source.id.startsWith('ext-lg-')) return 'legado';
-  if (source.id.startsWith('ext-ln-')) return 'lnreader';
+  if (source.id.startsWith('ext-ay-') || source.id.startsWith('aniyomi-')) return 'aniyomi';
+  if (source.id.startsWith('ext-cs-') || source.id.startsWith('cloudstream-')) return 'cloudstream';
+  if (source.id.startsWith('ext-my-') || source.id.startsWith('mangayomi-')) return 'mangayomi';
+  if (source.id.startsWith('ext-lg-') || source.id.startsWith('legado-')) return 'legado';
+  if (source.id.startsWith('ext-ln-') || source.id.startsWith('lnreader-')) return 'lnreader';
   if (source.type === 'inbuilt') return 'inbuilt';
-  if (source.repoUrl?.toLowerCase().includes('mangayomi')) return 'mangayomi';
-  if (source.repoUrl?.toLowerCase().includes('cloudstream')) return 'cloudstream';
+  if (
+    source.runtimeRequirement === 'android-native' ||
+    Boolean(source.pkg && (source.apkName || source.apkUrl))
+  ) {
+    return 'aniyomi';
+  }
+  const repoLower = `${source.repoUrl || ''} ${source.repoBaseUrl || ''}`.toLowerCase();
+  if (repoLower.includes('aniyomi') || repoLower.includes('tachiyomi')) return 'aniyomi';
+  if (repoLower.includes('mangayomi')) return 'mangayomi';
+  if (repoLower.includes('cloudstream')) return 'cloudstream';
   return 'inbuilt';
 }
 

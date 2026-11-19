@@ -5,6 +5,9 @@ import {
   compactRepoCatalogEntries,
   evictDisposableCacheFromStorage,
   loadPersistedRepoCatalog,
+  migrateExtensionRepoRecord,
+  migratePersistedExtensionRecords,
+  migrateSourceInfoRecord,
   persistStateAndCatalog,
   REPO_CATALOG_STORAGE_KEY,
   StorageLike,
@@ -150,3 +153,69 @@ test('evictDisposableCacheFromStorage only removes shizutv_recent_entry_v1 keys 
   const fromLegacy = loadPersistedRepoCatalog(legacy, storage);
   assert.equal(fromLegacy.length, 2);
 });
+
+test('Phase 1: migrates legacy localStorage extension and repo records cleanly without losing data', () => {
+  const legacyV1Aniyomi = {
+    id: 'ext-ay-999',
+    name: 'Legacy AniSource',
+    type: 'extension',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '15.4',
+    repoUrl: 'https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json',
+    baseUrl: 'https://legacy-ani.example',
+    pkg: 'eu.kanade.tachiyomi.animeextension.en.legacyani',
+    apk: 'aniyomi-en.legacyani-v15.4.apk',
+    code: 7,
+  };
+
+  const migrated = migrateSourceInfoRecord(legacyV1Aniyomi);
+  assert.ok(migrated);
+  assert.equal(migrated.id, 'ext-ay-999');
+  assert.equal(migrated.repoBaseUrl, 'https://raw.githubusercontent.com/yuzono/anime-repo/repo');
+  assert.equal(migrated.apkName, 'aniyomi-en.legacyani-v15.4.apk');
+  assert.equal(
+    migrated.apkUrl,
+    'https://raw.githubusercontent.com/yuzono/anime-repo/repo/apk/aniyomi-en.legacyani-v15.4.apk',
+  );
+  assert.equal(migrated.versionCode, 7);
+  assert.equal(migrated.libVersion, '15');
+  assert.equal(
+    migrated.iconUrl,
+    'https://raw.githubusercontent.com/yuzono/anime-repo/repo/icon/eu.kanade.tachiyomi.animeextension.en.legacyani.png',
+  );
+  assert.equal(migrated.runtimeRequirement, 'android-native');
+  assert.equal(migrated.metadataOnlyStorage, true);
+
+  // Handles duplicates, corrupted items, and partial inbuilt/custom entries safely
+  const list = migratePersistedExtensionRecords([
+    null,
+    { id: '', name: 'Broken' },
+    { id: 'shonenx-hls-inbuilt', name: 'ShizuTv Stream (Inbuilt)', type: 'inbuilt', lang: 'en', version: '2.1.5' },
+    legacyV1Aniyomi,
+    legacyV1Aniyomi,
+  ]);
+  assert.equal(list.length, 2);
+  assert.deepEqual(list[0].mediaTypes, ['ANIME']);
+  assert.equal(list[0].runtimeRequirement, 'web-compatible');
+
+  // Compact catalog retains Phase 1 Aniyomi metadata even under storage quota pressure
+  const compacted = compactRepoCatalogEntries([migrated]);
+  assert.equal(compacted[0].repoBaseUrl, migrated.repoBaseUrl);
+  assert.equal(compacted[0].apkName, migrated.apkName);
+  assert.equal(compacted[0].versionCode, 7);
+  assert.equal(compacted[0].libVersion, '15');
+  assert.equal(compacted[0].runtimeRequirement, 'android-native');
+  assert.equal(compacted[0].metadataOnlyStorage, true);
+
+  // Repo migration backfills repoBaseUrl cleanly
+  const migratedRepo = migrateExtensionRepoRecord({
+    id: 'repo-1',
+    name: 'Yuzono',
+    url: 'https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json',
+    manager: 'aniyomi',
+  });
+  assert.ok(migratedRepo);
+  assert.equal(migratedRepo.repoBaseUrl, 'https://raw.githubusercontent.com/yuzono/anime-repo/repo');
+});
+

@@ -144,22 +144,25 @@ export const ExtensionAvatar: React.FC<{
   mediaTab: ExtensionMediaTab;
   size?: 'sm' | 'md';
 }> = ({ source, mediaTab, size = 'md' }) => {
+  const [failedUrl, setFailedUrl] = React.useState<string | null>(null);
   const isAnime =
     mediaTab === 'ANIME' ||
     source.mediaTypes.some((m) => m === 'ANIME' || m === 'TV' || m === 'MOVIE');
 
   const boxSize = size === 'sm' ? 'w-9 h-9 rounded-xl' : 'w-11 h-11 rounded-xl';
   const badgeSize = size === 'sm' ? 'w-3.5 h-3.5' : 'w-4 h-4';
+  const showIconImg = Boolean(source.iconUrl && failedUrl !== source.iconUrl);
 
   return (
     <div
       className={`relative ${boxSize} shrink-0 bg-[var(--sx-surface-high)]/65 backdrop-blur-md border border-white/45 dark:border-white/12 flex items-center justify-center shadow-sm`}
     >
-      {source.iconUrl ? (
+      {showIconImg ? (
         <img
           src={source.iconUrl}
           alt={source.name}
           referrerPolicy="no-referrer"
+          onError={() => setFailedUrl(source.iconUrl ?? null)}
           className="w-full h-full object-cover rounded-xl"
         />
       ) : (

@@ -59,10 +59,14 @@ import {
   APP_STATE_STORAGE_KEY,
   LEGACY_STATE_STORAGE_KEY,
   loadPersistedRepoCatalog,
+  migrateExtensionRepoRecord,
+  migratePersistedExtensionRecords,
   persistStateAndCatalog,
   PersistResult,
   REPO_CATALOG_STORAGE_KEY,
 } from '../utils/extensionPersistence';
+import { deriveRepoBaseUrl } from '../utils/extensionRepoParser';
+import { isAniyomiPackageSource } from '../utils/extensionDiagnostics';
 import { fetchAniListViewer, saveAniListMediaEntry } from '../services/anilist';
 import {
   clearAniListServerCookieSession,
@@ -367,12 +371,19 @@ function loadInitialState(): PersistedState {
         ? parsed.anilistToken.trim()
         : storedOAuthToken;
     const parsedRepos = Array.isArray(parsed.repos)
-      ? (parsed.repos as ExtensionRepo[]).filter(
-          (r) => r && r.id !== 'repo-shizutv-official' && !String(r.url || '').endsWith('.dart'),
-        )
+      ? (parsed.repos as unknown[])
+          .map((r) => migrateExtensionRepoRecord(r))
+          .filter(
+            (r): r is ExtensionRepo =>
+              Boolean(
+                r &&
+                  r.id !== 'repo-shizutv-official' &&
+                  !String(r.url || '').endsWith('.dart'),
+              ),
+          )
       : DEFAULT_STATE.repos;
     const parsedCustomSources = Array.isArray(parsed.customSources)
-      ? (parsed.customSources as SourceInfo[])
+      ? migratePersistedExtensionRecords(parsed.customSources)
       : DEFAULT_STATE.customSources;
     const parsedRepoCatalog = loadPersistedRepoCatalog(parsed.repoCatalog);
     const parsedSourceOrder = Array.isArray(parsed.sourceOrder)
@@ -1238,7 +1249,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (lastSyncPersistResult && !lastSyncPersistResult.ok && lastSyncPersistResult.error) {
         setStorageError(lastSyncPersistResult.error);
       }
-      addLog('INFO', 'Extensions', `Installed extension "${source.name}" (${source.lang.toUpperCase()})`);
+      const actionVerb = isAniyomiPackageSource(source) ? 'Saved metadata for' : 'Installed extension';
+      addLog('INFO', 'Extensions', `${actionVerb} "${source.name}" (${source.lang.toUpperCase()})`);
     },
     [addLog],
   );
@@ -1250,7 +1262,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...INBUILT_SOURCES.map((s) => s.id),
         ...state.customSources.map((s) => s.id),
       ]);
-      const expectedCount = sources.filter((s) => !existingIdsNow.has(s.id)).length;
+      const newSources = sources.filter((s) => !existingIdsNow.has(s.id));
+      const expectedCount = newSources.length;
       setState((prev) => {
         const existingIds = new Set([
           ...INBUILT_SOURCES.map((s) => s.id),
@@ -1275,7 +1288,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (lastSyncPersistResult && !lastSyncPersistResult.ok && lastSyncPersistResult.error) {
         setStorageError(lastSyncPersistResult.error);
       }
-      addLog('INFO', 'Extensions', `Batch installed ${expectedCount} catalog extensions`);
+      const hasNativeOnly = newSources.some((s) => isAniyomiPackageSource(s));
+      addLog(
+        'INFO',
+        'Extensions',
+        hasNativeOnly
+          ? `Batch saved metadata for ${expectedCount} catalog entries`
+          : `Batch installed ${expectedCount} catalog extensions`,
+      );
       return expectedCount;
     },
     [addLog, state.customSources],
@@ -1375,12 +1395,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? payload.format
           : manager;
 
-      const importedSources = payload.sources;
+      const importedSources = migratePersistedExtensionRecords(payload.sources);
       const shouldAutoInstall = options?.autoInstall === true;
+      const repoBaseUrl = deriveRepoBaseUrl(cleanUrl);
       const newRepo: ExtensionRepo = {
         id: `repo-${Date.now()}`,
         name: resolvedName,
         url: cleanUrl,
+        ...(repoBaseUrl ? { repoBaseUrl } : {}),
         manager: resolvedManager,
         mediaType: options?.mediaType,
         addedAt: new Date().toISOString(),
@@ -1394,6 +1416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? {
               ...existingRepo,
               name: resolvedName,
+              ...(repoBaseUrl ? { repoBaseUrl } : {}),
               manager: resolvedManager,
               mediaType: options?.mediaType ?? existingRepo.mediaType,
             }
@@ -1583,6 +1606,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         persistStateSync({
           ...prev,
           ...manifest.data,
+          repos: Array.isArray(manifest.data.repos)
+            ? manifest.data.repos
+                .map((r) => migrateExtensionRepoRecord(r))
+                .filter((r): r is ExtensionRepo => Boolean(r))
+            : prev.repos,
+          customSources: Array.isArray(manifest.data.customSources)
+            ? migratePersistedExtensionRecords(manifest.data.customSources)
+            : prev.customSources,
+          repoCatalog: Array.isArray(manifest.data.repoCatalog)
+            ? migratePersistedExtensionRecords(manifest.data.repoCatalog)
+            : prev.repoCatalog,
           themePrefs: { ...prev.themePrefs, ...(manifest.data.themePrefs || {}) },
           uiPrefs: { ...prev.uiPrefs, ...(manifest.data.uiPrefs || {}) },
           contentPrefs: { ...prev.contentPrefs, ...(manifest.data.contentPrefs || {}) },

@@ -4,9 +4,12 @@ import {
   buildCapabilitiesBreakdown,
   buildExtensionCompatibilitySnapshot,
   classifyDiagnosticFailure,
+  classifyExtensionRuntimeRequirement,
   DEFAULT_DIAGNOSTIC_PROBE_SCOPE,
   EXTENSION_DIAGNOSTICS_STORAGE_KEY,
+  EXTENSION_RUNTIME_REQUIREMENT_LABELS,
   formatCapabilityBadgeText,
+  isAniyomiPackageSource,
   loadPersistedExtensionDiagnostics,
   MAX_DIAGNOSTIC_HISTORY,
   resolveDiagnosticOverallStatus,
@@ -541,4 +544,93 @@ test('Batch 4: unknown or inferred-only audio is never promoted to confirmed Sup
   assert.equal(snap.probeScope, DEFAULT_DIAGNOSTIC_PROBE_SCOPE);
   assert.ok(snap.audioVerificationDetail?.includes(DEFAULT_DIAGNOSTIC_PROBE_SCOPE));
 });
+
+test('Phase 1: runtime requirement labels enforce honesty for Aniyomi APK metadata vs Web Adapter vs Unsupported vs Unverified', () => {
+  const inbuiltSource: SourceInfo = {
+    id: 'shonenx-hls-inbuilt',
+    name: 'ShizuTv Stream (Inbuilt)',
+    type: 'inbuilt',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '2.1.5',
+  };
+  const inbuiltSnap = buildExtensionCompatibilitySnapshot(inbuiltSource, null, 'ANIME');
+  assert.equal(inbuiltSnap.runtimeRequirement, 'web-compatible');
+  assert.equal(inbuiltSnap.runtimeRequirementLabel, EXTENSION_RUNTIME_REQUIREMENT_LABELS['web-compatible']);
+  assert.equal(inbuiltSnap.runtimeRequirementLabel, 'Web Adapter Compatible');
+  assert.equal(inbuiltSnap.isNativePackageMetadataOnly, false);
+
+  const aniyomiApkSource: SourceInfo = {
+    id: 'ext-ay-aniworld',
+    name: 'AniWorld',
+    type: 'extension',
+    mediaTypes: ['ANIME'],
+    lang: 'de',
+    version: '14.6',
+    versionCode: 28,
+    libVersion: '14',
+    pkg: 'eu.kanade.tachiyomi.animeextension.de.aniworld',
+    apkName: 'aniyomi-de.aniworld-v14.6.apk',
+    repoUrl: 'https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json',
+    repoBaseUrl: 'https://raw.githubusercontent.com/yuzono/anime-repo/repo',
+    baseUrl: 'https://aniworld.to',
+    metadataOnlyStorage: true,
+  };
+  assert.equal(isAniyomiPackageSource(aniyomiApkSource), true);
+
+  // Storing Aniyomi metadata MUST NOT claim Web Adapter Compatible or installed runtime
+  const aniyomiSnap = buildExtensionCompatibilitySnapshot(aniyomiApkSource, null, 'ANIME');
+  assert.equal(aniyomiSnap.runtimeRequirement, 'android-native');
+  assert.equal(aniyomiSnap.runtimeRequirementLabel, 'Requires Android Native Runtime');
+  assert.equal(aniyomiSnap.isNativePackageMetadataOnly, true);
+
+  // Mangayomi/custom web extension before Full Diagnostic -> Unverified
+  const unverifiedMangayomi: SourceInfo = {
+    id: 'ext-my-animepahe',
+    name: 'AnimePahe',
+    type: 'extension',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '0.1.5',
+    baseUrl: 'https://animepahe.ru',
+  };
+  const unverifiedSnap = buildExtensionCompatibilitySnapshot(unverifiedMangayomi, null, 'ANIME');
+  assert.equal(unverifiedSnap.runtimeRequirement, 'unverified');
+  assert.equal(unverifiedSnap.runtimeRequirementLabel, 'Unverified');
+  assert.equal(unverifiedSnap.isNativePackageMetadataOnly, false);
+
+  // Metadata-only or missing-host or novel -> Unsupported
+  const metadataCatalog: SourceInfo = {
+    id: 'ext-ay-myanimelist',
+    name: 'MyAnimeList',
+    type: 'extension',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '14.2',
+    pkg: 'eu.kanade.tachiyomi.animeextension.all.mal',
+    baseUrl: 'https://myanimelist.net',
+  };
+  const unsupportedSnap = buildExtensionCompatibilitySnapshot(metadataCatalog, null, 'ANIME');
+  assert.equal(unsupportedSnap.runtimeRequirement, 'unsupported');
+  assert.equal(unsupportedSnap.runtimeRequirementLabel, 'Unsupported');
+
+  assert.equal(
+    classifyExtensionRuntimeRequirement({
+      source: inbuiltSource,
+      profileKind: 'inbuilt-anime',
+    }),
+    'web-compatible',
+  );
+
+  const counts = summarizeCompatibilityCounts([
+    inbuiltSnap,
+    aniyomiSnap,
+    unverifiedSnap,
+    unsupportedSnap,
+  ]);
+  assert.equal(counts.webCompatible, 1);
+  assert.equal(counts.androidNative, 1);
+  assert.equal(counts.metadataOnly, 1);
+});
+
 

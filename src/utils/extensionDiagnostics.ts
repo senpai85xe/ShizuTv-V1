@@ -1,6 +1,8 @@
 import type { ExtensionMediaTab } from './extensionsManager';
-import type { SourceInfo } from '../types/media';
+import type { ExtensionRuntimeRequirement, SourceInfo } from '../types/media';
 import { detectSourceProfile } from './streamResolverUtils';
+
+export type { ExtensionRuntimeRequirement };
 
 export type CapabilityStatus =
   | 'verified'
@@ -61,6 +63,92 @@ export const COMPATIBILITY_STATUS_LABELS: Record<CompatibilityDisplayStatus, str
   unverified: 'Unverified',
   unsupported: 'Unsupported',
 };
+
+export const EXTENSION_RUNTIME_REQUIREMENT_LABELS: Record<
+  ExtensionRuntimeRequirement,
+  string
+> = {
+  'web-compatible': 'Web Adapter Compatible',
+  'android-native': 'Requires Android Native Runtime',
+  unsupported: 'Unsupported',
+  unverified: 'Unverified',
+};
+
+const BUILTIN_WEB_BRIDGE_IDS = new Set(['hianime-bridge', 'mangadex-bridge']);
+
+export function isAniyomiPackageSource(
+  source?:
+    | (Pick<SourceInfo, 'id' | 'type'> &
+        Partial<Pick<SourceInfo, 'pkg' | 'apkName' | 'metadataOnlyStorage'>>)
+    | null,
+): boolean {
+  if (!source || source.type === 'inbuilt') return false;
+  if (source.metadataOnlyStorage === true) return true;
+  if (typeof source.id === 'string' && source.id.startsWith('ext-ay-')) return true;
+  if (typeof source.apkName === 'string' && source.apkName.trim().length > 0) return true;
+  if (
+    typeof source.pkg === 'string' &&
+    /(?:tachiyomi|aniyomi|mihon|komikku|animeextension|extension)/i.test(source.pkg)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function classifyExtensionRuntimeRequirement(params: {
+  source: Pick<SourceInfo, 'id' | 'type' | 'mediaTypes'> &
+    Partial<Pick<SourceInfo, 'pkg' | 'apkName' | 'metadataOnlyStorage'>>;
+  profileKind?: string;
+  isMetadataOnly?: boolean;
+  overallStatus?: CompatibilityDisplayStatus;
+  reportStatus?: DiagnosticOverallStatus | null;
+  hasVerifiedFullDiagnostic?: boolean;
+  contextMediaTab?: ExtensionMediaTab;
+}): ExtensionRuntimeRequirement {
+  const {
+    source,
+    profileKind,
+    isMetadataOnly,
+    overallStatus,
+    reportStatus,
+    hasVerifiedFullDiagnostic,
+    contextMediaTab = 'ANIME',
+  } = params;
+
+  const isNovelOnly =
+    Array.isArray(source.mediaTypes) &&
+    source.mediaTypes.length > 0 &&
+    source.mediaTypes.every((m) => m === 'NOVEL');
+
+  if (
+    isMetadataOnly ||
+    profileKind === 'metadata-only' ||
+    profileKind === 'missing-host' ||
+    profileKind === 'gotaku' ||
+    contextMediaTab === 'NOVEL' ||
+    isNovelOnly ||
+    (contextMediaTab === 'ANIME' && profileKind === 'non-anime') ||
+    reportStatus === 'unsupported' ||
+    overallStatus === 'unsupported'
+  ) {
+    return 'unsupported';
+  }
+
+  if (
+    source.type === 'inbuilt' ||
+    profileKind === 'inbuilt-anime' ||
+    BUILTIN_WEB_BRIDGE_IDS.has(source.id) ||
+    (hasVerifiedFullDiagnostic === true && overallStatus === 'supported')
+  ) {
+    return 'web-compatible';
+  }
+
+  if (isAniyomiPackageSource(source)) {
+    return 'android-native';
+  }
+
+  return 'unverified';
+}
 
 export const MAX_DIAGNOSTIC_HISTORY = 6;
 export const DEFAULT_DIAGNOSTIC_PROBE_SCOPE = 'Episode 1 default probe';
@@ -144,6 +232,9 @@ export interface ExtensionCompatibilitySnapshot {
   inferredAudioLanguages: string[];
   audioVerificationDetail: string | null;
   history: ExtensionDiagnosticHistoryEntry[];
+  runtimeRequirement: ExtensionRuntimeRequirement;
+  runtimeRequirementLabel: string;
+  isNativePackageMetadataOnly: boolean;
 }
 
 export interface CompatibilityDashboardCounts {
@@ -154,6 +245,8 @@ export interface CompatibilityDashboardCounts {
   unsupported: number;
   metadataOnly: number;
   totalPlayable: number;
+  androidNative: number;
+  webCompatible: number;
 }
 
 export const EXTENSION_DIAGNOSTICS_STORAGE_KEY = 'shizutv_extension_diagnostics_v1';
@@ -434,8 +527,39 @@ function resolveSnapshotLastVerifiedAt(
   return null;
 }
 
+type SnapshotWithoutRuntime = Omit<
+  ExtensionCompatibilitySnapshot,
+  'runtimeRequirement' | 'runtimeRequirementLabel' | 'isNativePackageMetadataOnly'
+>;
+
+function attachRuntimeRequirement(
+  source: Pick<SourceInfo, 'id' | 'name' | 'type' | 'mediaTypes' | 'baseUrl' | 'pkg'> &
+    Partial<Pick<SourceInfo, 'apkName' | 'metadataOnlyStorage' | 'runtimeRequirement'>>,
+  profileKind: string,
+  base: SnapshotWithoutRuntime,
+  reportStatus: DiagnosticOverallStatus | null | undefined,
+  contextMediaTab: ExtensionMediaTab,
+): ExtensionCompatibilitySnapshot {
+  const runtimeRequirement = classifyExtensionRuntimeRequirement({
+    source,
+    profileKind,
+    isMetadataOnly: base.isMetadataOnly,
+    overallStatus: base.overallStatus,
+    reportStatus,
+    hasVerifiedFullDiagnostic: base.hasVerifiedFullDiagnostic,
+    contextMediaTab,
+  });
+  return {
+    ...base,
+    runtimeRequirement,
+    runtimeRequirementLabel: EXTENSION_RUNTIME_REQUIREMENT_LABELS[runtimeRequirement],
+    isNativePackageMetadataOnly: isAniyomiPackageSource(source),
+  };
+}
+
 export function buildExtensionCompatibilitySnapshot(
-  source: Pick<SourceInfo, 'id' | 'name' | 'type' | 'mediaTypes' | 'baseUrl' | 'pkg'>,
+  source: Pick<SourceInfo, 'id' | 'name' | 'type' | 'mediaTypes' | 'baseUrl' | 'pkg'> &
+    Partial<Pick<SourceInfo, 'apkName' | 'metadataOnlyStorage' | 'runtimeRequirement'>>,
   report?: ExtensionDiagnosticReport | null,
   contextMediaTab: ExtensionMediaTab = 'ANIME',
 ): ExtensionCompatibilitySnapshot {
@@ -458,34 +582,40 @@ export function buildExtensionCompatibilitySnapshot(
     const searchStatus: CompatibilityDisplayStatus = report
       ? mapCapabilityStatusToDisplayStatus(report.capabilities.metadataSearch)
       : 'unverified';
-    return {
-      sourceId: source.id,
-      sourceName: source.name,
-      isMetadataOnly: true,
-      overallStatus: 'unsupported',
-      overallLabel: COMPATIBILITY_STATUS_LABELS.unsupported,
-      reliabilityLevel: 'unsupported',
-      reliabilityLabel: SOURCE_RELIABILITY_LABELS.unsupported,
-      capabilities: {
-        animeSearch: makeCapabilityEntry('animeSearch', searchLabel, searchStatus),
-        episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unsupported', reason),
-        audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unsupported', reason),
-        videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, 'unsupported', reason),
+    return attachRuntimeRequirement(
+      source,
+      profile.kind,
+      {
+        sourceId: source.id,
+        sourceName: source.name,
+        isMetadataOnly: true,
+        overallStatus: 'unsupported',
+        overallLabel: COMPATIBILITY_STATUS_LABELS.unsupported,
+        reliabilityLevel: 'unsupported',
+        reliabilityLabel: SOURCE_RELIABILITY_LABELS.unsupported,
+        capabilities: {
+          animeSearch: makeCapabilityEntry('animeSearch', searchLabel, searchStatus),
+          episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unsupported', reason),
+          audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unsupported', reason),
+          videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, 'unsupported', reason),
+        },
+        lastTestedAt,
+        lastVerifiedAt: null,
+        lastDiagnosticResult: report?.summary || 'Metadata-only catalog (not playable)',
+        failureReason: reason,
+        failureKind: 'metadata_only',
+        failureKindLabel: DIAGNOSTIC_FAILURE_KIND_LABELS.metadata_only,
+        probeScope: null,
+        hasVerifiedFullDiagnostic: false,
+        detectedAudioLanguages: [],
+        confirmedAudioLanguages: [],
+        inferredAudioLanguages: [],
+        audioVerificationDetail: null,
+        history,
       },
-      lastTestedAt,
-      lastVerifiedAt: null,
-      lastDiagnosticResult: report?.summary || 'Metadata-only catalog (not playable)',
-      failureReason: reason,
-      failureKind: 'metadata_only',
-      failureKindLabel: DIAGNOSTIC_FAILURE_KIND_LABELS.metadata_only,
-      probeScope: null,
-      hasVerifiedFullDiagnostic: false,
-      detectedAudioLanguages: [],
-      confirmedAudioLanguages: [],
-      inferredAudioLanguages: [],
-      audioVerificationDetail: null,
-      history,
-    };
+      report?.status,
+      contextMediaTab,
+    );
   }
 
   // 2. Novel / Non-matching media / Missing host
@@ -502,34 +632,40 @@ export function buildExtensionCompatibilitySnapshot(
         : `${source.name} is missing a compatible stream host.`);
     const failureKind: DiagnosticFailureKind =
       profile.kind === 'missing-host' ? 'missing_host' : 'unsupported_format';
-    return {
-      sourceId: source.id,
-      sourceName: source.name,
-      isMetadataOnly: false,
-      overallStatus: 'unsupported',
-      overallLabel: COMPATIBILITY_STATUS_LABELS.unsupported,
-      reliabilityLevel: 'unsupported',
-      reliabilityLabel: SOURCE_RELIABILITY_LABELS.unsupported,
-      capabilities: {
-        animeSearch: makeCapabilityEntry('animeSearch', searchLabel, 'unsupported', reason),
-        episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unsupported', reason),
-        audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unsupported', reason),
-        videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, 'unsupported', reason),
+    return attachRuntimeRequirement(
+      source,
+      profile.kind,
+      {
+        sourceId: source.id,
+        sourceName: source.name,
+        isMetadataOnly: false,
+        overallStatus: 'unsupported',
+        overallLabel: COMPATIBILITY_STATUS_LABELS.unsupported,
+        reliabilityLevel: 'unsupported',
+        reliabilityLabel: SOURCE_RELIABILITY_LABELS.unsupported,
+        capabilities: {
+          animeSearch: makeCapabilityEntry('animeSearch', searchLabel, 'unsupported', reason),
+          episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unsupported', reason),
+          audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unsupported', reason),
+          videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, 'unsupported', reason),
+        },
+        lastTestedAt,
+        lastVerifiedAt: null,
+        lastDiagnosticResult: report?.summary || 'Unsupported extension configuration',
+        failureReason: reason,
+        failureKind,
+        failureKindLabel: DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind],
+        probeScope: null,
+        hasVerifiedFullDiagnostic: false,
+        detectedAudioLanguages: [],
+        confirmedAudioLanguages: [],
+        inferredAudioLanguages: [],
+        audioVerificationDetail: null,
+        history,
       },
-      lastTestedAt,
-      lastVerifiedAt: null,
-      lastDiagnosticResult: report?.summary || 'Unsupported extension configuration',
-      failureReason: reason,
-      failureKind,
-      failureKindLabel: DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind],
-      probeScope: null,
-      hasVerifiedFullDiagnostic: false,
-      detectedAudioLanguages: [],
-      confirmedAudioLanguages: [],
-      inferredAudioLanguages: [],
-      audioVerificationDetail: null,
-      history,
-    };
+      report?.status,
+      contextMediaTab,
+    );
   }
 
   // 3. Gotaku: public catalog search supported, encrypted/Turnstile episodes & playback unsupported.
@@ -543,72 +679,84 @@ export function buildExtensionCompatibilitySnapshot(
       : 'unverified';
     const overallStatus: CompatibilityDisplayStatus =
       searchStatus === 'supported' ? 'partial' : 'unsupported';
-    return {
-      sourceId: source.id,
-      sourceName: source.name,
-      isMetadataOnly: false,
-      overallStatus,
-      overallLabel: COMPATIBILITY_STATUS_LABELS[overallStatus],
-      reliabilityLevel: 'unsupported',
-      reliabilityLabel: SOURCE_RELIABILITY_LABELS.unsupported,
-      capabilities: {
-        animeSearch: makeCapabilityEntry('animeSearch', searchLabel, searchStatus),
-        episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unsupported', reason),
-        audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unsupported', reason),
-        videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, 'unsupported', reason),
+    return attachRuntimeRequirement(
+      source,
+      profile.kind,
+      {
+        sourceId: source.id,
+        sourceName: source.name,
+        isMetadataOnly: false,
+        overallStatus,
+        overallLabel: COMPATIBILITY_STATUS_LABELS[overallStatus],
+        reliabilityLevel: 'unsupported',
+        reliabilityLabel: SOURCE_RELIABILITY_LABELS.unsupported,
+        capabilities: {
+          animeSearch: makeCapabilityEntry('animeSearch', searchLabel, searchStatus),
+          episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unsupported', reason),
+          audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unsupported', reason),
+          videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, 'unsupported', reason),
+        },
+        lastTestedAt,
+        lastVerifiedAt: null,
+        lastDiagnosticResult:
+          report?.summary || 'Catalog search only · Episodes and playback unsupported',
+        failureReason: reason,
+        failureKind: report?.failureKind || 'unsupported_format',
+        failureKindLabel:
+          DIAGNOSTIC_FAILURE_KIND_LABELS[report?.failureKind || 'unsupported_format'],
+        probeScope: report?.probeScope || null,
+        hasVerifiedFullDiagnostic: false,
+        detectedAudioLanguages: [],
+        confirmedAudioLanguages: [],
+        inferredAudioLanguages: [],
+        audioVerificationDetail: null,
+        history,
       },
-      lastTestedAt,
-      lastVerifiedAt: null,
-      lastDiagnosticResult:
-        report?.summary || 'Catalog search only · Episodes and playback unsupported',
-      failureReason: reason,
-      failureKind: report?.failureKind || 'unsupported_format',
-      failureKindLabel:
-        DIAGNOSTIC_FAILURE_KIND_LABELS[report?.failureKind || 'unsupported_format'],
-      probeScope: report?.probeScope || null,
-      hasVerifiedFullDiagnostic: false,
-      detectedAudioLanguages: [],
-      confirmedAudioLanguages: [],
-      inferredAudioLanguages: [],
-      audioVerificationDetail: null,
-      history,
-    };
+      report?.status,
+      contextMediaTab,
+    );
   }
 
   // 4. Untested sources: NEVER mark playback or other capabilities as Supported until verified.
   if (!report) {
-    return {
-      sourceId: source.id,
-      sourceName: source.name,
-      isMetadataOnly: false,
-      overallStatus: 'unverified',
-      overallLabel: COMPATIBILITY_STATUS_LABELS.unverified,
-      reliabilityLevel: 'unverified',
-      reliabilityLabel: SOURCE_RELIABILITY_LABELS.unverified,
-      capabilities: {
-        animeSearch: makeCapabilityEntry('animeSearch', searchLabel, 'unverified'),
-        episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unverified'),
-        audioLanguage: makeCapabilityEntry(
-          'audioLanguage',
-          'Audio Language',
-          contextMediaTab === 'ANIME' ? 'unverified' : 'unsupported',
-        ),
-        videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, 'unverified'),
+    return attachRuntimeRequirement(
+      source,
+      profile.kind,
+      {
+        sourceId: source.id,
+        sourceName: source.name,
+        isMetadataOnly: false,
+        overallStatus: 'unverified',
+        overallLabel: COMPATIBILITY_STATUS_LABELS.unverified,
+        reliabilityLevel: 'unverified',
+        reliabilityLabel: SOURCE_RELIABILITY_LABELS.unverified,
+        capabilities: {
+          animeSearch: makeCapabilityEntry('animeSearch', searchLabel, 'unverified'),
+          episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unverified'),
+          audioLanguage: makeCapabilityEntry(
+            'audioLanguage',
+            'Audio Language',
+            contextMediaTab === 'ANIME' ? 'unverified' : 'unsupported',
+          ),
+          videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, 'unverified'),
+        },
+        lastTestedAt: null,
+        lastVerifiedAt: null,
+        lastDiagnosticResult: 'Not yet tested',
+        failureReason: null,
+        failureKind: null,
+        failureKindLabel: null,
+        probeScope: null,
+        hasVerifiedFullDiagnostic: false,
+        detectedAudioLanguages: [],
+        confirmedAudioLanguages: [],
+        inferredAudioLanguages: [],
+        audioVerificationDetail: null,
+        history: [],
       },
-      lastTestedAt: null,
-      lastVerifiedAt: null,
-      lastDiagnosticResult: 'Not yet tested',
-      failureReason: null,
-      failureKind: null,
-      failureKindLabel: null,
-      probeScope: null,
-      hasVerifiedFullDiagnostic: false,
-      detectedAudioLanguages: [],
-      confirmedAudioLanguages: [],
-      inferredAudioLanguages: [],
-      audioVerificationDetail: null,
-      history: [],
-    };
+      null,
+      contextMediaTab,
+    );
   }
 
   // 5. Persisted report exists — enforce strict anti-false-positive verification gates.
@@ -635,39 +783,45 @@ export function buildExtensionCompatibilitySnapshot(
         : overallStatus === 'partial'
           ? 'partially_verified'
           : 'unverified';
-    return {
-      sourceId: source.id,
-      sourceName: source.name,
-      isMetadataOnly: false,
-      overallStatus,
-      overallLabel: COMPATIBILITY_STATUS_LABELS[overallStatus],
-      reliabilityLevel,
-      reliabilityLabel: SOURCE_RELIABILITY_LABELS[reliabilityLevel],
-      capabilities: {
-        animeSearch: makeCapabilityEntry('animeSearch', searchLabel, 'unverified'),
-        episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unverified'),
-        audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unverified'),
-        videoPlayback: makeCapabilityEntry(
-          'videoPlayback',
-          playbackLabel,
-          'unverified',
-          'Ping check cannot verify video playback.',
-        ),
+    return attachRuntimeRequirement(
+      source,
+      profile.kind,
+      {
+        sourceId: source.id,
+        sourceName: source.name,
+        isMetadataOnly: false,
+        overallStatus,
+        overallLabel: COMPATIBILITY_STATUS_LABELS[overallStatus],
+        reliabilityLevel,
+        reliabilityLabel: SOURCE_RELIABILITY_LABELS[reliabilityLevel],
+        capabilities: {
+          animeSearch: makeCapabilityEntry('animeSearch', searchLabel, 'unverified'),
+          episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unverified'),
+          audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unverified'),
+          videoPlayback: makeCapabilityEntry(
+            'videoPlayback',
+            playbackLabel,
+            'unverified',
+            'Ping check cannot verify video playback.',
+          ),
+        },
+        lastTestedAt,
+        lastVerifiedAt,
+        lastDiagnosticResult: report.summary,
+        failureReason,
+        failureKind,
+        failureKindLabel: failureKind ? DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind] : null,
+        probeScope: report.probeScope || null,
+        hasVerifiedFullDiagnostic: false,
+        detectedAudioLanguages: [],
+        confirmedAudioLanguages: [],
+        inferredAudioLanguages: [],
+        audioVerificationDetail: null,
+        history,
       },
-      lastTestedAt,
-      lastVerifiedAt,
-      lastDiagnosticResult: report.summary,
-      failureReason,
-      failureKind,
-      failureKindLabel: failureKind ? DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind] : null,
-      probeScope: report.probeScope || null,
-      hasVerifiedFullDiagnostic: false,
-      detectedAudioLanguages: [],
-      confirmedAudioLanguages: [],
-      inferredAudioLanguages: [],
-      audioVerificationDetail: null,
-      history,
-    };
+      report.status,
+      contextMediaTab,
+    );
   }
 
   if (effectiveMode === 'basic') {
@@ -693,39 +847,45 @@ export function buildExtensionCompatibilitySnapshot(
         : overallStatus === 'partial'
           ? 'partially_verified'
           : 'unverified';
-    return {
-      sourceId: source.id,
-      sourceName: source.name,
-      isMetadataOnly: false,
-      overallStatus,
-      overallLabel: COMPATIBILITY_STATUS_LABELS[overallStatus],
-      reliabilityLevel,
-      reliabilityLabel: SOURCE_RELIABILITY_LABELS[reliabilityLevel],
-      capabilities: {
-        animeSearch: makeCapabilityEntry('animeSearch', searchLabel, searchDisplay),
-        episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unverified'),
-        audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unverified'),
-        videoPlayback: makeCapabilityEntry(
-          'videoPlayback',
-          playbackLabel,
-          'unverified',
-          'Run Full Diagnostic to verify playback.',
-        ),
+    return attachRuntimeRequirement(
+      source,
+      profile.kind,
+      {
+        sourceId: source.id,
+        sourceName: source.name,
+        isMetadataOnly: false,
+        overallStatus,
+        overallLabel: COMPATIBILITY_STATUS_LABELS[overallStatus],
+        reliabilityLevel,
+        reliabilityLabel: SOURCE_RELIABILITY_LABELS[reliabilityLevel],
+        capabilities: {
+          animeSearch: makeCapabilityEntry('animeSearch', searchLabel, searchDisplay),
+          episodeListing: makeCapabilityEntry('episodeListing', listingLabel, 'unverified'),
+          audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', 'unverified'),
+          videoPlayback: makeCapabilityEntry(
+            'videoPlayback',
+            playbackLabel,
+            'unverified',
+            'Run Full Diagnostic to verify playback.',
+          ),
+        },
+        lastTestedAt,
+        lastVerifiedAt,
+        lastDiagnosticResult: report.summary,
+        failureReason,
+        failureKind,
+        failureKindLabel: failureKind ? DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind] : null,
+        probeScope: report.probeScope || null,
+        hasVerifiedFullDiagnostic: false,
+        detectedAudioLanguages: [],
+        confirmedAudioLanguages: [],
+        inferredAudioLanguages: [],
+        audioVerificationDetail: null,
+        history,
       },
-      lastTestedAt,
-      lastVerifiedAt,
-      lastDiagnosticResult: report.summary,
-      failureReason,
-      failureKind,
-      failureKindLabel: failureKind ? DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind] : null,
-      probeScope: report.probeScope || null,
-      hasVerifiedFullDiagnostic: false,
-      detectedAudioLanguages: [],
-      confirmedAudioLanguages: [],
-      inferredAudioLanguages: [],
-      audioVerificationDetail: null,
-      history,
-    };
+      report.status,
+      contextMediaTab,
+    );
   }
 
   // Full diagnostic mode
@@ -857,34 +1017,40 @@ export function buildExtensionCompatibilitySnapshot(
             ? classifyDiagnosticFailure(failureReason)
             : null);
 
-  return {
-    sourceId: source.id,
-    sourceName: source.name,
-    isMetadataOnly: false,
-    overallStatus,
-    overallLabel: COMPATIBILITY_STATUS_LABELS[overallStatus],
-    reliabilityLevel,
-    reliabilityLabel: SOURCE_RELIABILITY_LABELS[reliabilityLevel],
-    capabilities: {
-      animeSearch: makeCapabilityEntry('animeSearch', searchLabel, animeSearchStatus),
-      episodeListing: makeCapabilityEntry('episodeListing', listingLabel, episodeListingStatus),
-      audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', audioLanguageStatus),
-      videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, videoPlaybackStatus),
+  return attachRuntimeRequirement(
+    source,
+    profile.kind,
+    {
+      sourceId: source.id,
+      sourceName: source.name,
+      isMetadataOnly: false,
+      overallStatus,
+      overallLabel: COMPATIBILITY_STATUS_LABELS[overallStatus],
+      reliabilityLevel,
+      reliabilityLabel: SOURCE_RELIABILITY_LABELS[reliabilityLevel],
+      capabilities: {
+        animeSearch: makeCapabilityEntry('animeSearch', searchLabel, animeSearchStatus),
+        episodeListing: makeCapabilityEntry('episodeListing', listingLabel, episodeListingStatus),
+        audioLanguage: makeCapabilityEntry('audioLanguage', 'Audio Language', audioLanguageStatus),
+        videoPlayback: makeCapabilityEntry('videoPlayback', playbackLabel, videoPlaybackStatus),
+      },
+      lastTestedAt,
+      lastVerifiedAt,
+      lastDiagnosticResult: report.summary,
+      failureReason,
+      failureKind,
+      failureKindLabel: failureKind ? DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind] : null,
+      probeScope,
+      hasVerifiedFullDiagnostic: overallStatus === 'supported' && playbackVerifiedStrict,
+      detectedAudioLanguages: confirmedAudioLanguages,
+      confirmedAudioLanguages,
+      inferredAudioLanguages,
+      audioVerificationDetail,
+      history,
     },
-    lastTestedAt,
-    lastVerifiedAt,
-    lastDiagnosticResult: report.summary,
-    failureReason,
-    failureKind,
-    failureKindLabel: failureKind ? DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind] : null,
-    probeScope,
-    hasVerifiedFullDiagnostic: overallStatus === 'supported' && playbackVerifiedStrict,
-    detectedAudioLanguages: confirmedAudioLanguages,
-    confirmedAudioLanguages,
-    inferredAudioLanguages,
-    audioVerificationDetail,
-    history,
-  };
+    report.status,
+    contextMediaTab,
+  );
 }
 
 export function summarizeCompatibilityCounts(
@@ -898,9 +1064,16 @@ export function summarizeCompatibilityCounts(
     unsupported: 0,
     metadataOnly: 0,
     totalPlayable: 0,
+    androidNative: 0,
+    webCompatible: 0,
   };
 
   for (const snap of snapshots) {
+    if (snap.runtimeRequirement === 'android-native') {
+      counts.androidNative += 1;
+    } else if (snap.runtimeRequirement === 'web-compatible') {
+      counts.webCompatible += 1;
+    }
     if (snap.isMetadataOnly) {
       counts.metadataOnly += 1;
       continue;

@@ -88,6 +88,7 @@ import {
   getSourceManagerBadge,
   resolveActiveSourceId,
 } from '../utils/sourcePicker';
+import { isAniyomiPackageSource } from '../utils/extensionDiagnostics';
 import {
   isMatchedSourceEntryValidForSource,
   shouldUseExtensionEpisodesForSelection,
@@ -3151,7 +3152,7 @@ export const DetailsPage: React.FC = () => {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="px-2.5 py-1 rounded-full bg-[var(--sx-surface-high)]/55 backdrop-blur-md border border-white/35 dark:border-white/12 text-[11px] font-extrabold tabular-nums">
-                      {availableSources.length} installed
+                      {availableSources.length} sources
                     </span>
                     <button
                       type="button"
@@ -3272,6 +3273,11 @@ export const DetailsPage: React.FC = () => {
                                 <span className="px-2 py-0.5 rounded-md bg-[var(--sx-surface-container)]/65 text-[10px] font-extrabold uppercase">
                                   {src.lang}
                                 </span>
+                                {isAniyomiPackageSource(src) && (
+                                  <span className="px-2 py-0.5 rounded-md bg-sky-500/14 text-sky-700 dark:text-sky-300 text-[10px] font-extrabold">
+                                    Android Native / Metadata
+                                  </span>
+                                )}
                                 {src.isNsfw && (
                                   <span className="px-2 py-0.5 rounded-md bg-red-500/15 text-red-700 dark:text-red-300 text-[10px] font-extrabold uppercase">
                                     NSFW

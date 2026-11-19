@@ -1,4 +1,15 @@
-import type { SourceInfo } from '../types/media';
+import type {
+  ExtensionRepo,
+  ExtensionRuntimeRequirement,
+  MediaType,
+  SourceInfo,
+} from '../types/media';
+import {
+  deriveRepoBaseUrl,
+  parseAniyomiLibVersion,
+  parseAniyomiVersionCode,
+  resolveAniyomiAssetUrl,
+} from './extensionRepoParser';
 
 export const APP_STATE_STORAGE_KEY = 'shizutv_state_v2';
 export const LEGACY_STATE_STORAGE_KEY = 'shonenx_state_v2';
@@ -6,6 +17,13 @@ export const REPO_CATALOG_STORAGE_KEY = 'shizutv_repo_catalog_v1';
 
 const RECENT_CACHE_PREFIX = 'shizutv_recent_entry_v1:';
 const RECENT_CACHE_INDEX_KEY = 'shizutv_recent_cache_index_v1';
+const VALID_MEDIA_TYPES = new Set<MediaType>(['ANIME', 'MANGA', 'NOVEL', 'TV', 'MOVIE']);
+const VALID_RUNTIME_REQUIREMENTS = new Set<ExtensionRuntimeRequirement>([
+  'web-compatible',
+  'android-native',
+  'unsupported',
+  'unverified',
+]);
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -34,8 +52,154 @@ function getDefaultStorage(): StorageLike | null {
 }
 
 /**
- * Strips bulky or empty optional fields from catalog entries when storage space is tight,
- * preserving every required runtime field (id, name, type, mediaTypes, lang, version, repoUrl, baseUrl, pkg).
+ * Normalizes and migrates legacy v1/v2 SourceInfo records stored in browser localStorage
+ * without breaking or discarding existing user configurations, while backfilling derivable
+ * Phase 1 repository & Aniyomi package metadata when safe to do so.
+ */
+export function migrateSourceInfoRecord(raw: unknown): SourceInfo | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  const id = typeof rec.id === 'string' ? rec.id.trim() : '';
+  const name = typeof rec.name === 'string' ? rec.name.trim() : '';
+  if (!id || !name) return null;
+
+  const type: SourceInfo['type'] =
+    rec.type === 'inbuilt' ? 'inbuilt' : rec.type === 'extension' || id.startsWith('ext-') ? 'extension' : 'extension';
+
+  const mediaTypesRaw = Array.isArray(rec.mediaTypes) ? rec.mediaTypes : [];
+  const mediaTypes: MediaType[] = mediaTypesRaw
+    .map((m) => String(m).toUpperCase() as MediaType)
+    .filter((m) => VALID_MEDIA_TYPES.has(m));
+
+  const lang = typeof rec.lang === 'string' && rec.lang.trim() ? rec.lang.trim() : 'en';
+  const version = typeof rec.version === 'string' && rec.version.trim() ? rec.version.trim() : '1.0.0';
+  const repoUrl = typeof rec.repoUrl === 'string' && rec.repoUrl.trim() ? rec.repoUrl.trim() : undefined;
+  const repoBaseUrl =
+    (typeof rec.repoBaseUrl === 'string' && rec.repoBaseUrl.trim() ? rec.repoBaseUrl.trim() : undefined) ??
+    deriveRepoBaseUrl(repoUrl);
+  const baseUrl = typeof rec.baseUrl === 'string' && rec.baseUrl.trim() ? rec.baseUrl.trim() : undefined;
+  const pkg = typeof rec.pkg === 'string' && rec.pkg.trim() ? rec.pkg.trim() : undefined;
+  const apkName =
+    typeof rec.apkName === 'string' && rec.apkName.trim()
+      ? rec.apkName.trim()
+      : typeof rec.apk === 'string' && rec.apk.trim()
+        ? rec.apk.trim()
+        : undefined;
+  const apkUrl =
+    (typeof rec.apkUrl === 'string' && rec.apkUrl.trim() ? rec.apkUrl.trim() : undefined) ??
+    resolveAniyomiAssetUrl(apkName, repoBaseUrl, 'apk');
+  const versionCode = parseAniyomiVersionCode(rec.versionCode ?? rec.code);
+
+  const isAniyomi =
+    type === 'extension' &&
+    (id.startsWith('ext-ay-') ||
+      Boolean(apkName) ||
+      Boolean(pkg && /(?:tachiyomi|aniyomi|mihon|komikku|animeextension|extension)/i.test(pkg)));
+
+  const libVersion = parseAniyomiLibVersion(rec.libVersion, isAniyomi ? version : undefined);
+  const iconUrl =
+    (typeof rec.iconUrl === 'string' && rec.iconUrl.trim() ? rec.iconUrl.trim() : undefined) ??
+    (isAniyomi && pkg && repoBaseUrl
+      ? `${repoBaseUrl.replace(/\/+$/, '')}/icon/${encodeURIComponent(pkg)}.png`
+      : undefined);
+
+  const description =
+    typeof rec.description === 'string' && rec.description.trim() ? rec.description.trim() : undefined;
+  const isNsfw = rec.isNsfw === true ? true : rec.isNsfw === false ? false : undefined;
+
+  const rawReq = rec.runtimeRequirement;
+  const runtimeRequirement: ExtensionRuntimeRequirement | undefined =
+    typeof rawReq === 'string' && VALID_RUNTIME_REQUIREMENTS.has(rawReq as ExtensionRuntimeRequirement)
+      ? (rawReq as ExtensionRuntimeRequirement)
+      : type === 'inbuilt'
+        ? 'web-compatible'
+        : isAniyomi
+          ? 'android-native'
+          : undefined;
+
+  const metadataOnlyStorage =
+    typeof rec.metadataOnlyStorage === 'boolean'
+      ? rec.metadataOnlyStorage
+      : isAniyomi
+        ? true
+        : undefined;
+
+  return {
+    id,
+    name,
+    type,
+    mediaTypes: mediaTypes.length > 0 ? mediaTypes : ['ANIME'],
+    lang,
+    version,
+    ...(repoUrl ? { repoUrl } : {}),
+    ...(repoBaseUrl ? { repoBaseUrl } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(pkg ? { pkg } : {}),
+    ...(apkName ? { apkName } : {}),
+    ...(apkUrl ? { apkUrl } : {}),
+    ...(versionCode !== undefined ? { versionCode } : {}),
+    ...(libVersion ? { libVersion } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
+    ...(description ? { description } : {}),
+    ...(isNsfw !== undefined ? { isNsfw } : {}),
+    ...(runtimeRequirement ? { runtimeRequirement } : {}),
+    ...(metadataOnlyStorage !== undefined ? { metadataOnlyStorage } : {}),
+  };
+}
+
+export function migratePersistedExtensionRecords(records: unknown): SourceInfo[] {
+  if (!Array.isArray(records)) return [];
+  const seen = new Set<string>();
+  const migrated: SourceInfo[] = [];
+  for (const item of records) {
+    const next = migrateSourceInfoRecord(item);
+    if (!next || seen.has(next.id)) continue;
+    seen.add(next.id);
+    migrated.push(next);
+  }
+  return migrated;
+}
+
+export function migrateExtensionRepoRecord(raw: unknown): ExtensionRepo | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  const id = typeof rec.id === 'string' ? rec.id.trim() : '';
+  const name = typeof rec.name === 'string' ? rec.name.trim() : '';
+  const url = typeof rec.url === 'string' ? rec.url.trim() : '';
+  if (!id || !name || !url) return null;
+  const manager =
+    rec.manager === 'aniyomi' ||
+    rec.manager === 'mangayomi' ||
+    rec.manager === 'cloudstream' ||
+    rec.manager === 'legado' ||
+    rec.manager === 'lnreader' ||
+    rec.manager === 'shonenx'
+      ? rec.manager
+      : 'aniyomi';
+  const mediaType =
+    rec.mediaType === 'ANIME' || rec.mediaType === 'MANGA' || rec.mediaType === 'NOVEL'
+      ? rec.mediaType
+      : undefined;
+  const repoBaseUrl =
+    (typeof rec.repoBaseUrl === 'string' && rec.repoBaseUrl.trim() ? rec.repoBaseUrl.trim() : undefined) ??
+    deriveRepoBaseUrl(url);
+  return {
+    id,
+    name,
+    url,
+    ...(repoBaseUrl ? { repoBaseUrl } : {}),
+    manager,
+    ...(mediaType ? { mediaType } : {}),
+    addedAt:
+      typeof rec.addedAt === 'string' && rec.addedAt.trim()
+        ? rec.addedAt.trim()
+        : new Date(0).toISOString(),
+  };
+}
+
+/**
+ * Strips bulky or empty optional fields (description, iconUrl) from catalog entries when storage space is tight,
+ * preserving every required core and Phase 1 Aniyomi metadata field cleanly.
  */
 export function compactRepoCatalogEntries(catalog: SourceInfo[]): SourceInfo[] {
   if (!Array.isArray(catalog)) return [];
@@ -49,9 +213,16 @@ export function compactRepoCatalogEntries(catalog: SourceInfo[]): SourceInfo[] {
       version: src.version || '1.0.0',
     };
     if (src.repoUrl) compacted.repoUrl = src.repoUrl;
+    if (src.repoBaseUrl) compacted.repoBaseUrl = src.repoBaseUrl;
     if (src.baseUrl) compacted.baseUrl = src.baseUrl;
     if (src.pkg) compacted.pkg = src.pkg;
+    if (src.apkName) compacted.apkName = src.apkName;
+    if (src.apkUrl) compacted.apkUrl = src.apkUrl;
+    if (src.versionCode !== undefined) compacted.versionCode = src.versionCode;
+    if (src.libVersion) compacted.libVersion = src.libVersion;
     if (src.isNsfw) compacted.isNsfw = true;
+    if (src.runtimeRequirement) compacted.runtimeRequirement = src.runtimeRequirement;
+    if (src.metadataOnlyStorage) compacted.metadataOnlyStorage = true;
     return compacted;
   });
 }
@@ -231,7 +402,7 @@ export function persistStateAndCatalog(
 }
 
 /**
- * Loads persisted repoCatalog, preferring dedicated REPO_CATALOG_STORAGE_KEY and
+ * Loads and migrates persisted repoCatalog, preferring dedicated REPO_CATALOG_STORAGE_KEY and
  * transparently falling back to any legacy inline array from shizutv_state_v2.
  */
 export function loadPersistedRepoCatalog(
@@ -245,20 +416,12 @@ export function loadPersistedRepoCatalog(
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          return parsed.filter(
-            (item): item is SourceInfo =>
-              Boolean(item && typeof item === 'object' && typeof item.id === 'string' && typeof item.name === 'string'),
-          );
+          return migratePersistedExtensionRecords(parsed);
         }
       }
     } catch {
       // Fallback to legacy inline catalog
     }
   }
-  return Array.isArray(legacyInlineCatalog)
-    ? (legacyInlineCatalog.filter(
-        (item): item is SourceInfo =>
-          Boolean(item && typeof item === 'object' && typeof item.id === 'string' && typeof item.name === 'string'),
-      ))
-    : [];
+  return migratePersistedExtensionRecords(legacyInlineCatalog);
 }

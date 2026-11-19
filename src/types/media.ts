@@ -273,6 +273,12 @@ export type SearchSort =
 export type SearchStatusFilter = 'ALL' | 'RELEASING' | 'FINISHED' | 'NOT_YET_RELEASED' | 'CANCELLED';
 export type SearchFormatFilter = 'ALL' | 'TV' | 'MOVIE' | 'OVA' | 'ONA' | 'SPECIAL' | 'MANGA' | 'ONE_SHOT' | 'NOVEL';
 
+export type ExtensionRuntimeRequirement =
+  | 'web-compatible'
+  | 'android-native'
+  | 'unsupported'
+  | 'unverified';
+
 export interface SourceInfo {
   id: string;
   name: string;
@@ -281,11 +287,18 @@ export interface SourceInfo {
   lang: string;
   version: string;
   repoUrl?: string;
+  repoBaseUrl?: string;
   baseUrl?: string;
   pkg?: string;
+  apkName?: string;
+  apkUrl?: string;
+  versionCode?: number;
+  libVersion?: string;
   iconUrl?: string;
   description?: string;
   isNsfw?: boolean;
+  runtimeRequirement?: ExtensionRuntimeRequirement;
+  metadataOnlyStorage?: boolean;
 }
 
 export interface MatchedSourceEntry {
@@ -355,6 +368,7 @@ export interface ExtensionRepo {
   id: string;
   name: string;
   url: string;
+  repoBaseUrl?: string;
   manager: 'aniyomi' | 'mangayomi' | 'cloudstream' | 'legado' | 'lnreader' | 'shonenx';
   mediaType?: 'ANIME' | 'MANGA' | 'NOVEL';
   addedAt: string;
