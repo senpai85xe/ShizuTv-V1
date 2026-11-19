@@ -1,3 +1,13 @@
+import type {
+  ExtensionAdapterCapabilities,
+  ExtensionAdapterCompatibilityLevel,
+  ExtensionCapabilityErrorCode,
+  ExtensionCapabilityName,
+  ExtensionSourceCompatibilityReport,
+  MatchedSourceEntry,
+  UnifiedEpisode,
+} from '../types/media';
+
 export interface MediaSearchTitlesInput {
   overrideTitle?: string | null;
   english?: string | null;
@@ -1745,6 +1755,562 @@ export function parseGotakuTitleSearchJson(
 
   return results;
 }
+
+export class ExtensionCapabilityError extends Error {
+  readonly code: ExtensionCapabilityErrorCode;
+  readonly capability?: ExtensionCapabilityName;
+  readonly sourceId: string;
+  readonly sourceLabel: string;
+  readonly reason: string;
+  readonly statusCode: number;
+
+  constructor(params: {
+    code: ExtensionCapabilityErrorCode;
+    capability?: ExtensionCapabilityName;
+    sourceId: string;
+    sourceLabel?: string;
+    reason: string;
+    statusCode?: number;
+  }) {
+    super(params.reason);
+    this.name = 'ExtensionCapabilityError';
+    this.code = params.code;
+    this.capability = params.capability;
+    this.sourceId = params.sourceId;
+    this.sourceLabel = params.sourceLabel || params.sourceId;
+    this.reason = params.reason;
+    this.statusCode =
+      params.statusCode ??
+      (params.code === 'EXECUTION_FAILED'
+        ? 502
+        : params.code === 'INVALID_INPUT'
+          ? 400
+          : 422);
+  }
+
+  get isUnsupported(): boolean {
+    return (
+      this.code === 'UNSUPPORTED_CAPABILITY' ||
+      this.code === 'UNVERIFIED_CAPABILITY' ||
+      this.code === 'METADATA_ONLY_SOURCE' ||
+      this.code === 'PROTECTED_SOURCE' ||
+      this.code === 'MISSING_BASE_URL'
+    );
+  }
+}
+
+export function looksLikeBlockedChallengeHtml(status: number, body: string): boolean {
+  if (status === 403 || status === 429 || status === 503) {
+    if (/just a moment|cf-challenge|cloudflare|attention required|enable javascript/i.test(body)) {
+      return true;
+    }
+  }
+  return /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(body);
+}
+
+export function extractNumericIdFromHref(href: string): string | null {
+  const match = String(href || '').match(/-(\d+)(?:\?|$|\/)/);
+  return match?.[1] || null;
+}
+
+export function filterAndRankSearchCandidates<T extends GogoSearchCandidate>(
+  candidates: Iterable<T>,
+  options: {
+    titles: string[];
+    category: 'sub' | 'dub' | 'raw';
+    format?: string | null;
+    audioLanguage?: StreamAudioLanguage | string | null;
+  },
+): Array<T & { score: number }> {
+  return Array.from(candidates)
+    .filter((c) => isViableTitleMatch(c, options.titles, options.format))
+    .map((c) => ({
+      ...c,
+      score: scoreGogoSearchCandidate(c, options),
+    }))
+    .sort((a, b) => b.score - a.score);
+}
+
+export function normalizeProviderSearchItems(
+  sourceId: string,
+  candidates: GogoSearchCandidate[],
+  limit = 15,
+): MatchedSourceEntry[] {
+  return candidates.slice(0, limit).map((cand) => ({
+    sourceId,
+    title: cand.title,
+    href: cand.href,
+    slug: extractSlugFromGogoHref(cand.href),
+    cover: cand.cover ?? null,
+  }));
+}
+
+export function normalizeProviderEpisodes(params: {
+  sourceId: string;
+  host: string;
+  sourceAnimeHref: string;
+  sourceAnimeSlug: string;
+  episodes: ParsedSourceEpisode[];
+}): UnifiedEpisode[] {
+  const seenIds = new Set<string>();
+  return params.episodes.map((ep, idx) => {
+    let id = `${params.sourceId}:${ep.sourceEpisodeId}`;
+    if (seenIds.has(id)) id = `${id}:${idx}`;
+    seenIds.add(id);
+
+    let externalUrl = ep.episodeUrl;
+    try {
+      const resolved = new URL(ep.episodeUrl, params.host).toString();
+      if (/^https?:\/\//i.test(resolved)) externalUrl = resolved;
+    } catch {
+      // Keep original URL when relative fallback cannot be resolved
+    }
+
+    return {
+      id,
+      number: ep.number,
+      title: ep.title,
+      isFiller: ep.isFiller,
+      externalUrl,
+      sourceId: params.sourceId,
+      sourceEpisodeId: ep.sourceEpisodeId,
+      episodeUrl: ep.episodeUrl,
+      sourceAnimeHref: params.sourceAnimeHref,
+      sourceAnimeSlug: params.sourceAnimeSlug,
+    };
+  });
+}
+
+export type SourceProfileKind =
+  | 'inbuilt-anime'
+  | 'hianime'
+  | 'gogo-clone'
+  | 'wordpress-animestream'
+  | 'gotaku'
+  | 'metadata-only'
+  | 'missing-host'
+  | 'non-anime'
+  | 'generic-web';
+
+export interface DetectedSourceProfile {
+  kind: SourceProfileKind;
+  sourceId: string;
+  sourceLabel: string;
+  isMetadataOnly: boolean;
+  hosts: string[];
+  capabilities: ExtensionAdapterCapabilities;
+  compatibility: ExtensionSourceCompatibilityReport;
+}
+
+function extractHostnames(hosts: string[]): string[] {
+  return hosts
+    .map((h) => {
+      try {
+        return new URL(h).hostname.toLowerCase().replace(/^www\./, '');
+      } catch {
+        return '';
+      }
+    })
+    .filter(Boolean);
+}
+
+export function isHiAnimeCompatibleSource(params: {
+  sourceId?: string | null;
+  sourcePkg?: string | null;
+  hosts: string[];
+}): boolean {
+  if (params.sourceId === 'hianime-bridge') return true;
+  const pkg = (params.sourcePkg || '').toLowerCase();
+  if (/\.(?:hianime|aniwatch|kaido)\b/.test(pkg)) return true;
+  const hostnames = extractHostnames(params.hosts);
+  return hostnames.some((host) =>
+    /(?:^|\.)(?:hianime[a-z0-9-]*|aniwatch(?:tv)?|kaido)\.(?!example$)[a-z]{2,}$/i.test(host),
+  );
+}
+
+export function isGogoCloneCompatibleSource(params: {
+  sourceId?: string | null;
+  sourcePkg?: string | null;
+  hosts: string[];
+}): boolean {
+  if (params.sourceId === 'shonenx-hls-inbuilt') return false;
+  const pkg = (params.sourcePkg || '').toLowerCase();
+  if (/\.(?:gogoanime|anitaku)\b/.test(pkg)) return true;
+  const hostnames = extractHostnames(params.hosts);
+  return hostnames.some((host) =>
+    /(?:^|\.)(?:gogoanime[0-9a-z-]*|gogoanimes|anitaku|gogohd)\.(?!example$)[a-z]{2,}$/i.test(host),
+  );
+}
+
+export function isWordPressAnimeCompatibleSource(params: {
+  sourceId?: string | null;
+  sourcePkg?: string | null;
+  hosts: string[];
+}): boolean {
+  const pkg = (params.sourcePkg || '').toLowerCase();
+  if (
+    /\.(?:animexin|luciferdonghua|lmanime|donghuastream|toonstream|animehindiworld|deadtoons)\b/.test(
+      pkg,
+    )
+  ) {
+    return true;
+  }
+  const hostnames = extractHostnames(params.hosts);
+  return hostnames.some((host) =>
+    /(?:^|\.)(?:animexin|luciferdonghua|lmanime|donghuastream|toonstream|animehindiworld|deadtoons)\.(?!example$)[a-z]{2,}$/i.test(
+      host,
+    ),
+  );
+}
+
+export function assessExtensionCompatibility(params: {
+  adapterId: string;
+  sourceId: string;
+  sourceLabel: string;
+  providerKind: string;
+  isMetadataOnly: boolean;
+  capabilities: ExtensionAdapterCapabilities;
+}): ExtensionSourceCompatibilityReport {
+  const required: ExtensionCapabilityName[] = ['search', 'episodes', 'stream'];
+  const descriptors = required.map((key) => params.capabilities[key]);
+
+  if (params.isMetadataOnly) {
+    const reason =
+      params.capabilities.stream.reason ||
+      params.capabilities.episodes.reason ||
+      `${params.sourceLabel} is a metadata/tracking catalog and does not host playable video streams.`;
+    return {
+      adapterId: params.adapterId,
+      sourceId: params.sourceId,
+      sourceLabel: params.sourceLabel,
+      providerKind: params.providerKind,
+      isMetadataOnly: true,
+      fullyCompatible: false,
+      compatibility: 'unsupported',
+      reason,
+      capabilities: params.capabilities,
+    };
+  }
+
+  const hasVerifiedAll = descriptors.every(
+    (d) => d.state === 'verified' && d.verified === true,
+  );
+  if (hasVerifiedAll) {
+    return {
+      adapterId: params.adapterId,
+      sourceId: params.sourceId,
+      sourceLabel: params.sourceLabel,
+      providerKind: params.providerKind,
+      isMetadataOnly: false,
+      fullyCompatible: true,
+      compatibility: 'full',
+      capabilities: params.capabilities,
+    };
+  }
+
+  const hasAnyUsable = descriptors.some(
+    (d) => d.state === 'verified' || d.state === 'supported',
+  );
+  const hasUnsupported = descriptors.some(
+    (d) => d.state === 'unsupported' || d.state === 'unavailable',
+  );
+  const firstReason = descriptors.find((d) => d.reason)?.reason;
+
+  let compatibility: ExtensionAdapterCompatibilityLevel;
+  if (!hasAnyUsable && hasUnsupported) {
+    compatibility = 'unsupported';
+  } else if (hasAnyUsable && hasUnsupported) {
+    compatibility = 'partial';
+  } else {
+    compatibility = 'unverified';
+  }
+
+  return {
+    adapterId: params.adapterId,
+    sourceId: params.sourceId,
+    sourceLabel: params.sourceLabel,
+    providerKind: params.providerKind,
+    isMetadataOnly: false,
+    fullyCompatible: false,
+    compatibility,
+    reason: firstReason,
+    capabilities: params.capabilities,
+  };
+}
+
+export function detectSourceProfile(source: {
+  id: string;
+  name?: string | null;
+  type?: 'inbuilt' | 'extension' | string | null;
+  mediaTypes?: string[] | null;
+  baseUrl?: string | null;
+  pkg?: string | null;
+}): DetectedSourceProfile {
+  const cleanId = String(source.id || '').trim() || 'shonenx-hls-inbuilt';
+  const sourceLabel = String(source.name || cleanId).trim() || cleanId;
+  const isMetadataOnly = isMetadataOnlyCatalogHost(
+    source.baseUrl,
+    sourceLabel,
+    source.pkg,
+    cleanId,
+  );
+
+  const mediaTypes = Array.isArray(source.mediaTypes)
+    ? source.mediaTypes.map((m) => String(m).toUpperCase())
+    : [];
+  const hasAnimeSupport =
+    mediaTypes.length === 0 ||
+    mediaTypes.includes('ANIME') ||
+    mediaTypes.includes('MOVIE') ||
+    mediaTypes.includes('TV');
+
+  const hostPlan = resolveProviderHostPlan({
+    sourceId: cleanId,
+    sourceName: sourceLabel,
+    sourceBaseUrl: source.baseUrl,
+  });
+
+  if (isMetadataOnly) {
+    const reason = `${sourceLabel} is a metadata/tracking catalog and does not host playable video streams.`;
+    const capabilities: ExtensionAdapterCapabilities = {
+      search: { state: 'unsupported', verified: false, reason },
+      episodes: { state: 'unsupported', verified: false, reason },
+      stream: { state: 'unsupported', verified: false, reason },
+    };
+    return {
+      kind: 'metadata-only',
+      sourceId: cleanId,
+      sourceLabel,
+      isMetadataOnly: true,
+      hosts: [],
+      capabilities,
+      compatibility: assessExtensionCompatibility({
+        adapterId: 'metadata-only',
+        sourceId: cleanId,
+        sourceLabel,
+        providerKind: 'metadata-only',
+        isMetadataOnly: true,
+        capabilities,
+      }),
+    };
+  }
+
+  if (!hasAnimeSupport) {
+    const reason = `${sourceLabel} does not declare ANIME playback support.`;
+    const capabilities: ExtensionAdapterCapabilities = {
+      search: { state: 'unsupported', verified: false, reason },
+      episodes: { state: 'unsupported', verified: false, reason },
+      stream: { state: 'unsupported', verified: false, reason },
+    };
+    return {
+      kind: 'non-anime',
+      sourceId: cleanId,
+      sourceLabel,
+      isMetadataOnly: false,
+      hosts: hostPlan.hosts,
+      capabilities,
+      compatibility: assessExtensionCompatibility({
+        adapterId: 'non-anime',
+        sourceId: cleanId,
+        sourceLabel,
+        providerKind: 'non-anime',
+        isMetadataOnly: false,
+        capabilities,
+      }),
+    };
+  }
+
+  if (hostPlan.mode === 'inbuilt') {
+    const capabilities: ExtensionAdapterCapabilities = {
+      search: { state: 'verified', verified: true },
+      episodes: { state: 'verified', verified: true },
+      stream: { state: 'verified', verified: true },
+    };
+    return {
+      kind: 'inbuilt-anime',
+      sourceId: cleanId,
+      sourceLabel,
+      isMetadataOnly: false,
+      hosts: hostPlan.hosts,
+      capabilities,
+      compatibility: assessExtensionCompatibility({
+        adapterId: 'shizutv-inbuilt',
+        sourceId: cleanId,
+        sourceLabel,
+        providerKind: 'inbuilt-anime',
+        isMetadataOnly: false,
+        capabilities,
+      }),
+    };
+  }
+
+  if (hostPlan.mode === 'missing-host' || hostPlan.hosts.length === 0) {
+    const reason = `Extension "${sourceLabel}" does not have a valid HTTP base URL configured.`;
+    const capabilities: ExtensionAdapterCapabilities = {
+      search: { state: 'unsupported', verified: false, reason },
+      episodes: { state: 'unsupported', verified: false, reason },
+      stream: { state: 'unsupported', verified: false, reason },
+    };
+    return {
+      kind: 'missing-host',
+      sourceId: cleanId,
+      sourceLabel,
+      isMetadataOnly: false,
+      hosts: [],
+      capabilities,
+      compatibility: assessExtensionCompatibility({
+        adapterId: 'missing-host',
+        sourceId: cleanId,
+        sourceLabel,
+        providerKind: 'missing-host',
+        isMetadataOnly: false,
+        capabilities,
+      }),
+    };
+  }
+
+  if (hostPlan.hosts.some((h) => isGotakuHost(h))) {
+    const hostLabel = hostPlan.hosts[0] || 'https://gotaku.to';
+    const unsupportedReason = `${sourceLabel} (${hostLabel}) supports title search via its public catalog API, but episode lists and video playback are protected by encrypted binary payloads and Turnstile, which are unsupported by this web adapter.`;
+    const capabilities: ExtensionAdapterCapabilities = {
+      search: { state: 'verified', verified: true },
+      episodes: { state: 'unsupported', verified: false, reason: unsupportedReason },
+      stream: { state: 'unsupported', verified: false, reason: unsupportedReason },
+    };
+    return {
+      kind: 'gotaku',
+      sourceId: cleanId,
+      sourceLabel,
+      isMetadataOnly: false,
+      hosts: hostPlan.hosts,
+      capabilities,
+      compatibility: assessExtensionCompatibility({
+        adapterId: 'gotaku-catalog',
+        sourceId: cleanId,
+        sourceLabel,
+        providerKind: 'gotaku',
+        isMetadataOnly: false,
+        capabilities,
+      }),
+    };
+  }
+
+  if (
+    hostPlan.mode === 'hianime' ||
+    isHiAnimeCompatibleSource({
+      sourceId: cleanId,
+      sourcePkg: source.pkg,
+      hosts: hostPlan.hosts,
+    })
+  ) {
+    const adapterId = cleanId === 'hianime-bridge' ? 'hianime-bridge' : 'hianime-ajax';
+    const capabilities: ExtensionAdapterCapabilities = {
+      search: { state: 'supported', verified: false },
+      episodes: { state: 'supported', verified: false },
+      stream: { state: 'supported', verified: false },
+    };
+    return {
+      kind: 'hianime',
+      sourceId: cleanId,
+      sourceLabel,
+      isMetadataOnly: false,
+      hosts: hostPlan.hosts,
+      capabilities,
+      compatibility: assessExtensionCompatibility({
+        adapterId,
+        sourceId: cleanId,
+        sourceLabel,
+        providerKind: 'hianime',
+        isMetadataOnly: false,
+        capabilities,
+      }),
+    };
+  }
+
+  if (
+    isGogoCloneCompatibleSource({
+      sourceId: cleanId,
+      sourcePkg: source.pkg,
+      hosts: hostPlan.hosts,
+    })
+  ) {
+    const capabilities: ExtensionAdapterCapabilities = {
+      search: { state: 'supported', verified: false },
+      episodes: { state: 'supported', verified: false },
+      stream: { state: 'supported', verified: false },
+    };
+    return {
+      kind: 'gogo-clone',
+      sourceId: cleanId,
+      sourceLabel,
+      isMetadataOnly: false,
+      hosts: hostPlan.hosts,
+      capabilities,
+      compatibility: assessExtensionCompatibility({
+        adapterId: 'gogo-html',
+        sourceId: cleanId,
+        sourceLabel,
+        providerKind: 'gogo-clone',
+        isMetadataOnly: false,
+        capabilities,
+      }),
+    };
+  }
+
+  if (
+    isWordPressAnimeCompatibleSource({
+      sourceId: cleanId,
+      sourcePkg: source.pkg,
+      hosts: hostPlan.hosts,
+    })
+  ) {
+    const capabilities: ExtensionAdapterCapabilities = {
+      search: { state: 'supported', verified: false },
+      episodes: { state: 'supported', verified: false },
+      stream: { state: 'supported', verified: false },
+    };
+    return {
+      kind: 'wordpress-animestream',
+      sourceId: cleanId,
+      sourceLabel,
+      isMetadataOnly: false,
+      hosts: hostPlan.hosts,
+      capabilities,
+      compatibility: assessExtensionCompatibility({
+        adapterId: 'wordpress-animestream',
+        sourceId: cleanId,
+        sourceLabel,
+        providerKind: 'wordpress-animestream',
+        isMetadataOnly: false,
+        capabilities,
+      }),
+    };
+  }
+
+  const capabilities: ExtensionAdapterCapabilities = {
+    search: { state: 'supported', verified: false },
+    episodes: { state: 'supported', verified: false },
+    stream: { state: 'supported', verified: false },
+  };
+  return {
+    kind: 'generic-web',
+    sourceId: cleanId,
+    sourceLabel,
+    isMetadataOnly: false,
+    hosts: hostPlan.hosts,
+    capabilities,
+    compatibility: assessExtensionCompatibility({
+      adapterId: 'generic-web',
+      sourceId: cleanId,
+      sourceLabel,
+      providerKind: 'generic-web',
+      isMetadataOnly: false,
+      capabilities,
+    }),
+  };
+}
+
+
 
 
 

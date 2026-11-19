@@ -18,6 +18,7 @@ import {
 } from './src/utils/extensionRepoParser.ts';
 import {
   diagnoseAnimeExtensionServer,
+  ExtensionCapabilityError,
   resolveAnimeEpisodeStream,
   resolveAnimeExtensionEpisodesServer,
   searchAnimeExtensionEntriesServer,
@@ -1404,6 +1405,14 @@ async function startServer() {
 
       res.json(resolved);
     } catch (err) {
+      if (err instanceof ExtensionCapabilityError) {
+        res.status(err.statusCode).json({
+          message: err.reason,
+          code: err.code,
+          capability: err.capability,
+        });
+        return;
+      }
       res.status(404).json({
         message:
           err instanceof Error

@@ -1,10 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  BaseServerAnimeExtensionAdapter,
+  createServerAnimeExtensionAdapter,
   diagnoseAnimeExtensionServer,
+  ExtensionCapabilityError,
+  GogoCloneServerAdapter,
+  HiAnimeServerAdapter,
+  registerServerAnimeExtensionAdapter,
   resolveAnimeEpisodeStream,
   resolveAnimeExtensionEpisodesServer,
   searchAnimeExtensionEntriesServer,
+  type SelectedSourceEntryInput,
+  type ServerAdapterRuntime,
+  type ServerHostStreamOutcome,
+  type ServerStreamExecutionInput,
+  unregisterServerAnimeExtensionAdapter,
+  WordPressAnimeServerAdapter,
 } from './animeStreamResolver.ts';
 
 test('searchAnimeExtensionEntriesServer returns honest incompatibility for client-rendered Turnstile SPA extensions like Gotaku', async () => {
@@ -518,5 +530,614 @@ test('Gotaku uses public /api/v1/titles JSON for search while reporting encrypte
     globalThis.fetch = originalFetch;
   }
 });
+
+test('custom server adapter via registerServerAnimeExtensionAdapter supports different JSON API structures and preserves capability checks', async () => {
+  type JsonFeedPayload = {
+    url: string;
+    rawUrl: string;
+    quality: string;
+    isHls: boolean;
+    serverName: string;
+    sourceId?: string;
+    provider?: string;
+    matchedTitle?: string;
+    matchedEpisode?: number;
+    intro: null;
+    outro: null;
+    availableAudios: Array<{ code: 'ja'; shortLabel: string; label: string; serverCategory: 'sub' }>;
+    mirrors: Array<{ url: string; quality: string; isHls: boolean; serverName: string }>;
+    subtitles: [];
+  };
+
+  class JsonFeedServerAdapter extends BaseServerAnimeExtensionAdapter<JsonFeedPayload> {
+    readonly adapterId = 'test-json-feed';
+    readonly providerKind = 'json-feed-v2';
+
+    protected async searchTitlesImpl(query: string) {
+      const host = this.hosts[0];
+      const res = await this.runtime.fetchText(`${host}/v2/search?q=${encodeURIComponent(query)}`);
+      const data = JSON.parse(res.text) as { results: Array<{ slug: string; name: string }> };
+      return {
+        compatible: true,
+        sourceLabel: this.sourceLabel,
+        items: data.results.map((r) => ({
+          sourceId: this.sourceId,
+          title: r.name,
+          href: `/v2/anime/${r.slug}`,
+          slug: r.slug,
+        })),
+      };
+    }
+
+    protected async listEpisodesImpl(entry: SelectedSourceEntryInput) {
+      const host = this.hosts[0];
+      const res = await this.runtime.fetchText(`${host}${entry.href}/episodes.json`);
+      const data = JSON.parse(res.text) as { eps: Array<{ id: string; num: number; name: string }> };
+      return {
+        compatible: true,
+        sourceLabel: this.sourceLabel,
+        episodes: data.eps.map((ep) => ({
+          id: `${this.sourceId}:${ep.id}`,
+          number: ep.num,
+          title: ep.name,
+          sourceId: this.sourceId,
+          sourceEpisodeId: ep.id,
+          episodeUrl: `/v2/stream/${ep.id}.json`,
+          sourceAnimeHref: entry.href,
+          sourceAnimeSlug: entry.slug,
+        })),
+      };
+    }
+
+    protected async resolveStreamImpl(
+      input: ServerStreamExecutionInput,
+    ): Promise<ServerHostStreamOutcome<JsonFeedPayload>> {
+      const host = this.hosts[0];
+      const epPath = input.validSelectedEpisode?.episodeUrl || `/v2/stream/ep-${input.episodeNumber}.json`;
+      const res = await this.runtime.fetchText(`${host}${epPath}`);
+      const json = JSON.parse(res.text) as { m3u8: string };
+      return {
+        payload: {
+          url: json.m3u8,
+          rawUrl: json.m3u8,
+          quality: '1080p',
+          isHls: true,
+          serverName: 'JSON V2',
+          sourceId: this.sourceId,
+          provider: this.adapterId,
+          matchedTitle: input.directSelectedCandidate?.title,
+          matchedEpisode: input.validSelectedEpisode?.number ?? input.episodeNumber,
+          intro: null,
+          outro: null,
+          availableAudios: [{ code: 'ja' as const, shortLabel: 'JA', label: 'Japanese (Sub)', serverCategory: 'sub' as const }],
+          mirrors: [{ url: json.m3u8, quality: '1080p', isHls: true, serverName: 'JSON V2' }],
+          subtitles: [],
+        },
+      };
+    }
+  }
+
+  const originalFetch = globalThis.fetch;
+  const calledUrls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    calledUrls.push(url);
+    if (url.startsWith('https://json-feed.example/v2/search?q=')) {
+      return new Response(
+        JSON.stringify({ results: [{ slug: 'frieren-s2', name: 'Frieren JSON Feed' }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    if (url === 'https://json-feed.example/v2/anime/frieren-s2/episodes.json') {
+      return new Response(
+        JSON.stringify({ eps: [{ id: 'f2-ep1', num: 1, name: 'Departure JSON' }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    if (url === 'https://json-feed.example/v2/stream/f2-ep1.json') {
+      return new Response(
+        JSON.stringify({ m3u8: 'https://cdn.json-feed.example/ep1/master.m3u8' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return new Response('Not Found', { status: 404 });
+  }) as typeof fetch;
+
+  registerServerAnimeExtensionAdapter({
+    id: 'test-json-feed-adapter',
+    matches: (source) => source.sourceId === 'ext-json-feed',
+    factory: (source, runtime, profile) => new JsonFeedServerAdapter(source, runtime, profile),
+  });
+
+  try {
+    const searchRes = await searchAnimeExtensionEntriesServer({
+      sourceId: 'ext-json-feed',
+      sourceName: 'JSON Feed Ext',
+      sourceBaseUrl: 'https://json-feed.example',
+      query: 'Frieren',
+    });
+    assert.equal(searchRes.compatible, true);
+    assert.equal(searchRes.items[0].href, '/v2/anime/frieren-s2');
+
+    const epRes = await resolveAnimeExtensionEpisodesServer({
+      sourceId: 'ext-json-feed',
+      sourceName: 'JSON Feed Ext',
+      sourceBaseUrl: 'https://json-feed.example',
+      selectedSourceEntry: searchRes.items[0],
+      bypassCache: true,
+    });
+    assert.equal(epRes.compatible, true);
+    assert.equal(epRes.episodes[0].sourceEpisodeId, 'f2-ep1');
+
+    const stream = await resolveAnimeEpisodeStream({
+      mediaId: '154587',
+      titles: { english: 'Frieren' },
+      episodeNumber: 1,
+      sourceId: 'ext-json-feed',
+      sourceName: 'JSON Feed Ext',
+      sourceBaseUrl: 'https://json-feed.example',
+      selectedSourceEntry: searchRes.items[0],
+      selectedEpisode: epRes.episodes[0],
+      bypassCache: true,
+    });
+    assert.equal(stream.url, 'https://cdn.json-feed.example/ep1/master.m3u8');
+    assert.equal(stream.provider, 'test-json-feed');
+
+    // Metadata-only source must reject cleanly with METADATA_ONLY_SOURCE before making any fetch
+    calledUrls.length = 0;
+    await assert.rejects(
+      () =>
+        resolveAnimeEpisodeStream({
+          mediaId: '154587',
+          titles: { english: 'Frieren' },
+          episodeNumber: 1,
+          sourceId: 'ext-mal',
+          sourceName: 'MyAnimeList',
+          sourceBaseUrl: 'https://myanimelist.net',
+          bypassCache: true,
+        }),
+      (err: unknown) => err instanceof ExtensionCapabilityError && err.code === 'METADATA_ONLY_SOURCE',
+    );
+    assert.deepEqual(calledUrls, []);
+  } finally {
+    unregisterServerAnimeExtensionAdapter('test-json-feed-adapter');
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('HiAnimeServerAdapter handles cloned repo hosts like Kaido with strict host isolation across search, episodes, playback, and diagnostics', async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    requestedUrls.push(url);
+
+    if (url.startsWith('https://kaido.to/search?keyword=')) {
+      return new Response(
+        `
+        <html><body>
+          <div class="flw-item">
+            <a href="/watch/solo-leveling-18718" title="Solo Leveling">
+              <img src="https://cdn.kaido.to/solo.jpg" />
+            </a>
+          </div>
+        </body></html>
+        `,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+
+    if (url === 'https://kaido.to/ajax/v2/episode/list/18718') {
+      return new Response(
+        JSON.stringify({
+          html: `
+            <div class="ss-list">
+              <a class="ssl-item ep-item" data-number="1" data-id="55101" href="/watch/solo-leveling-18718?ep=55101">
+                <div class="ep-name">I'm Used to It</div>
+              </a>
+              <a class="ssl-item ep-item" data-number="2" data-id="55102" href="/watch/solo-leveling-18718?ep=55102">
+                <div class="ep-name">If I Had One More Chance</div>
+              </a>
+            </div>
+          `,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    if (url === 'https://kaido.to/ajax/v2/episode/servers?episodeId=55101' || url === 'https://kaido.to/ajax/v2/episode/servers?episodeId=55102') {
+      return new Response(
+        JSON.stringify({
+          html: `<div class="server-item" data-type="sub" data-id="7701">HD-1</div>`,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    if (url === 'https://kaido.to/ajax/v2/episode/sources?id=7701') {
+      return new Response(
+        JSON.stringify({ link: 'https://megaplay.buzz/stream/s-2/55102/sub' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    if (url === 'https://megaplay.buzz/stream/s-2/55102/sub') {
+      return new Response('<div id="megaplay-player" data-id="55102"></div>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+
+    if (url === 'https://megaplay.buzz/stream/getSources?id=55102') {
+      return new Response(
+        JSON.stringify({
+          sources: { file: 'https://cdn.kaido-mirror.example/solo-ep2/master.m3u8' },
+          tracks: [{ file: 'https://cdn.kaido-mirror.example/en.vtt', label: 'English', kind: 'captions' }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const adapter = createServerAnimeExtensionAdapter(
+      {
+        sourceId: 'ext-ay-kaido',
+        sourceName: 'Kaido',
+        sourceBaseUrl: 'https://kaido.to',
+      },
+      {} as ServerAdapterRuntime,
+    );
+    assert.ok(adapter instanceof HiAnimeServerAdapter);
+    assert.equal(adapter.adapterId, 'hianime-ajax');
+
+    const searchRes = await searchAnimeExtensionEntriesServer({
+      sourceId: 'ext-ay-kaido',
+      sourceName: 'Kaido',
+      sourceBaseUrl: 'https://kaido.to',
+      query: 'Solo Leveling',
+    });
+    assert.equal(searchRes.compatible, true);
+    assert.equal(searchRes.items[0].href, '/watch/solo-leveling-18718');
+
+    const epRes = await resolveAnimeExtensionEpisodesServer({
+      sourceId: 'ext-ay-kaido',
+      sourceName: 'Kaido',
+      sourceBaseUrl: 'https://kaido.to',
+      selectedSourceEntry: searchRes.items[0],
+      bypassCache: true,
+    });
+    assert.equal(epRes.compatible, true);
+    assert.equal(epRes.episodes.length, 2);
+    assert.equal(epRes.episodes[1].sourceEpisodeId, '55102');
+
+    const stream = await resolveAnimeEpisodeStream({
+      mediaId: '151807',
+      titles: { english: 'Solo Leveling' },
+      episodeNumber: 2,
+      category: 'sub',
+      sourceId: 'ext-ay-kaido',
+      sourceName: 'Kaido',
+      sourceBaseUrl: 'https://kaido.to',
+      selectedSourceEntry: searchRes.items[0],
+      selectedEpisode: epRes.episodes[1],
+      bypassCache: true,
+    });
+    assert.equal(stream.matchedEpisode, 2);
+    assert.equal(stream.rawUrl, 'https://cdn.kaido-mirror.example/solo-ep2/master.m3u8');
+    assert.ok(stream.subtitles.some((s) => s.lang === 'en'));
+    assert.equal(
+      requestedUrls.some((u) => u.includes('hianime.to') || u.includes('gogoanimes.fi')),
+      false,
+      'cloned Kaido adapter must never leak requests to hianime.to or Inbuilt Gogo hosts',
+    );
+
+    const basicDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-kaido',
+      sourceName: 'Kaido',
+      sourceBaseUrl: 'https://kaido.to',
+      mode: 'basic',
+      query: 'Solo Leveling',
+    });
+    assert.equal(basicDiag.status, 'partial');
+    assert.ok(basicDiag.detail.includes('adapter: hianime-ajax'));
+
+    const fullDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-kaido',
+      sourceName: 'Kaido',
+      sourceBaseUrl: 'https://kaido.to',
+      mode: 'full',
+      query: 'Solo Leveling',
+    });
+    assert.equal(fullDiag.status, 'pass');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('GogoCloneServerAdapter supports Gogo/Anitaku clone search, AJAX episode list, and playback without Inbuilt fallback', async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    requestedUrls.push(url);
+
+    if (url.startsWith('https://gogoanime3.co/search.html?keyword=')) {
+      return new Response(
+        `<ul class="items"><li><p class="name"><a href="/category/dandadan" title="Dandadan">Dandadan</a></p></li></ul>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+
+    if (url === 'https://gogoanime3.co/category/dandadan') {
+      return new Response(
+        `<html><body><input type="hidden" id="movie_id" value="99123" /></body></html>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+
+    if (url.startsWith('https://gogoanime3.co/ajax/load-list-episode')) {
+      return new Response(
+        `
+        <ul id="episode_related">
+          <li><a href="/dandadan-episode-1"><div class="name">EP 1</div></a></li>
+        </ul>
+        `,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+
+    if (url === 'https://gogoanime3.co/dandadan-episode-1') {
+      return new Response(
+        `<div class="anime_muti_link"><ul><li><a data-video="https://embed.gogo3.example/v/dandadan-1">Vidstreaming</a></li></ul></div>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+
+    if (url === 'https://embed.gogo3.example/v/dandadan-1') {
+      return new Response(
+        `<script>var hls = "https://cdn.gogo3.example/dandadan/ep1.m3u8";</script>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const adapter = createServerAnimeExtensionAdapter(
+      {
+        sourceId: 'ext-ay-gogo3',
+        sourceName: 'GogoAnime3',
+        sourceBaseUrl: 'https://gogoanime3.co',
+      },
+      {} as ServerAdapterRuntime,
+    );
+    assert.ok(adapter instanceof GogoCloneServerAdapter);
+
+    const searchRes = await searchAnimeExtensionEntriesServer({
+      sourceId: 'ext-ay-gogo3',
+      sourceName: 'GogoAnime3',
+      sourceBaseUrl: 'https://gogoanime3.co',
+      query: 'Dandadan',
+    });
+    assert.equal(searchRes.compatible, true);
+    assert.equal(searchRes.items[0].href, '/category/dandadan');
+
+    const epRes = await resolveAnimeExtensionEpisodesServer({
+      sourceId: 'ext-ay-gogo3',
+      sourceName: 'GogoAnime3',
+      sourceBaseUrl: 'https://gogoanime3.co',
+      selectedSourceEntry: searchRes.items[0],
+      bypassCache: true,
+    });
+    assert.equal(epRes.compatible, true);
+    assert.equal(epRes.episodes.length, 1);
+    assert.equal(epRes.episodes[0].episodeUrl, '/dandadan-episode-1');
+
+    const stream = await resolveAnimeEpisodeStream({
+      mediaId: '171018',
+      titles: { english: 'Dandadan' },
+      episodeNumber: 1,
+      sourceId: 'ext-ay-gogo3',
+      sourceName: 'GogoAnime3',
+      sourceBaseUrl: 'https://gogoanime3.co',
+      selectedSourceEntry: searchRes.items[0],
+      selectedEpisode: epRes.episodes[0],
+      bypassCache: true,
+    });
+    assert.equal(stream.rawUrl, 'https://cdn.gogo3.example/dandadan/ep1.m3u8');
+    assert.equal(
+      requestedUrls.some((u) => u.includes('gogoanimes.fi') || u.includes('hianime.to')),
+      false,
+      'GogoClone adapter must strictly use configured Gogo clone host',
+    );
+
+    const fullDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-gogo3',
+      sourceName: 'GogoAnime3',
+      sourceBaseUrl: 'https://gogoanime3.co',
+      mode: 'full',
+      query: 'Dandadan',
+    });
+    assert.equal(fullDiag.status, 'pass');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('WordPressAnimeServerAdapter migrates AnimeStream and DooPlay Hindi extensions across search, episodes, playback, and diagnostics', async () => {
+  const originalFetch = globalThis.fetch;
+  const encodedMirrorIframe = Buffer.from(
+    '<iframe src="https://player.animexin.example/e/ep1"></iframe>',
+  ).toString('base64');
+  const encodedM3u8 = Buffer.from('https://cdn.animexin.example/zhan-shen/ep1.m3u8').toString('base64');
+
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+    // AnimeStream host (animexin.dev)
+    if (url.startsWith('https://animexin.dev/?s=')) {
+      return new Response(
+        `<div class="bsx"><a href="/anime/zhan-shen/" title="Zhan Shen">Zhan Shen</a></div>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://animexin.dev/anime/zhan-shen/') {
+      return new Response(
+        `
+        <div class="eplister">
+          <ul>
+            <li><a href="/zhan-shen-episode-01/"><div class="epl-num">1</div><div class="epl-title">Prologue</div></a></li>
+          </ul>
+        </div>
+        `,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://animexin.dev/zhan-shen-episode-01/') {
+      return new Response(
+        `<select class="mirror"><option value="${encodedMirrorIframe}">Mirror 1</option></select>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://player.animexin.example/e/ep1') {
+      return new Response(`<script>var u = atob("${encodedM3u8}");</script>`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+
+    // DooPlay host (toonstream.co) with Hindi audio AJAX
+    if (url.startsWith('https://toonstream.co/?s=')) {
+      return new Response(
+        `<article class="result-item"><a href="/series/naruto-hindi/" title="Naruto Hindi"><h3 class="title">Naruto Hindi</h3></a></article>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://toonstream.co/series/naruto-hindi/') {
+      return new Response(
+        `<ul class="episodios"><li><a href="/episode/naruto-hindi-1x1/"><div class="numerando">1</div>Episode 1</a></li></ul>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://toonstream.co/episode/naruto-hindi-1x1/') {
+      return new Response(
+        `<ul><li class="dooplay_player_option" data-type="tv" data-post="420" data-nume="1">Hindi Server 1</li></ul>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://toonstream.co/wp-admin/admin-ajax.php' && init?.method === 'POST') {
+      return new Response(
+        JSON.stringify({ embed_url: 'https://player.toon.example/hindi-ep1/master.m3u8' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    // Verify factory routing
+    const animexinAdapter = createServerAnimeExtensionAdapter(
+      {
+        sourceId: 'ext-ay-animexin',
+        sourceName: 'AnimeXin',
+        sourceBaseUrl: 'https://animexin.dev',
+      },
+      {} as ServerAdapterRuntime,
+    );
+    assert.ok(animexinAdapter instanceof WordPressAnimeServerAdapter);
+
+    // Case A: AnimeStream flow
+    const axSearch = await searchAnimeExtensionEntriesServer({
+      sourceId: 'ext-ay-animexin',
+      sourceName: 'AnimeXin',
+      sourceBaseUrl: 'https://animexin.dev',
+      query: 'Zhan Shen',
+    });
+    assert.equal(axSearch.compatible, true);
+    assert.equal(axSearch.items[0].href, '/anime/zhan-shen/');
+
+    const axEps = await resolveAnimeExtensionEpisodesServer({
+      sourceId: 'ext-ay-animexin',
+      sourceName: 'AnimeXin',
+      sourceBaseUrl: 'https://animexin.dev',
+      selectedSourceEntry: axSearch.items[0],
+      bypassCache: true,
+    });
+    assert.equal(axEps.compatible, true);
+    assert.equal(axEps.episodes[0].episodeUrl, '/zhan-shen-episode-01/');
+
+    const axStream = await resolveAnimeEpisodeStream({
+      mediaId: '88801',
+      titles: { english: 'Zhan Shen' },
+      episodeNumber: 1,
+      sourceId: 'ext-ay-animexin',
+      sourceName: 'AnimeXin',
+      sourceBaseUrl: 'https://animexin.dev',
+      selectedSourceEntry: axSearch.items[0],
+      selectedEpisode: axEps.episodes[0],
+      bypassCache: true,
+    });
+    assert.equal(axStream.rawUrl, 'https://cdn.animexin.example/zhan-shen/ep1.m3u8');
+
+    // Case B: DooPlay Hindi flow + diagnostics pass
+    const tsSearch = await searchAnimeExtensionEntriesServer({
+      sourceId: 'ext-ay-toonstream',
+      sourceName: 'ToonStream',
+      sourceBaseUrl: 'https://toonstream.co',
+      sourceLang: 'hi',
+      query: 'Naruto',
+    });
+    assert.equal(tsSearch.compatible, true);
+    assert.equal(tsSearch.items[0].href, '/series/naruto-hindi/');
+
+    const tsEps = await resolveAnimeExtensionEpisodesServer({
+      sourceId: 'ext-ay-toonstream',
+      sourceName: 'ToonStream',
+      sourceBaseUrl: 'https://toonstream.co',
+      sourceLang: 'hi',
+      selectedSourceEntry: tsSearch.items[0],
+      bypassCache: true,
+    });
+    assert.equal(tsEps.compatible, true);
+    assert.equal(tsEps.episodes[0].episodeUrl, '/episode/naruto-hindi-1x1/');
+
+    const tsStream = await resolveAnimeEpisodeStream({
+      mediaId: '20',
+      titles: { english: 'Naruto' },
+      episodeNumber: 1,
+      category: 'dub',
+      audioLanguage: 'hi',
+      sourceId: 'ext-ay-toonstream',
+      sourceName: 'ToonStream',
+      sourceBaseUrl: 'https://toonstream.co',
+      sourceLang: 'hi',
+      selectedSourceEntry: tsSearch.items[0],
+      selectedEpisode: tsEps.episodes[0],
+      bypassCache: true,
+    });
+    assert.equal(tsStream.rawUrl, 'https://player.toon.example/hindi-ep1/master.m3u8');
+    assert.ok(tsStream.availableAudios.some((a) => a.code === 'hi'));
+
+    const tsDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-toonstream',
+      sourceName: 'ToonStream',
+      sourceBaseUrl: 'https://toonstream.co',
+      sourceLang: 'hi',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    assert.equal(tsDiag.status, 'pass');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 
 

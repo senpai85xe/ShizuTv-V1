@@ -303,6 +303,54 @@ export interface ExtensionTitleSearchResponse {
   items: MatchedSourceEntry[];
 }
 
+export type ExtensionCapabilityName = 'search' | 'episodes' | 'stream';
+
+export type ExtensionCapabilitySupportState =
+  | 'verified'
+  | 'supported'
+  | 'unsupported'
+  | 'unverified'
+  | 'unavailable';
+
+export type ExtensionCapabilityErrorCode =
+  | 'UNSUPPORTED_CAPABILITY'
+  | 'UNVERIFIED_CAPABILITY'
+  | 'METADATA_ONLY_SOURCE'
+  | 'PROTECTED_SOURCE'
+  | 'MISSING_BASE_URL'
+  | 'INVALID_INPUT'
+  | 'EXECUTION_FAILED';
+
+export interface ExtensionCapabilityDescriptor {
+  state: ExtensionCapabilitySupportState;
+  verified: boolean;
+  reason?: string;
+}
+
+export interface ExtensionAdapterCapabilities {
+  search: ExtensionCapabilityDescriptor;
+  episodes: ExtensionCapabilityDescriptor;
+  stream: ExtensionCapabilityDescriptor;
+}
+
+export type ExtensionAdapterCompatibilityLevel =
+  | 'full'
+  | 'partial'
+  | 'unsupported'
+  | 'unverified';
+
+export interface ExtensionSourceCompatibilityReport {
+  adapterId: string;
+  sourceId: string;
+  sourceLabel: string;
+  providerKind: string;
+  isMetadataOnly: boolean;
+  fullyCompatible: boolean;
+  compatibility: ExtensionAdapterCompatibilityLevel;
+  reason?: string;
+  capabilities: ExtensionAdapterCapabilities;
+}
+
 export interface ExtensionRepo {
   id: string;
   name: string;

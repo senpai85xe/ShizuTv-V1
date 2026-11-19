@@ -1,5 +1,10 @@
 import {
+  ExtensionAdapterCapabilities,
+  ExtensionCapabilityDescriptor,
+  ExtensionCapabilityErrorCode,
+  ExtensionCapabilityName,
   ExtensionEpisodesResponse,
+  ExtensionSourceCompatibilityReport,
   ExtensionTitleSearchResponse,
   MatchedSourceEntry,
   MediaType,
@@ -10,7 +15,13 @@ import {
   VideoServer,
   VideoStream,
 } from '../types/media';
-import { shouldUseExtensionEpisodesForSelection } from '../utils/streamResolverUtils';
+import {
+  assessExtensionCompatibility,
+  type DetectedSourceProfile,
+  detectSourceProfile,
+  ExtensionCapabilityError,
+  shouldUseExtensionEpisodesForSelection,
+} from '../utils/streamResolverUtils';
 import { fetchJikanEpisodes, searchJikan } from './jikan';
 import { fetchKitsuEpisodes } from './kitsu';
 import { searchAniList } from './anilist';
@@ -32,6 +43,8 @@ import type {
   ExtensionDiagnoseMode,
   ExtensionDiagnosticReport,
 } from '../utils/extensionDiagnostics';
+
+export { ExtensionCapabilityError };
 
 export const INBUILT_SOURCES: SourceInfo[] = [
   {
@@ -190,110 +203,59 @@ export interface ResolveEpisodesOptions {
   recordTrace?: boolean;
 }
 
-export async function resolveExtensionEpisodesAsync(params: {
-  sourceId: string;
+export interface ResolveVideoStreamParams {
+  media: UnifiedMedia;
+  episode: UnifiedEpisode;
+  server: VideoServer;
+  sourceId?: string;
   sourceName?: string;
   sourceBaseUrl?: string;
   sourceLang?: string;
-  sourcePkg?: string;
-  selectedSourceEntry: MatchedSourceEntry;
+  audioLanguage?: 'ja' | 'en' | 'hi' | 'es';
+  overrideTitle?: string;
+  selectedSourceEntry?: MatchedSourceEntry | null;
   bypassCache?: boolean;
   signal?: AbortSignal;
-}): Promise<ExtensionEpisodesResponse> {
-  const response = await fetch('/api/extensions/episodes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: params.signal,
-    body: JSON.stringify({
-      sourceId: params.sourceId,
-      sourceName: params.sourceName,
-      sourceBaseUrl: params.sourceBaseUrl,
-      sourceLang: params.sourceLang,
-      sourcePkg: params.sourcePkg,
-      selectedSourceEntry: {
-        sourceId: params.selectedSourceEntry.sourceId,
-        title: params.selectedSourceEntry.title,
-        href: params.selectedSourceEntry.href,
-        slug: params.selectedSourceEntry.slug,
-      },
-      bypassCache: Boolean(params.bypassCache),
-    }),
-  });
-
-  const payload = (await response.json().catch(() => null)) as
-    | (ExtensionEpisodesResponse & { message?: string })
-    | null;
-
-  if (!response.ok && !payload) {
-    throw new Error(
-      `Failed to load episodes from ${params.sourceName || params.sourceId} (HTTP ${response.status}).`,
-    );
-  }
-
-  return {
-    compatible: payload?.compatible !== false,
-    reason: payload?.reason || payload?.message,
-    sourceLabel: payload?.sourceLabel || params.sourceName || params.sourceId,
-    episodes: Array.isArray(payload?.episodes) ? payload.episodes : [],
-  };
 }
 
-export async function resolveEpisodesWithDiagnostics(
+export interface ExtensionSearchOptions {
+  signal?: AbortSignal;
+}
+
+export interface ExtensionEpisodeListInput {
+  media?: UnifiedMedia;
+  selectedSourceEntry?: MatchedSourceEntry | null;
+  overrideTitle?: string;
+  overrideMedia?: UnifiedMedia | null;
+  bypassCache?: boolean;
+  recordTrace?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface ExtensionEpisodeListResult {
+  compatible: boolean;
+  reason?: string;
+  sourceLabel?: string;
+  episodes: UnifiedEpisode[];
+  trace?: EpisodeFetchTrace;
+}
+
+export interface ExtensionAdapterOptions {
+  adapterId?: string;
+  providerKind?: string;
+  profile?: DetectedSourceProfile;
+  capabilities?: Partial<ExtensionAdapterCapabilities>;
+}
+
+/**
+ * Shared metadata episode resolution pipeline (AniZip + AniList streamingEpisodes + Jikan + Kitsu)
+ * used by ShizuTV Stream (Inbuilt) and initial episode structural listing before manual source entry mapping.
+ */
+async function resolveInbuiltEpisodeMetadataPipeline(
   media: UnifiedMedia,
   options?: ResolveEpisodesOptions,
 ): Promise<{ episodes: UnifiedEpisode[]; trace: EpisodeFetchTrace }> {
   const overallStart = performance.now();
-  const initialSourceId = options?.sourceId || 'shonenx-hls-inbuilt';
-  const initialSourceName =
-    options?.sourceName ||
-    INBUILT_SOURCES.find((s) => s.id === initialSourceId)?.name ||
-    initialSourceId;
-
-  if (
-    shouldUseExtensionEpisodesForSelection({
-      sourceId: initialSourceId,
-      isReadingMedia: media.type === 'MANGA' || media.type === 'NOVEL',
-      selectedSourceEntry: options?.selectedSourceEntry,
-    }) &&
-    options?.selectedSourceEntry
-  ) {
-    const extResult = await resolveExtensionEpisodesAsync({
-      sourceId: initialSourceId,
-      sourceName: initialSourceName,
-      sourceBaseUrl: options.sourceBaseUrl,
-      sourceLang: options.sourceLang,
-      sourcePkg: options.sourcePkg,
-      selectedSourceEntry: options.selectedSourceEntry,
-      bypassCache: options.bypassCache,
-    });
-
-    if (!extResult.compatible || extResult.episodes.length === 0) {
-      throw new Error(
-        extResult.reason ||
-          `No episodes found for "${options.selectedSourceEntry.title}" on ${extResult.sourceLabel || initialSourceName}.`,
-      );
-    }
-
-    const trace = analyzeEpisodeResolution({
-      inputMedia: media,
-      resolvedMedia: media,
-      sourceId: initialSourceId,
-      sourceName: extResult.sourceLabel || initialSourceName,
-      overrideTitle: options.selectedSourceEntry.title,
-      overrideMatched: true,
-      resolvedExpectedCount: extResult.episodes.length,
-      providers: [],
-      mergedEpisodes: extResult.episodes,
-      totalDurationMs: Math.round(performance.now() - overallStart),
-    });
-
-    if (options?.recordTrace !== false) {
-      recordEpisodeTrace(trace);
-    }
-
-    return { episodes: extResult.episodes, trace };
-  }
-
   let targetMedia = media;
   const overrideQuery = options?.overrideTitle?.trim();
   let overrideMatched = false;
@@ -567,104 +529,7 @@ export async function resolveEpisodesWithDiagnostics(
   return { episodes: mergedEpisodes, trace };
 }
 
-export async function resolveEpisodesForMedia(
-  media: UnifiedMedia,
-  options?: ResolveEpisodesOptions,
-): Promise<UnifiedEpisode[]> {
-  const { episodes } = await resolveEpisodesWithDiagnostics(media, options);
-  return episodes;
-}
-
-export function resolveChaptersForMedia(media: UnifiedMedia): UnifiedChapter[] {
-  const count = media.chapters && media.chapters > 0 ? media.chapters : 24;
-  return Array.from({ length: count }, (_, idx) => {
-    const num = idx + 1;
-    return {
-      id: `${media.id}-ch-${num}`,
-      number: num,
-      title: `Chapter ${num}`,
-      scanlator: num % 2 === 0 ? 'Official Release' : 'ShizuTv Scanlations',
-      pageCount: 14,
-    };
-  });
-}
-
-export function resolveVideoServers(sourceId?: string, sourceName?: string): VideoServer[] {
-  if (sourceId === 'hianime-bridge') {
-    return [
-      { id: 'hd-1-sub', name: 'HD-1 (Sub)', category: 'sub' },
-      { id: 'hd-2-sub', name: 'HD-2 (Sub)', category: 'sub' },
-      { id: 'hd-1-dub', name: 'HD-1 (Dub)', category: 'dub' },
-    ];
-  }
-  if (sourceId && sourceId.startsWith('ext-')) {
-    const label = sourceName ? `${sourceName.slice(0, 18)}` : 'Extension';
-    return [
-      { id: 'hd-1-sub', name: `${label} · HD-1 (Sub)`, category: 'sub' },
-      { id: 'hd-2-sub', name: `${label} · HD-2 (Sub)`, category: 'sub' },
-      { id: 'hd-1-dub', name: `${label} · HD-1 (Dub)`, category: 'dub' },
-    ];
-  }
-  return [
-    { id: 'hd-1-sub', name: 'HD-1 (Sub)', category: 'sub' },
-    { id: 'hd-2-sub', name: 'HD-2 (Sub)', category: 'sub' },
-    { id: 'hd-1-dub', name: 'HD-1 (Dub)', category: 'dub' },
-  ];
-}
-
-export interface ResolveVideoStreamParams {
-  media: UnifiedMedia;
-  episode: UnifiedEpisode;
-  server: VideoServer;
-  sourceId?: string;
-  sourceName?: string;
-  sourceBaseUrl?: string;
-  sourceLang?: string;
-  audioLanguage?: 'ja' | 'en' | 'hi' | 'es';
-  overrideTitle?: string;
-  selectedSourceEntry?: MatchedSourceEntry | null;
-  bypassCache?: boolean;
-  signal?: AbortSignal;
-}
-
-export async function searchExtensionTitlesAsync(params: {
-  source: SourceInfo;
-  query: string;
-  signal?: AbortSignal;
-}): Promise<ExtensionTitleSearchResponse> {
-  const response = await fetch('/api/extensions/search', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: params.signal,
-    body: JSON.stringify({
-      sourceId: params.source.id,
-      sourceName: params.source.name,
-      sourceBaseUrl: params.source.baseUrl,
-      sourceLang: params.source.lang,
-      sourcePkg: params.source.pkg,
-      query: params.query.trim(),
-    }),
-  });
-
-  const payload = (await response.json().catch(() => null)) as
-    | (ExtensionTitleSearchResponse & { message?: string })
-    | null;
-
-  if (!response.ok && !payload) {
-    throw new Error(`Failed to search ${params.source.name} (HTTP ${response.status}).`);
-  }
-
-  return {
-    compatible: payload?.compatible !== false,
-    reason: payload?.reason || payload?.message,
-    sourceLabel: payload?.sourceLabel || params.source.name,
-    items: Array.isArray(payload?.items) ? payload.items : [],
-  };
-}
-
-export async function resolveVideoStreamAsync(
-  params: ResolveVideoStreamParams,
-): Promise<VideoStream> {
+async function resolveStreamViaApi(params: ResolveVideoStreamParams): Promise<VideoStream> {
   const {
     media,
     episode,
@@ -740,11 +605,29 @@ export async function resolveVideoStreamAsync(
 
   if (!response.ok) {
     let errMessage = `Failed to resolve episode stream (HTTP ${response.status}).`;
+    let errCode: ExtensionCapabilityErrorCode | undefined;
+    let errCapability: ExtensionCapabilityName | undefined;
     try {
-      const errData = (await response.json()) as { message?: string };
+      const errData = (await response.json()) as {
+        message?: string;
+        code?: ExtensionCapabilityErrorCode;
+        capability?: ExtensionCapabilityName;
+      };
       if (errData?.message) errMessage = errData.message;
+      if (errData?.code) errCode = errData.code;
+      if (errData?.capability) errCapability = errData.capability;
     } catch {
       // Ignore JSON parse error
+    }
+    if (errCode) {
+      throw new ExtensionCapabilityError({
+        code: errCode,
+        capability: errCapability || 'stream',
+        sourceId: sourceId || 'shonenx-hls-inbuilt',
+        sourceLabel: sourceName || sourceId,
+        reason: errMessage,
+        statusCode: response.status,
+      });
     }
     throw new Error(errMessage);
   }
@@ -754,6 +637,862 @@ export async function resolveVideoStreamAsync(
     throw new Error('Resolved stream payload did not include a playable URL.');
   }
   return data;
+}
+
+/**
+ * Base `ExtensionAdapter` class defining the universal contract for search,
+ * episode listing, and playback stream resolution with pre-execution
+ * capability enforcement and strict source compatibility checking.
+ */
+export class ExtensionAdapter {
+  readonly source: SourceInfo;
+  readonly adapterId: string;
+  readonly providerKind: string;
+  readonly profile: DetectedSourceProfile;
+  protected readonly capabilities: ExtensionAdapterCapabilities;
+
+  constructor(source: SourceInfo, options?: ExtensionAdapterOptions) {
+    this.source = source;
+    this.profile = options?.profile ?? detectSourceProfile(source);
+    this.adapterId = options?.adapterId ?? this.profile.compatibility.adapterId;
+    this.providerKind = options?.providerKind ?? this.profile.kind;
+    this.capabilities = {
+      search: options?.capabilities?.search ?? this.profile.capabilities.search,
+      episodes: options?.capabilities?.episodes ?? this.profile.capabilities.episodes,
+      stream: options?.capabilities?.stream ?? this.profile.capabilities.stream,
+    };
+  }
+
+  getCapabilities(): ExtensionAdapterCapabilities {
+    return {
+      search: { ...this.capabilities.search },
+      episodes: { ...this.capabilities.episodes },
+      stream: { ...this.capabilities.stream },
+    };
+  }
+
+  getCapability(capability: ExtensionCapabilityName): ExtensionCapabilityDescriptor {
+    return { ...this.capabilities[capability] };
+  }
+
+  supports(capability: ExtensionCapabilityName): boolean {
+    const desc = this.capabilities[capability];
+    return desc.state === 'verified' || desc.state === 'supported';
+  }
+
+  isVerified(capability: ExtensionCapabilityName): boolean {
+    const desc = this.capabilities[capability];
+    return desc.state === 'verified' && desc.verified === true;
+  }
+
+  getCompatibility(): ExtensionSourceCompatibilityReport {
+    return assessExtensionCompatibility({
+      adapterId: this.adapterId,
+      sourceId: this.source.id,
+      sourceLabel: this.source.name || this.source.id,
+      providerKind: this.providerKind,
+      isMetadataOnly: this.profile.isMetadataOnly,
+      capabilities: this.capabilities,
+    });
+  }
+
+  detectCompatibility(): ExtensionSourceCompatibilityReport {
+    return this.getCompatibility();
+  }
+
+  protected requiresHttpBaseUrl(): boolean {
+    return this.source.type !== 'inbuilt' && this.source.id !== 'hianime-bridge';
+  }
+
+  /**
+   * Enforces consistent capability checking BEFORE executing search, episode listing,
+   * or playback resolution. Never lets metadata-only, missing-host, protected,
+   * or unverified/unsupported capabilities execute provider handlers.
+   */
+  assertCapability(capability: ExtensionCapabilityName): void {
+    const label = this.source.name || this.source.id;
+    if (this.profile.isMetadataOnly) {
+      throw new ExtensionCapabilityError({
+        code: 'METADATA_ONLY_SOURCE',
+        capability,
+        sourceId: this.source.id,
+        sourceLabel: label,
+        reason:
+          this.capabilities[capability].reason ||
+          `${label} is a metadata/tracking catalog and does not support ${capability} playback.`,
+      });
+    }
+
+    const desc = this.capabilities[capability];
+    if (desc.state === 'unsupported' || desc.state === 'unavailable') {
+      let code: ExtensionCapabilityErrorCode = 'UNSUPPORTED_CAPABILITY';
+      if (this.profile.kind === 'missing-host') {
+        code = 'MISSING_BASE_URL';
+      } else if (this.profile.kind === 'gotaku') {
+        code = 'PROTECTED_SOURCE';
+      }
+      throw new ExtensionCapabilityError({
+        code,
+        capability,
+        sourceId: this.source.id,
+        sourceLabel: label,
+        reason:
+          desc.reason ||
+          `${label} does not support the "${capability}" capability.`,
+      });
+    }
+
+    if (desc.state === 'unverified') {
+      throw new ExtensionCapabilityError({
+        code: 'UNVERIFIED_CAPABILITY',
+        capability,
+        sourceId: this.source.id,
+        sourceLabel: label,
+        reason:
+          desc.reason ||
+          `${label} capability "${capability}" is unverified and cannot be executed.`,
+      });
+    }
+
+    if (this.requiresHttpBaseUrl() && this.profile.hosts.length === 0) {
+      throw new ExtensionCapabilityError({
+        code: 'MISSING_BASE_URL',
+        capability,
+        sourceId: this.source.id,
+        sourceLabel: label,
+        reason: `Extension "${label}" does not have a valid HTTP base URL configured.`,
+      });
+    }
+  }
+
+  async search(
+    query: string,
+    options?: ExtensionSearchOptions,
+  ): Promise<ExtensionTitleSearchResponse> {
+    this.assertCapability('search');
+    const trimmed = query.trim();
+    if (!trimmed) {
+      return {
+        compatible: true,
+        sourceLabel: this.source.name || this.source.id,
+        items: [],
+      };
+    }
+    return this.searchImpl(trimmed, options);
+  }
+
+  async listEpisodes(
+    input: ExtensionEpisodeListInput,
+  ): Promise<ExtensionEpisodeListResult> {
+    this.assertCapability('episodes');
+    if (!input.selectedSourceEntry && !input.media) {
+      throw new ExtensionCapabilityError({
+        code: 'INVALID_INPUT',
+        capability: 'episodes',
+        sourceId: this.source.id,
+        sourceLabel: this.source.name || this.source.id,
+        reason: 'Either media metadata or selectedSourceEntry is required to list episodes.',
+      });
+    }
+    return this.listEpisodesImpl(input);
+  }
+
+  async resolveStream(params: ExtensionStreamResolutionParams): Promise<VideoStream> {
+    this.assertCapability('stream');
+    if (!params.media || !params.episode) {
+      throw new ExtensionCapabilityError({
+        code: 'INVALID_INPUT',
+        capability: 'stream',
+        sourceId: this.source.id,
+        sourceLabel: this.source.name || this.source.id,
+        reason: 'Media and episode are required to resolve a playable stream.',
+      });
+    }
+    return this.resolveStreamImpl(params);
+  }
+
+  getVideoServers(): VideoServer[] {
+    return this.getVideoServersImpl();
+  }
+
+  protected async searchImpl(
+    _query: string,
+    _options?: ExtensionSearchOptions,
+  ): Promise<ExtensionTitleSearchResponse> {
+    throw new ExtensionCapabilityError({
+      code: 'UNSUPPORTED_CAPABILITY',
+      capability: 'search',
+      sourceId: this.source.id,
+      sourceLabel: this.source.name || this.source.id,
+      reason: `${this.source.name || this.source.id} has not implemented search.`,
+    });
+  }
+
+  protected async listEpisodesImpl(
+    _input: ExtensionEpisodeListInput,
+  ): Promise<ExtensionEpisodeListResult> {
+    throw new ExtensionCapabilityError({
+      code: 'UNSUPPORTED_CAPABILITY',
+      capability: 'episodes',
+      sourceId: this.source.id,
+      sourceLabel: this.source.name || this.source.id,
+      reason: `${this.source.name || this.source.id} has not implemented episode listing.`,
+    });
+  }
+
+  protected async resolveStreamImpl(
+    _params: ExtensionStreamResolutionParams,
+  ): Promise<VideoStream> {
+    throw new ExtensionCapabilityError({
+      code: 'UNSUPPORTED_CAPABILITY',
+      capability: 'stream',
+      sourceId: this.source.id,
+      sourceLabel: this.source.name || this.source.id,
+      reason: `${this.source.name || this.source.id} has not implemented stream resolution.`,
+    });
+  }
+
+  protected getVideoServersImpl(): VideoServer[] {
+    return [
+      { id: 'hd-1-sub', name: 'HD-1 (Sub)', category: 'sub' },
+      { id: 'hd-2-sub', name: 'HD-2 (Sub)', category: 'sub' },
+      { id: 'hd-1-dub', name: 'HD-1 (Dub)', category: 'dub' },
+    ];
+  }
+}
+
+export type ExtensionStreamResolutionParams = ResolveVideoStreamParams;
+
+export class ShizuTvInbuiltExtensionAdapter extends ExtensionAdapter {
+  constructor(source: SourceInfo, profile?: DetectedSourceProfile) {
+    super(source, {
+      adapterId: 'shizutv-inbuilt',
+      providerKind: 'inbuilt-anime',
+      profile,
+    });
+  }
+
+  protected requiresHttpBaseUrl(): boolean {
+    return false;
+  }
+
+  protected async searchImpl(query: string): Promise<ExtensionTitleSearchResponse> {
+    try {
+      const al = await searchAniList({
+        query,
+        type: 'ANIME',
+        page: 1,
+        perPage: 12,
+      });
+      return {
+        compatible: true,
+        sourceLabel: this.source.name,
+        items: al.items.map((item) => ({
+          sourceId: this.source.id,
+          title: item.title.english || item.title.romaji || item.title.native || 'Unknown',
+          href: `/anime/${item.id}`,
+          slug: String(item.id),
+          cover: item.cover ?? null,
+        })),
+      };
+    } catch {
+      const jk = await searchJikan(query, 'ANIME', 1);
+      return {
+        compatible: true,
+        sourceLabel: this.source.name,
+        items: jk.items.slice(0, 12).map((item) => ({
+          sourceId: this.source.id,
+          title: item.title.english || item.title.romaji || item.title.native || 'Unknown',
+          href: `/anime/${item.id}`,
+          slug: String(item.id),
+          cover: item.cover ?? null,
+        })),
+      };
+    }
+  }
+
+  protected async listEpisodesImpl(
+    input: ExtensionEpisodeListInput,
+  ): Promise<ExtensionEpisodeListResult> {
+    if (!input.media) {
+      throw new ExtensionCapabilityError({
+        code: 'INVALID_INPUT',
+        capability: 'episodes',
+        sourceId: this.source.id,
+        sourceLabel: this.source.name,
+        reason: 'Media object is required to list episodes for ShizuTV Stream (Inbuilt).',
+      });
+    }
+    const { episodes, trace } = await resolveInbuiltEpisodeMetadataPipeline(input.media, {
+      sourceId: this.source.id,
+      sourceName: this.source.name,
+      sourceBaseUrl: this.source.baseUrl,
+      sourceLang: this.source.lang,
+      sourcePkg: this.source.pkg,
+      overrideTitle: input.overrideTitle,
+      overrideMedia: input.overrideMedia,
+      bypassCache: input.bypassCache,
+      recordTrace: input.recordTrace,
+    });
+    return {
+      compatible: true,
+      sourceLabel: this.source.name,
+      episodes,
+      trace,
+    };
+  }
+
+  protected async resolveStreamImpl(params: ResolveVideoStreamParams): Promise<VideoStream> {
+    return resolveStreamViaApi({
+      ...params,
+      sourceId: this.source.id,
+      sourceName: params.sourceName || this.source.name,
+      sourceBaseUrl: params.sourceBaseUrl || this.source.baseUrl,
+      sourceLang: params.sourceLang || this.source.lang,
+    });
+  }
+}
+
+export class ServerBackedAnimeExtensionAdapter extends ExtensionAdapter {
+  protected async searchImpl(
+    query: string,
+    options?: ExtensionSearchOptions,
+  ): Promise<ExtensionTitleSearchResponse> {
+    const response = await fetch('/api/extensions/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: options?.signal,
+      body: JSON.stringify({
+        sourceId: this.source.id,
+        sourceName: this.source.name,
+        sourceBaseUrl: this.source.baseUrl,
+        sourceLang: this.source.lang,
+        sourcePkg: this.source.pkg,
+        query,
+      }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | (ExtensionTitleSearchResponse & { message?: string })
+      | null;
+
+    if (!response.ok && !payload) {
+      throw new Error(`Failed to search ${this.source.name} (HTTP ${response.status}).`);
+    }
+
+    return {
+      compatible: payload?.compatible !== false,
+      reason: payload?.reason || payload?.message,
+      sourceLabel: payload?.sourceLabel || this.source.name,
+      items: Array.isArray(payload?.items) ? payload.items : [],
+    };
+  }
+
+  protected async listEpisodesImpl(
+    input: ExtensionEpisodeListInput,
+  ): Promise<ExtensionEpisodeListResult> {
+    const selected = input.selectedSourceEntry;
+    if (
+      selected &&
+      selected.href &&
+      selected.sourceId === this.source.id
+    ) {
+      const response = await fetch('/api/extensions/episodes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: input.signal,
+        body: JSON.stringify({
+          sourceId: this.source.id,
+          sourceName: this.source.name,
+          sourceBaseUrl: this.source.baseUrl,
+          sourceLang: this.source.lang,
+          sourcePkg: this.source.pkg,
+          selectedSourceEntry: {
+            sourceId: selected.sourceId,
+            title: selected.title,
+            href: selected.href,
+            slug: selected.slug,
+          },
+          bypassCache: Boolean(input.bypassCache),
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | (ExtensionEpisodesResponse & { message?: string })
+        | null;
+
+      if (!response.ok && !payload) {
+        throw new Error(
+          `Failed to load episodes from ${this.source.name || this.source.id} (HTTP ${response.status}).`,
+        );
+      }
+
+      const extResult: ExtensionEpisodesResponse = {
+        compatible: payload?.compatible !== false,
+        reason: payload?.reason || payload?.message,
+        sourceLabel: payload?.sourceLabel || this.source.name || this.source.id,
+        episodes: Array.isArray(payload?.episodes) ? payload.episodes : [],
+      };
+
+      if (!extResult.compatible) {
+        throw new ExtensionCapabilityError({
+          code: 'UNSUPPORTED_CAPABILITY',
+          capability: 'episodes',
+          sourceId: this.source.id,
+          sourceLabel: extResult.sourceLabel || this.source.name,
+          reason:
+            extResult.reason ||
+            `No episodes found for "${selected.title}" on ${extResult.sourceLabel || this.source.name}.`,
+        });
+      }
+
+      const trace = input.media
+        ? analyzeEpisodeResolution({
+            inputMedia: input.media,
+            resolvedMedia: input.media,
+            sourceId: this.source.id,
+            sourceName: extResult.sourceLabel || this.source.name,
+            overrideTitle: selected.title,
+            overrideMatched: true,
+            resolvedExpectedCount: extResult.episodes.length,
+            providers: [],
+            mergedEpisodes: extResult.episodes,
+            totalDurationMs: 0,
+          })
+        : undefined;
+
+      if (trace && input.recordTrace !== false) {
+        recordEpisodeTrace(trace);
+      }
+
+      return {
+        compatible: true,
+        sourceLabel: extResult.sourceLabel,
+        episodes: extResult.episodes,
+        trace,
+      };
+    }
+
+    if (!input.media) {
+      throw new ExtensionCapabilityError({
+        code: 'INVALID_INPUT',
+        capability: 'episodes',
+        sourceId: this.source.id,
+        sourceLabel: this.source.name,
+        reason: 'selectedSourceEntry or media is required to list episodes.',
+      });
+    }
+
+    const { episodes, trace } = await resolveInbuiltEpisodeMetadataPipeline(input.media, {
+      sourceId: this.source.id,
+      sourceName: this.source.name,
+      sourceBaseUrl: this.source.baseUrl,
+      sourceLang: this.source.lang,
+      sourcePkg: this.source.pkg,
+      overrideTitle: input.overrideTitle,
+      overrideMedia: input.overrideMedia,
+      bypassCache: input.bypassCache,
+      recordTrace: input.recordTrace,
+    });
+
+    return {
+      compatible: true,
+      sourceLabel: this.source.name,
+      episodes,
+      trace,
+    };
+  }
+
+  protected async resolveStreamImpl(params: ResolveVideoStreamParams): Promise<VideoStream> {
+    return resolveStreamViaApi({
+      ...params,
+      sourceId: this.source.id,
+      sourceName: params.sourceName || this.source.name,
+      sourceBaseUrl: params.sourceBaseUrl || this.source.baseUrl,
+      sourceLang: params.sourceLang || this.source.lang,
+    });
+  }
+}
+
+export class HiAnimeExtensionAdapter extends ServerBackedAnimeExtensionAdapter {
+  constructor(source: SourceInfo, profile?: DetectedSourceProfile) {
+    super(source, {
+      adapterId: profile?.compatibility.adapterId || 'hianime-bridge',
+      providerKind: 'hianime',
+      profile,
+    });
+  }
+
+  protected requiresHttpBaseUrl(): boolean {
+    return this.source.id !== 'hianime-bridge';
+  }
+
+  protected getVideoServersImpl(): VideoServer[] {
+    return [
+      { id: 'hd-1-sub', name: 'HD-1 (Sub)', category: 'sub' },
+      { id: 'hd-2-sub', name: 'HD-2 (Sub)', category: 'sub' },
+      { id: 'hd-1-dub', name: 'HD-1 (Dub)', category: 'dub' },
+    ];
+  }
+}
+
+export class GogoCloneExtensionAdapter extends ServerBackedAnimeExtensionAdapter {
+  constructor(source: SourceInfo, profile?: DetectedSourceProfile) {
+    super(source, {
+      adapterId: 'gogo-html',
+      providerKind: 'gogo-clone',
+      profile,
+    });
+  }
+}
+
+export class WordPressAnimeExtensionAdapter extends ServerBackedAnimeExtensionAdapter {
+  constructor(source: SourceInfo, profile?: DetectedSourceProfile) {
+    super(source, {
+      adapterId: 'wordpress-animestream',
+      providerKind: 'wordpress-animestream',
+      profile,
+    });
+  }
+
+  protected getVideoServersImpl(): VideoServer[] {
+    const label = this.source.name ? this.source.name.slice(0, 18) : 'Extension';
+    return [
+      { id: 'hd-1-sub', name: `${label} · Mirror 1 (Sub)`, category: 'sub' },
+      { id: 'hd-2-sub', name: `${label} · Mirror 2 (Sub)`, category: 'sub' },
+      { id: 'hd-1-dub', name: `${label} · Mirror 1 (Dub)`, category: 'dub' },
+    ];
+  }
+}
+
+export class GenericWebExtensionAdapter extends ServerBackedAnimeExtensionAdapter {
+  constructor(source: SourceInfo, profile?: DetectedSourceProfile) {
+    super(source, {
+      adapterId: 'generic-web',
+      providerKind: 'generic-web',
+      profile,
+    });
+  }
+
+  protected getVideoServersImpl(): VideoServer[] {
+    if (this.source.id.startsWith('ext-')) {
+      const label = this.source.name ? this.source.name.slice(0, 18) : 'Extension';
+      return [
+        { id: 'hd-1-sub', name: `${label} · HD-1 (Sub)`, category: 'sub' },
+        { id: 'hd-2-sub', name: `${label} · HD-2 (Sub)`, category: 'sub' },
+        { id: 'hd-1-dub', name: `${label} · HD-1 (Dub)`, category: 'dub' },
+      ];
+    }
+    return super.getVideoServersImpl();
+  }
+}
+
+export class GotakuExtensionAdapter extends ServerBackedAnimeExtensionAdapter {
+  constructor(source: SourceInfo, profile?: DetectedSourceProfile) {
+    super(source, {
+      adapterId: 'gotaku-catalog',
+      providerKind: 'gotaku',
+      profile,
+    });
+  }
+}
+
+export class MetadataOnlyExtensionAdapter extends ExtensionAdapter {
+  constructor(source: SourceInfo, profile?: DetectedSourceProfile) {
+    super(source, {
+      adapterId: 'metadata-only',
+      providerKind: 'metadata-only',
+      profile,
+    });
+  }
+}
+
+export class UnsupportedExtensionAdapter extends ExtensionAdapter {
+  constructor(source: SourceInfo, profile?: DetectedSourceProfile) {
+    super(source, {
+      adapterId: profile?.compatibility.adapterId || 'unsupported',
+      providerKind: profile?.kind || 'unsupported',
+      profile,
+    });
+  }
+}
+
+export interface ClientExtensionAdapterFactoryEntry {
+  id: string;
+  matches: (source: SourceInfo, profile: DetectedSourceProfile) => boolean;
+  create: (source: SourceInfo, profile: DetectedSourceProfile) => ExtensionAdapter;
+}
+
+const customClientAdapterFactories: ClientExtensionAdapterFactoryEntry[] = [];
+
+export function registerExtensionAdapterFactory(entry: ClientExtensionAdapterFactoryEntry): void {
+  const idx = customClientAdapterFactories.findIndex((e) => e.id === entry.id);
+  if (idx >= 0) {
+    customClientAdapterFactories[idx] = entry;
+  } else {
+    customClientAdapterFactories.unshift(entry);
+  }
+}
+
+export function unregisterExtensionAdapterFactory(id: string): void {
+  const idx = customClientAdapterFactories.findIndex((e) => e.id === id);
+  if (idx >= 0) {
+    customClientAdapterFactories.splice(idx, 1);
+  }
+}
+
+function buildSourceInfoFromOptions(
+  sourceOrId: SourceInfo | string,
+  options?: {
+    sourceName?: string;
+    sourceBaseUrl?: string;
+    sourceLang?: string;
+    sourcePkg?: string;
+  },
+): SourceInfo {
+  if (typeof sourceOrId !== 'string') {
+    return sourceOrId;
+  }
+  const cleanId = sourceOrId.trim() || 'shonenx-hls-inbuilt';
+  const inbuilt = INBUILT_SOURCES.find((s) => s.id === cleanId);
+  if (inbuilt) {
+    return {
+      ...inbuilt,
+      name: options?.sourceName || inbuilt.name,
+      baseUrl: options?.sourceBaseUrl || inbuilt.baseUrl,
+      lang: options?.sourceLang || inbuilt.lang,
+      pkg: options?.sourcePkg || inbuilt.pkg,
+    };
+  }
+  return {
+    id: cleanId,
+    name: options?.sourceName || cleanId,
+    type: cleanId === 'shonenx-hls-inbuilt' ? 'inbuilt' : 'extension',
+    mediaTypes: ['ANIME'],
+    lang: options?.sourceLang || 'en',
+    version: '1.0.0',
+    baseUrl: options?.sourceBaseUrl,
+    pkg: options?.sourcePkg,
+  };
+}
+
+export function createExtensionAdapter(
+  sourceOrId: SourceInfo | string,
+  options?: {
+    sourceName?: string;
+    sourceBaseUrl?: string;
+    sourceLang?: string;
+    sourcePkg?: string;
+  },
+): ExtensionAdapter {
+  const source = buildSourceInfoFromOptions(sourceOrId, options);
+  const profile = detectSourceProfile(source);
+
+  if (profile.kind === 'metadata-only') {
+    return new MetadataOnlyExtensionAdapter(source, profile);
+  }
+  if (profile.kind === 'missing-host' || profile.kind === 'non-anime') {
+    return new UnsupportedExtensionAdapter(source, profile);
+  }
+
+  for (const custom of customClientAdapterFactories) {
+    if (custom.matches(source, profile)) {
+      return custom.create(source, profile);
+    }
+  }
+
+  switch (profile.kind) {
+    case 'inbuilt-anime':
+      return new ShizuTvInbuiltExtensionAdapter(source, profile);
+    case 'gotaku':
+      return new GotakuExtensionAdapter(source, profile);
+    case 'hianime':
+      return new HiAnimeExtensionAdapter(source, profile);
+    case 'gogo-clone':
+      return new GogoCloneExtensionAdapter(source, profile);
+    case 'wordpress-animestream':
+      return new WordPressAnimeExtensionAdapter(source, profile);
+    case 'generic-web':
+    default:
+      return new GenericWebExtensionAdapter(source, profile);
+  }
+}
+
+export function resolveSourceCompatibility(
+  sourceOrId: SourceInfo | string,
+  options?: {
+    sourceName?: string;
+    sourceBaseUrl?: string;
+    sourceLang?: string;
+    sourcePkg?: string;
+  },
+): ExtensionSourceCompatibilityReport {
+  return createExtensionAdapter(sourceOrId, options).getCompatibility();
+}
+
+export async function resolveExtensionEpisodesAsync(params: {
+  sourceId: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  sourcePkg?: string;
+  selectedSourceEntry: MatchedSourceEntry;
+  bypassCache?: boolean;
+  signal?: AbortSignal;
+}): Promise<ExtensionEpisodesResponse> {
+  const adapter = createExtensionAdapter(params.sourceId, {
+    sourceName: params.sourceName,
+    sourceBaseUrl: params.sourceBaseUrl,
+    sourceLang: params.sourceLang,
+    sourcePkg: params.sourcePkg,
+  });
+
+  try {
+    const result = await adapter.listEpisodes({
+      selectedSourceEntry: params.selectedSourceEntry,
+      bypassCache: params.bypassCache,
+      recordTrace: false,
+      signal: params.signal,
+    });
+    return {
+      compatible: result.compatible,
+      reason: result.reason,
+      sourceLabel: result.sourceLabel || adapter.source.name,
+      episodes: result.episodes,
+    };
+  } catch (err) {
+    if (err instanceof ExtensionCapabilityError) {
+      return {
+        compatible: false,
+        reason: err.reason,
+        sourceLabel: err.sourceLabel,
+        episodes: [],
+      };
+    }
+    throw err;
+  }
+}
+
+export async function resolveEpisodesWithDiagnostics(
+  media: UnifiedMedia,
+  options?: ResolveEpisodesOptions,
+): Promise<{ episodes: UnifiedEpisode[]; trace: EpisodeFetchTrace }> {
+  const overallStart = performance.now();
+  const initialSourceId = options?.sourceId || 'shonenx-hls-inbuilt';
+  const initialSourceName =
+    options?.sourceName ||
+    INBUILT_SOURCES.find((s) => s.id === initialSourceId)?.name ||
+    initialSourceId;
+
+  const adapter = createExtensionAdapter(initialSourceId, {
+    sourceName: initialSourceName,
+    sourceBaseUrl: options?.sourceBaseUrl,
+    sourceLang: options?.sourceLang,
+    sourcePkg: options?.sourcePkg,
+  });
+
+  if (
+    shouldUseExtensionEpisodesForSelection({
+      sourceId: initialSourceId,
+      isReadingMedia: media.type === 'MANGA' || media.type === 'NOVEL',
+      selectedSourceEntry: options?.selectedSourceEntry,
+    }) &&
+    options?.selectedSourceEntry
+  ) {
+    const result = await adapter.listEpisodes({
+      media,
+      selectedSourceEntry: options.selectedSourceEntry,
+      bypassCache: options.bypassCache,
+      recordTrace: options.recordTrace,
+    });
+
+    if (!result.compatible || result.episodes.length === 0) {
+      throw new Error(
+        result.reason ||
+          `No episodes found for "${options.selectedSourceEntry.title}" on ${result.sourceLabel || initialSourceName}.`,
+      );
+    }
+
+    const trace =
+      result.trace ||
+      analyzeEpisodeResolution({
+        inputMedia: media,
+        resolvedMedia: media,
+        sourceId: initialSourceId,
+        sourceName: result.sourceLabel || initialSourceName,
+        overrideTitle: options.selectedSourceEntry.title,
+        overrideMatched: true,
+        resolvedExpectedCount: result.episodes.length,
+        providers: [],
+        mergedEpisodes: result.episodes,
+        totalDurationMs: Math.round(performance.now() - overallStart),
+      });
+
+    return { episodes: result.episodes, trace };
+  }
+
+  return resolveInbuiltEpisodeMetadataPipeline(media, options);
+}
+
+export async function resolveEpisodesForMedia(
+  media: UnifiedMedia,
+  options?: ResolveEpisodesOptions,
+): Promise<UnifiedEpisode[]> {
+  const { episodes } = await resolveEpisodesWithDiagnostics(media, options);
+  return episodes;
+}
+
+export function resolveChaptersForMedia(media: UnifiedMedia): UnifiedChapter[] {
+  const count = media.chapters && media.chapters > 0 ? media.chapters : 24;
+  return Array.from({ length: count }, (_, idx) => {
+    const num = idx + 1;
+    return {
+      id: `${media.id}-ch-${num}`,
+      number: num,
+      title: `Chapter ${num}`,
+      scanlator: num % 2 === 0 ? 'Official Release' : 'ShizuTv Scanlations',
+      pageCount: 14,
+    };
+  });
+}
+
+export function resolveVideoServers(sourceId?: string, sourceName?: string): VideoServer[] {
+  const adapter = createExtensionAdapter(sourceId || 'shonenx-hls-inbuilt', {
+    sourceName,
+  });
+  return adapter.getVideoServers();
+}
+
+export async function searchExtensionTitlesAsync(params: {
+  source: SourceInfo;
+  query: string;
+  signal?: AbortSignal;
+}): Promise<ExtensionTitleSearchResponse> {
+  const adapter = createExtensionAdapter(params.source);
+  try {
+    return await adapter.search(params.query, { signal: params.signal });
+  } catch (err) {
+    if (err instanceof ExtensionCapabilityError) {
+      return {
+        compatible: false,
+        reason: err.reason,
+        sourceLabel: params.source.name || params.source.id,
+        items: [],
+      };
+    }
+    throw err;
+  }
+}
+
+export async function resolveVideoStreamAsync(
+  params: ResolveVideoStreamParams,
+): Promise<VideoStream> {
+  const adapter = createExtensionAdapter(params.sourceId || 'shonenx-hls-inbuilt', {
+    sourceName: params.sourceName,
+    sourceBaseUrl: params.sourceBaseUrl,
+    sourceLang: params.sourceLang,
+  });
+  return adapter.resolveStream(params);
 }
 
 export interface ResolveMangaChaptersAsyncParams {

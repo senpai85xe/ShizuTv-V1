@@ -727,6 +727,175 @@ test('Gotaku helpers identify host, extract title ID, parse /api/v1/titles JSON,
   assert.equal(ranked[0].href, '/title/og1b09');
 });
 
+import {
+  assessExtensionCompatibility,
+  detectSourceProfile,
+  extractNumericIdFromHref,
+  isGogoCloneCompatibleSource,
+  isHiAnimeCompatibleSource,
+  isWordPressAnimeCompatibleSource,
+  looksLikeBlockedChallengeHtml,
+  normalizeProviderEpisodes,
+  normalizeProviderSearchItems,
+} from './streamResolverUtils';
+
+test('detectSourceProfile & assessExtensionCompatibility enforce strict compatibility and metadata-only isolation', () => {
+  const inbuilt = detectSourceProfile({ id: 'shonenx-hls-inbuilt', name: 'ShizuTv Stream (Inbuilt)' });
+  assert.equal(inbuilt.kind, 'inbuilt-anime');
+  assert.equal(inbuilt.compatibility.fullyCompatible, true);
+  assert.equal(inbuilt.compatibility.compatibility, 'full');
+
+  const metadata = detectSourceProfile({
+    id: 'ext-myanimelist',
+    name: 'MyAnimeList',
+    baseUrl: 'https://myanimelist.net',
+  });
+  assert.equal(metadata.kind, 'metadata-only');
+  assert.equal(metadata.isMetadataOnly, true);
+  assert.equal(metadata.compatibility.fullyCompatible, false);
+  assert.equal(metadata.compatibility.compatibility, 'unsupported');
+
+  const gotaku = detectSourceProfile({
+    id: 'ext-gotaku',
+    name: 'Gotaku',
+    baseUrl: 'https://gotaku.to',
+  });
+  assert.equal(gotaku.kind, 'gotaku');
+  assert.equal(gotaku.compatibility.fullyCompatible, false);
+  assert.equal(gotaku.compatibility.compatibility, 'partial');
+  assert.equal(gotaku.capabilities.search.state, 'verified');
+  assert.equal(gotaku.capabilities.episodes.state, 'unsupported');
+  assert.equal(gotaku.capabilities.stream.state, 'unsupported');
+
+  const customWeb = detectSourceProfile({
+    id: 'ext-animeworld',
+    name: 'AnimeWorld',
+    baseUrl: 'https://animeworld.example',
+  });
+  assert.equal(customWeb.kind, 'generic-web');
+  assert.equal(customWeb.compatibility.fullyCompatible, false);
+  assert.equal(customWeb.compatibility.compatibility, 'unverified');
+
+  // Even when all capabilities are 'supported', compatibility is NOT 'full' unless verified === true
+  const supportedUnverified = assessExtensionCompatibility({
+    adapterId: 'custom',
+    sourceId: 'ext-a',
+    sourceLabel: 'Ext A',
+    providerKind: 'custom',
+    isMetadataOnly: false,
+    capabilities: {
+      search: { state: 'supported', verified: false },
+      episodes: { state: 'supported', verified: false },
+      stream: { state: 'supported', verified: false },
+    },
+  });
+  assert.equal(supportedUnverified.fullyCompatible, false);
+  assert.equal(supportedUnverified.compatibility, 'unverified');
+});
+
+test('Batch 2 provider compatibility detectors group compatible hosts while keeping unknown/unverified sources separate', () => {
+  // 1. HiAnime family: inbuilt bridge vs installed Kaido clone (isolated host)
+  assert.equal(
+    isHiAnimeCompatibleSource({ sourceId: 'hianime-bridge', hosts: [...HIANIME_BRIDGE_HOSTS] }),
+    true,
+  );
+  assert.equal(
+    isHiAnimeCompatibleSource({ sourceId: 'ext-ay-kaido', hosts: ['https://kaido.to'] }),
+    true,
+  );
+  const kaidoProfile = detectSourceProfile({
+    id: 'ext-ay-kaido',
+    name: 'Kaido',
+    baseUrl: 'https://kaido.to',
+  });
+  assert.equal(kaidoProfile.kind, 'hianime');
+  assert.equal(kaidoProfile.compatibility.adapterId, 'hianime-ajax');
+  assert.deepEqual(kaidoProfile.hosts, ['https://kaido.to']);
+  assert.equal(kaidoProfile.compatibility.compatibility, 'unverified');
+  assert.equal(kaidoProfile.compatibility.fullyCompatible, false);
+
+  // 2. GogoAnime / Anitaku clone family (distinct from Inbuilt)
+  assert.equal(
+    isGogoCloneCompatibleSource({ sourceId: 'shonenx-hls-inbuilt', hosts: [...INBUILT_PRIMARY_HOSTS] }),
+    false,
+  );
+  assert.equal(
+    isGogoCloneCompatibleSource({ sourceId: 'ext-ay-gogo', hosts: ['https://gogoanime3.co'] }),
+    true,
+  );
+  const gogoCloneProfile = detectSourceProfile({
+    id: 'ext-ay-anitaku',
+    name: 'Anitaku',
+    baseUrl: 'https://anitaku.pe',
+  });
+  assert.equal(gogoCloneProfile.kind, 'gogo-clone');
+  assert.equal(gogoCloneProfile.compatibility.adapterId, 'gogo-html');
+  assert.deepEqual(gogoCloneProfile.hosts, ['https://anitaku.pe']);
+  assert.equal(gogoCloneProfile.compatibility.compatibility, 'unverified');
+
+  // 3. WordPress AnimeStream / DooPlay family
+  assert.equal(
+    isWordPressAnimeCompatibleSource({ sourceId: 'ext-ay-animexin', hosts: ['https://animexin.dev'] }),
+    true,
+  );
+  const wpProfile = detectSourceProfile({
+    id: 'ext-ay-toonstream',
+    name: 'ToonStream',
+    baseUrl: 'https://toonstream.co',
+  });
+  assert.equal(wpProfile.kind, 'wordpress-animestream');
+  assert.equal(wpProfile.compatibility.adapterId, 'wordpress-animestream');
+  assert.equal(wpProfile.compatibility.compatibility, 'unverified');
+
+  // 4. Unverified / different-API extensions (AnimePahe, AllAnime) are NOT forced into specialized adapters
+  const paheProfile = detectSourceProfile({
+    id: 'ext-ay-animepahe',
+    name: 'AnimePahe',
+    baseUrl: 'https://animepahe.ru',
+  });
+  assert.equal(paheProfile.kind, 'generic-web');
+  assert.equal(paheProfile.compatibility.compatibility, 'unverified');
+});
+
+test('shared adapter normalization and HTML utility helpers normalize items, episodes, IDs, and challenges', () => {
+  assert.equal(extractNumericIdFromHref('/watch/chainsaw-man-17406'), '17406');
+  assert.equal(extractNumericIdFromHref('/anime/chainsaw-man/'), null);
+
+  assert.equal(
+    looksLikeBlockedChallengeHtml(403, '<title>Just a moment...</title><div>Cloudflare</div>'),
+    true,
+  );
+  assert.equal(looksLikeBlockedChallengeHtml(200, '<html><body><h1>Chainsaw Man</h1></body></html>'), false);
+
+  const items = normalizeProviderSearchItems('ext-demo', [
+    { href: '/category/chainsaw-man/', title: 'Chainsaw Man', cover: 'https://cdn.example/csm.jpg' },
+  ]);
+  assert.deepEqual(items, [
+    {
+      sourceId: 'ext-demo',
+      title: 'Chainsaw Man',
+      href: '/category/chainsaw-man/',
+      slug: 'chainsaw-man',
+      cover: 'https://cdn.example/csm.jpg',
+    },
+  ]);
+
+  const normalizedEps = normalizeProviderEpisodes({
+    sourceId: 'ext-demo',
+    host: 'https://demo.example',
+    sourceAnimeHref: '/category/chainsaw-man/',
+    sourceAnimeSlug: 'chainsaw-man',
+    episodes: [
+      { sourceEpisodeId: 'ep-1', number: 1, title: 'Dog & Chainsaw', episodeUrl: '/watch/ep-1' },
+      { sourceEpisodeId: 'ep-1', number: 2, title: 'Duplicate ID Safe', episodeUrl: '/watch/ep-2' },
+    ],
+  });
+  assert.equal(normalizedEps[0].id, 'ext-demo:ep-1');
+  assert.equal(normalizedEps[1].id, 'ext-demo:ep-1:1');
+  assert.equal(normalizedEps[0].externalUrl, 'https://demo.example/watch/ep-1');
+});
+
+
 
 
 
