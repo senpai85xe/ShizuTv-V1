@@ -10,10 +10,12 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
+import com.shizutv.app.runtime.AniyomiRuntimePlugin;
 
 public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        registerPlugin(AniyomiRuntimePlugin.class);
         super.onCreate(savedInstanceState);
         enableImmersiveFullscreen();
     }

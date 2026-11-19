@@ -34,7 +34,12 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
-import { ExtensionRepo, SourceInfo } from '../types/media';
+import {
+  ExtensionRepo,
+  NativeExtensionStagingState,
+  NativeSigningCertChangeDetails,
+  SourceInfo,
+} from '../types/media';
 import {
   collectAvailableExtensionLanguages,
   ExtensionManagerFilter,
@@ -60,6 +65,16 @@ import {
   savePersistedExtensionDiagnostic,
   summarizeCompatibilityCounts,
 } from '../utils/extensionDiagnostics';
+import {
+  downloadAndStageAniyomiApk,
+  isAndroidNativeBridgeAvailable,
+  listStagedAniyomiExtensions,
+  removeStagedAniyomiExtension,
+} from '../native/aniyomiPlugin';
+import {
+  extractSigningCertMismatchFromError,
+  formatShortFingerprint,
+} from '../utils/nativeExtensionManager';
 import { getSourcePlayabilityStatus } from '../utils/sourcePicker';
 import { getBoundedStaggerDelay } from '../utils/appMotion';
 import {
@@ -68,6 +83,11 @@ import {
   getRuntimeRequirementBadgeClasses,
   RuntimeRequirementIcon,
 } from '../components/extensions/ExtensionCompatibilityDashboard';
+import {
+  NativeApkCardStrip,
+  NativeExtensionSecurityConsentDialog,
+  NativeSigningCertMismatchModal,
+} from '../components/extensions/NativeApkStagingControls';
 import {
   EXT_FROSTED_ACTIVE_BUBBLE,
   EXT_FROSTED_ICON_BTN,
@@ -198,6 +218,106 @@ export const ExtensionsPage: React.FC = () => {
   // Extension Details / Settings Modal
   const [inspectSource, setInspectSource] = useState<SourceInfo | null>(null);
 
+  // Phase 2 — Android Batch 1: Native APK Staging State (strictly inactive on Website)
+  const isAndroidNative = useMemo(() => isAndroidNativeBridgeAvailable(), []);
+  const [stagedByPkg, setStagedByPkg] = useState<Record<string, NativeExtensionStagingState>>({});
+  const [nativeBusyByPkg, setNativeBusyByPkg] = useState<Record<string, boolean>>({});
+  const [nativeErrorByPkg, setNativeErrorByPkg] = useState<Record<string, string>>({});
+  const [consentStageSource, setConsentStageSource] = useState<SourceInfo | null>(null);
+  const [certMismatchPrompt, setCertMismatchPrompt] = useState<{
+    source: SourceInfo;
+    details: NativeSigningCertChangeDetails;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!isAndroidNative) return;
+    let active = true;
+    void listStagedAniyomiExtensions()
+      .then((items) => {
+        if (!active) return;
+        const map: Record<string, NativeExtensionStagingState> = {};
+        for (const item of items) {
+          if (item.packageName) map[item.packageName] = item;
+        }
+        setStagedByPkg(map);
+      })
+      .catch(() => {
+        // Ignore initial listing error if plugin not yet ready
+      });
+    return () => {
+      active = false;
+    };
+  }, [isAndroidNative]);
+
+  const executeNativeStageApk = async (
+    source: SourceInfo,
+    allowSigningCertChange = false,
+  ) => {
+    if (!isAndroidNative || !source.apkUrl || !source.pkg) return;
+    const pkg = source.pkg.trim();
+    setNativeBusyByPkg((prev) => ({ ...prev, [pkg]: true }));
+    setNativeErrorByPkg((prev) => {
+      const next = { ...prev };
+      delete next[pkg];
+      return next;
+    });
+    try {
+      const staged = await downloadAndStageAniyomiApk({
+        url: source.apkUrl,
+        expectedPackageName: pkg,
+        ...(source.apkSha256 ? { expectedSha256: source.apkSha256 } : {}),
+        allowSigningCertChange,
+      });
+      setStagedByPkg((prev) => ({ ...prev, [pkg]: staged }));
+      setConsentStageSource(null);
+      setCertMismatchPrompt(null);
+    } catch (err) {
+      const certMismatch = extractSigningCertMismatchFromError(err);
+      if (certMismatch) {
+        setConsentStageSource(null);
+        setCertMismatchPrompt({ source, details: certMismatch });
+      } else {
+        const msg = err instanceof Error ? err.message : 'APK verification and staging failed.';
+        setNativeErrorByPkg((prev) => ({ ...prev, [pkg]: msg }));
+        setConsentStageSource(null);
+      }
+    } finally {
+      setNativeBusyByPkg((prev) => {
+        const next = { ...prev };
+        delete next[pkg];
+        return next;
+      });
+    }
+  };
+
+  const executeNativeRemoveApk = async (pkg: string) => {
+    if (!isAndroidNative || !pkg.trim()) return;
+    const cleanPkg = pkg.trim();
+    setNativeBusyByPkg((prev) => ({ ...prev, [cleanPkg]: true }));
+    setNativeErrorByPkg((prev) => {
+      const next = { ...prev };
+      delete next[cleanPkg];
+      return next;
+    });
+    try {
+      await removeStagedAniyomiExtension(cleanPkg);
+      setStagedByPkg((prev) => {
+        const next = { ...prev };
+        delete next[cleanPkg];
+        return next;
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to remove staged APK.';
+      setNativeErrorByPkg((prev) => ({ ...prev, [cleanPkg]: msg }));
+    } finally {
+      setNativeBusyByPkg((prev) => {
+        const next = { ...prev };
+        delete next[cleanPkg];
+        return next;
+      });
+    }
+  };
+
   // Repositories View & Add Repo Modal State
   const [repoManagerTab, setRepoManagerTab] = useState<RepoManagerTab>('mangayomi');
   const [repoMediaTab, setRepoMediaTab] = useState<ExtensionMediaTab>('ANIME');
@@ -226,17 +346,35 @@ export const ExtensionsPage: React.FC = () => {
 
   // Escape closes any open modal
   useEffect(() => {
-    if (!inspectSource && !addRepoOpen && !repoPresetsOpen && !langPickerOpen) return;
+    if (
+      !inspectSource &&
+      !addRepoOpen &&
+      !repoPresetsOpen &&
+      !langPickerOpen &&
+      !consentStageSource &&
+      !certMismatchPrompt
+    ) {
+      return;
+    }
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (addRepoOpen) setAddRepoOpen(false);
+      if (certMismatchPrompt) setCertMismatchPrompt(null);
+      else if (consentStageSource) setConsentStageSource(null);
+      else if (addRepoOpen) setAddRepoOpen(false);
       else if (repoPresetsOpen) setRepoPresetsOpen(false);
       else if (inspectSource) setInspectSource(null);
       else if (langPickerOpen) setLangPickerOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [inspectSource, addRepoOpen, repoPresetsOpen, langPickerOpen]);
+  }, [
+    inspectSource,
+    addRepoOpen,
+    repoPresetsOpen,
+    langPickerOpen,
+    consentStageSource,
+    certMismatchPrompt,
+  ]);
 
   const installedIds = useMemo(() => new Set(allSources.map((s) => s.id)), [allSources]);
 
@@ -1583,6 +1721,17 @@ export const ExtensionsPage: React.FC = () => {
                           </div>
                         </div>
 
+                        {isAndroidNative && isAniyomiPackageSource(src) && (
+                          <NativeApkCardStrip
+                            source={src}
+                            staged={src.pkg ? stagedByPkg[src.pkg.trim()] : undefined}
+                            busy={Boolean(src.pkg && nativeBusyByPkg[src.pkg.trim()])}
+                            error={src.pkg ? nativeErrorByPkg[src.pkg.trim()] : null}
+                            onRequestStage={(target) => setConsentStageSource(target)}
+                            onRemoveStaged={(pkg) => void executeNativeRemoveApk(pkg)}
+                          />
+                        )}
+
                         <ExtensionCompatibilityCardPanel
                           snapshot={snapshot}
                           isRunning={Boolean(runningFullSourceIds[src.id])}
@@ -1947,12 +2096,46 @@ export const ExtensionsPage: React.FC = () => {
                   </div>
 
                   {isAniyomiInspect && inspectSnapshot.runtimeRequirement === 'android-native' && (
-                    <p
-                      data-testid="inspect-phase1-honesty-note"
-                      className="px-2.5 py-1.5 rounded-xl bg-sky-500/12 border border-sky-500/25 text-[11px] font-semibold text-sky-700 dark:text-sky-300"
-                    >
-                      Metadata stored locally from repository manifest. APK download and Android DEX execution are disabled in Phase 1.
-                    </p>
+                    isAndroidNative ? (
+                      <div className="space-y-2">
+                        <p
+                          data-testid="inspect-android-batch1-note"
+                          className="px-2.5 py-1.5 rounded-xl bg-sky-500/12 border border-sky-500/25 text-[11px] font-semibold text-sky-700 dark:text-sky-300"
+                        >
+                          Android Batch 1: APKs can be staged read-only and verified locally. Bytecode/DEX execution is disabled until Batch 2.
+                        </p>
+                        <NativeApkCardStrip
+                          source={inspectSource}
+                          staged={inspectSource.pkg ? stagedByPkg[inspectSource.pkg.trim()] : undefined}
+                          busy={Boolean(inspectSource.pkg && nativeBusyByPkg[inspectSource.pkg.trim()])}
+                          error={inspectSource.pkg ? nativeErrorByPkg[inspectSource.pkg.trim()] : null}
+                          onRequestStage={(target) => setConsentStageSource(target)}
+                          onRemoveStaged={(pkg) => void executeNativeRemoveApk(pkg)}
+                        />
+                        {inspectSource.pkg && stagedByPkg[inspectSource.pkg.trim()]?.staged && (
+                          <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 space-y-1 text-[10px] font-mono-tabular">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-sans font-bold">APK SHA-256</span>
+                              <span>{formatShortFingerprint(stagedByPkg[inspectSource.pkg.trim()].apkSha256)}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-sans font-bold">Signing Cert SHA-256</span>
+                              <span>{formatShortFingerprint(stagedByPkg[inspectSource.pkg.trim()].signingCertSha256)}</span>
+                            </div>
+                            <div className="font-sans text-[var(--sx-on-surface-muted)]">
+                              {stagedByPkg[inspectSource.pkg.trim()].integrityNote}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p
+                        data-testid="inspect-phase1-honesty-note"
+                        className="px-2.5 py-1.5 rounded-xl bg-sky-500/12 border border-sky-500/25 text-[11px] font-semibold text-sky-700 dark:text-sky-300"
+                      >
+                        Metadata stored locally from repository manifest. APK download and Android DEX execution are disabled in Phase 1.
+                      </p>
+                    )
                   )}
 
                   {inspectSource.description && <p>{inspectSource.description}</p>}
@@ -2095,6 +2278,32 @@ export const ExtensionsPage: React.FC = () => {
           );
           return typeof document !== 'undefined' ? createPortal(modal, document.body) : modal;
         })()}
+
+      {/* Phase 2 — Android Batch 1 Consent & Signing Cert Change Modals (Android Native Only) */}
+      {isAndroidNative && consentStageSource && (
+        <NativeExtensionSecurityConsentDialog
+          source={consentStageSource}
+          busy={Boolean(
+            consentStageSource.pkg && nativeBusyByPkg[consentStageSource.pkg.trim()],
+          )}
+          onCancel={() => setConsentStageSource(null)}
+          onConfirm={() => void executeNativeStageApk(consentStageSource, false)}
+        />
+      )}
+
+      {isAndroidNative && certMismatchPrompt && (
+        <NativeSigningCertMismatchModal
+          details={certMismatchPrompt.details}
+          busy={Boolean(
+            certMismatchPrompt.source.pkg &&
+              nativeBusyByPkg[certMismatchPrompt.source.pkg.trim()],
+          )}
+          onCancel={() => setCertMismatchPrompt(null)}
+          onApproveReplace={() =>
+            void executeNativeStageApk(certMismatchPrompt.source, true)
+          }
+        />
+      )}
     </div>
   );
 };

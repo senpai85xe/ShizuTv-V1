@@ -292,6 +292,7 @@ export interface SourceInfo {
   pkg?: string;
   apkName?: string;
   apkUrl?: string;
+  apkSha256?: string;
   versionCode?: number;
   libVersion?: string;
   iconUrl?: string;
@@ -299,6 +300,67 @@ export interface SourceInfo {
   isNsfw?: boolean;
   runtimeRequirement?: ExtensionRuntimeRequirement;
   metadataOnlyStorage?: boolean;
+}
+
+export type NativeExtensionVerificationStatus =
+  | 'not_staged'
+  | 'staged_verified'
+  | 'incompatible_lib'
+  | 'cert_mismatch'
+  | 'error';
+
+export type NativeExtensionIntegrityModel =
+  | 'manifest_sha256_verified'
+  | 'local_integrity_tofu';
+
+export interface NativeExtensionStagingState {
+  staged: boolean;
+  packageName: string;
+  versionName: string;
+  versionCode: number;
+  libVersion: string;
+  libCompatible: boolean;
+  extensionClass: string;
+  isNsfw: boolean;
+  hasAniyomiFeature: boolean;
+  apkSha256: string;
+  expectedSha256Verified: boolean;
+  signingCertSha256: string;
+  trustedCertPinned: boolean;
+  readOnlyLocked: boolean;
+  apkSizeBytes: number;
+  stagedAt: string | null;
+  sourceUrl: string | null;
+  codeExecutionEnabled: false;
+  verificationStatus: NativeExtensionVerificationStatus;
+  integrityModel: NativeExtensionIntegrityModel;
+  integrityNote: string;
+  integrityIntact?: boolean;
+  lastError?: string | null;
+  previousCertSha256?: string | null;
+  pendingCertSha256?: string | null;
+}
+
+export interface NativeApkInspectResult {
+  packageName: string;
+  versionName: string;
+  versionCode: number;
+  libVersion: string;
+  libCompatible: boolean;
+  extensionClass: string;
+  isNsfw: boolean;
+  hasAniyomiFeature: boolean;
+  signingCertSha256: string;
+  apkSha256: string;
+  apkSizeBytes: number;
+  readOnlyLocked: boolean;
+  codeExecutionEnabled: false;
+}
+
+export interface NativeSigningCertChangeDetails {
+  packageName: string;
+  previousCertSha256: string;
+  newCertSha256: string;
 }
 
 export interface MatchedSourceEntry {

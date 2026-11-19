@@ -67,6 +67,10 @@ import {
 } from '../utils/extensionPersistence';
 import { deriveRepoBaseUrl } from '../utils/extensionRepoParser';
 import { isAniyomiPackageSource } from '../utils/extensionDiagnostics';
+import {
+  isAndroidNativeBridgeAvailable,
+  removeStagedAniyomiExtension,
+} from '../native/aniyomiPlugin';
 import { fetchAniListViewer, saveAniListMediaEntry } from '../services/anilist';
 import {
   clearAniListServerCookieSession,
@@ -1304,6 +1308,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const uninstallExtension = useCallback(
     (sourceId: string) => {
       const isInbuilt = INBUILT_SOURCES.some((s) => s.id === sourceId);
+      const removedSource = state.customSources.find((s) => s.id === sourceId);
+      const removedPkg =
+        removedSource && isAniyomiPackageSource(removedSource) ? removedSource.pkg?.trim() : undefined;
+      const stillReferencedByOtherSource = Boolean(
+        removedPkg &&
+          state.customSources.some((s) => s.id !== sourceId && s.pkg?.trim() === removedPkg),
+      );
       setState((prev) => {
         const nextPrefAnime =
           prev.discoveryPrefs.preferredAnimeSourceId === sourceId
@@ -1342,6 +1353,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           },
         });
       });
+      if (!isInbuilt && removedPkg && !stillReferencedByOtherSource && isAndroidNativeBridgeAvailable()) {
+        void removeStagedAniyomiExtension(removedPkg)
+          .then((removed) => {
+            if (removed) {
+              addLog('INFO', 'Extensions', `Removed staged Android APK for ${removedPkg}`);
+            }
+          })
+          .catch((err) => {
+            addLog(
+              'WARN',
+              'Extensions',
+              `Native APK cleanup skipped for ${removedPkg}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      }
       addLog(
         'INFO',
         'Extensions',
@@ -1350,7 +1376,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : `Uninstalled extension "${sourceId}"`,
       );
     },
-    [addLog],
+    [addLog, state.customSources],
   );
 
   const addExtensionRepo = useCallback(
@@ -1499,6 +1525,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const removeExtensionRepo = useCallback((id: string) => {
+    const targetRepo = state.repos.find((r) => r.id === id);
+    const orphanedPkgs = targetRepo
+      ? Array.from(
+          new Set(
+            state.customSources
+              .filter(
+                (s) =>
+                  s.repoUrl === targetRepo.url &&
+                  isAniyomiPackageSource(s) &&
+                  typeof s.pkg === 'string' &&
+                  s.pkg.trim().length > 0,
+              )
+              .map((s) => s.pkg!.trim())
+              .filter(
+                (pkg) =>
+                  !state.customSources.some(
+                    (other) => other.repoUrl !== targetRepo.url && other.pkg?.trim() === pkg,
+                  ),
+              ),
+          ),
+        )
+      : [];
     setState((prev) => {
       const target = prev.repos.find((r) => r.id === id);
       const removedSourceIds = target
@@ -1531,7 +1579,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         },
       });
     });
-  }, []);
+    if (orphanedPkgs.length > 0 && isAndroidNativeBridgeAvailable()) {
+      for (const pkg of orphanedPkgs) {
+        void removeStagedAniyomiExtension(pkg).catch(() => {
+          // Best-effort APK cleanup on repo removal
+        });
+      }
+    }
+  }, [state.customSources, state.repos]);
 
   const addComment = useCallback(
     (mediaId: string, body: string, spoiler = false) => {
