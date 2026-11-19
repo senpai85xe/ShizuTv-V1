@@ -1,4 +1,60 @@
 import { MediaType, SourceInfo } from '../types/media';
+import { isMetadataOnlyCatalogHost } from './streamResolverUtils';
+
+export type SourcePlayabilityStatus =
+  | 'playable'
+  | 'metadata-only'
+  | 'missing-host'
+  | 'novel-unsupported';
+
+const BRIDGE_IDS_WITHOUT_BASE_URL = new Set([
+  'shonenx-hls-inbuilt',
+  'shonenx-manga-inbuilt',
+  'hianime-bridge',
+  'mangadex-bridge',
+]);
+
+export function isMetadataOnlySource(
+  source?: Pick<SourceInfo, 'id' | 'name' | 'baseUrl' | 'pkg' | 'type'> | null,
+): boolean {
+  if (!source || source.type === 'inbuilt') return false;
+  return isMetadataOnlyCatalogHost(
+    source.baseUrl,
+    source.name,
+    source.pkg,
+    source.id,
+  );
+}
+
+export function isNovelOnlySource(
+  source?: Pick<SourceInfo, 'mediaTypes'> | null,
+): boolean {
+  if (!source || !Array.isArray(source.mediaTypes) || source.mediaTypes.length === 0) {
+    return false;
+  }
+  return source.mediaTypes.every((t) => t === 'NOVEL');
+}
+
+export function getSourcePlayabilityStatus(
+  source?: Pick<SourceInfo, 'id' | 'name' | 'baseUrl' | 'pkg' | 'type' | 'mediaTypes'> | null,
+  contextMediaType?: MediaType,
+): SourcePlayabilityStatus {
+  if (!source) return 'playable';
+  if (isMetadataOnlySource(source)) {
+    return 'metadata-only';
+  }
+  if (contextMediaType === 'NOVEL' || isNovelOnlySource(source)) {
+    return 'novel-unsupported';
+  }
+  if (
+    source.type === 'extension' &&
+    !BRIDGE_IDS_WITHOUT_BASE_URL.has(source.id) &&
+    (!source.baseUrl || !/^https?:\/\//i.test(source.baseUrl.trim()))
+  ) {
+    return 'missing-host';
+  }
+  return 'playable';
+}
 
 export function getSourceManagerBadge(
   source?: Pick<SourceInfo, 'id' | 'type' | 'description'> | null,
@@ -7,8 +63,31 @@ export function getSourceManagerBadge(
   if (source.id.startsWith('ext-ay-')) return 'Aniyomi';
   if (source.id.startsWith('ext-my-')) return 'Mangayomi';
   if (source.id.startsWith('ext-cs-')) return 'CloudStream';
+  if (source.id.startsWith('ext-lg-')) return 'Legado';
+  if (source.id.startsWith('ext-ln-')) return 'LNReader';
   if (source.type === 'inbuilt') return 'Inbuilt';
   return 'Extension';
+}
+
+/**
+ * Excludes metadata-only catalog extensions (AniDB, MAL, AniList, etc.) from player/reader
+ * playable source lists while leaving them intact in the user's Extensions Manager.
+ */
+export function filterPlayableSourcesForPlayer(
+  sources: SourceInfo[],
+  mediaType?: MediaType,
+): SourceInfo[] {
+  if (!Array.isArray(sources)) return [];
+  if (mediaType === 'NOVEL') {
+    // Text-based Novel reading is separated from Manga image readers until supported cleanly
+    return sources.filter(
+      (src) =>
+        !isMetadataOnlySource(src) &&
+        Array.isArray(src.mediaTypes) &&
+        src.mediaTypes.includes('NOVEL'),
+    );
+  }
+  return sources.filter((src) => !isMetadataOnlySource(src));
 }
 
 export function filterAvailableSources(sources: SourceInfo[], query: string): SourceInfo[] {
@@ -36,7 +115,10 @@ export function formatSourceAvailabilityLabel(params: {
   hasOverride?: boolean;
 }): string {
   const { mediaType, resolving, resolvedCount, expectedCount, status, hasOverride } = params;
-  const isManga = mediaType === 'MANGA' || mediaType === 'NOVEL';
+  if (mediaType === 'NOVEL') {
+    return 'Text novel reader not supported yet';
+  }
+  const isManga = mediaType === 'MANGA';
   const unit = isManga ? 'chapter' : 'episode';
 
   if (resolving && resolvedCount === 0) {
@@ -66,23 +148,26 @@ export function formatSourceAvailabilityLabel(params: {
 export const DEFAULT_ANIME_SOURCE_ID = 'shonenx-hls-inbuilt';
 export const DEFAULT_MANGA_SOURCE_ID = 'shonenx-manga-inbuilt';
 
-export function getDefaultSourceIdForMedia(isManga: boolean): string {
+export function getDefaultSourceIdForMedia(isManga: boolean, mediaType?: MediaType): string {
+  if (mediaType === 'NOVEL') return '';
   return isManga ? DEFAULT_MANGA_SOURCE_ID : DEFAULT_ANIME_SOURCE_ID;
 }
 
 /**
  * Resolves which source id should be active for a media page:
- * - If the user has explicitly selected a preferred source and it is currently installed/available, keep using it.
+ * - For NOVEL titles, never falls back to MangaDex / Manga image-reader defaults.
+ * - If the user has explicitly selected a preferred playable source and it is currently installed/available, keep using it.
  * - Otherwise default to ShizuTv inbuilt ('shonenx-hls-inbuilt' for anime, 'shonenx-manga-inbuilt' for manga).
  * - Only fall back to the first available source if even the default source was disabled/removed.
  */
 export function resolveActiveSourceId(params: {
-  availableSources: Array<Pick<SourceInfo, 'id'>>;
+  availableSources: Array<Pick<SourceInfo, 'id' | 'name' | 'baseUrl' | 'pkg' | 'type'>>;
   preferredSourceId?: string | null;
   isManga: boolean;
+  mediaType?: MediaType;
 }): string {
-  const defaultId = getDefaultSourceIdForMedia(params.isManga);
-  const { availableSources, preferredSourceId } = params;
+  const { availableSources, preferredSourceId, mediaType } = params;
+  const defaultId = getDefaultSourceIdForMedia(params.isManga, mediaType);
   if (!Array.isArray(availableSources) || availableSources.length === 0) {
     return defaultId;
   }
@@ -90,9 +175,10 @@ export function resolveActiveSourceId(params: {
   if (cleanPref && availableSources.some((s) => s.id === cleanPref)) {
     return cleanPref;
   }
-  if (availableSources.some((s) => s.id === defaultId)) {
+  if (defaultId && availableSources.some((s) => s.id === defaultId)) {
     return defaultId;
   }
   return availableSources[0].id;
 }
+
 

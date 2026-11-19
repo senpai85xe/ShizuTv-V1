@@ -24,6 +24,10 @@ import {
   ProviderTraceStatus,
   recordEpisodeTrace,
 } from '../utils/episodeDiagnostics';
+import type {
+  ExtensionDiagnoseMode,
+  ExtensionDiagnosticReport,
+} from '../utils/extensionDiagnostics';
 
 export const INBUILT_SOURCES: SourceInfo[] = [
   {
@@ -39,10 +43,10 @@ export const INBUILT_SOURCES: SourceInfo[] = [
     id: 'shonenx-manga-inbuilt',
     name: 'ShizuTv Reader (Inbuilt)',
     type: 'inbuilt',
-    mediaTypes: ['MANGA', 'NOVEL'],
+    mediaTypes: ['MANGA'],
     lang: 'en',
     version: '2.1.5',
-    description: 'High-contrast manga & light novel reader source.',
+    description: 'High-contrast manga reader source.',
   },
   {
     id: 'hianime-bridge',
@@ -596,12 +600,16 @@ export interface ResolveMangaChaptersAsyncParams {
 export async function resolveMangaChaptersAsync(
   params: ResolveMangaChaptersAsyncParams,
 ): Promise<{ chapters: UnifiedChapter[]; matchedTitle?: string; sourceLabel?: string }> {
+  if (params.media.type === 'NOVEL') {
+    throw new Error('Text-based Light Novel reading is not supported yet. Novel titles do not use Manga image sources.');
+  }
   const response = await fetch('/api/manga/chapters', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: params.signal,
     body: JSON.stringify({
       mediaId: params.media.id,
+      mediaType: params.media.type,
       titles: {
         overrideTitle: params.overrideTitle?.trim() || null,
         english: params.media.title?.english ?? null,
@@ -658,12 +666,16 @@ export interface ResolveMangaPagesAsyncParams {
 export async function resolveMangaChapterPagesAsync(
   params: ResolveMangaPagesAsyncParams,
 ): Promise<{ pages: string[]; sourceLabel?: string }> {
+  if (params.media.type === 'NOVEL') {
+    throw new Error('Text-based Light Novel reading is not supported yet. Novel titles do not use Manga image sources.');
+  }
   const response = await fetch('/api/manga/pages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: params.signal,
     body: JSON.stringify({
       mediaId: params.media.id,
+      mediaType: params.media.type,
       titles: {
         overrideTitle: params.overrideTitle?.trim() || null,
         english: params.media.title?.english ?? null,
@@ -743,6 +755,40 @@ export function resolveChapterPages(media: UnifiedMedia, chapter: UnifiedChapter
 
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   });
+}
+
+export async function diagnoseExtensionAsync(params: {
+  source: SourceInfo;
+  mediaType: 'ANIME' | 'MANGA' | 'NOVEL';
+  mode: ExtensionDiagnoseMode;
+  query: string;
+  signal?: AbortSignal;
+}): Promise<ExtensionDiagnosticReport> {
+  const response = await fetch('/api/extensions/diagnose', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: params.signal,
+    body: JSON.stringify({
+      sourceId: params.source.id,
+      sourceName: params.source.name,
+      sourceType: params.source.type,
+      sourceBaseUrl: params.source.baseUrl,
+      sourceLang: params.source.lang,
+      sourcePkg: params.source.pkg,
+      sourceMediaTypes: params.source.mediaTypes,
+      mediaType: params.mediaType,
+      mode: params.mode,
+      query: params.query.trim() || 'Naruto',
+    }),
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | (ExtensionDiagnosticReport & { message?: string })
+    | null;
+  if (!response.ok || !payload?.capabilities) {
+    throw new Error(payload?.message || `Diagnostics failed (HTTP ${response.status}).`);
+  }
+  return payload;
 }
 
 export function getMediaTypeCategory(type: MediaType): 'watching' | 'reading' {

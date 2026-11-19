@@ -4,8 +4,11 @@ import {
   DEFAULT_ANIME_SOURCE_ID,
   DEFAULT_MANGA_SOURCE_ID,
   filterAvailableSources,
+  filterPlayableSourcesForPlayer,
   formatSourceAvailabilityLabel,
   getSourceManagerBadge,
+  getSourcePlayabilityStatus,
+  isMetadataOnlySource,
   resolveActiveSourceId,
 } from './sourcePicker';
 import { SourceInfo } from '../types/media';
@@ -102,6 +105,15 @@ test('formatSourceAvailabilityLabel formats loading, resolved count, status, and
     }),
     '1 chapter available',
   );
+
+  assert.equal(
+    formatSourceAvailabilityLabel({
+      mediaType: 'NOVEL',
+      resolving: false,
+      resolvedCount: 0,
+    }),
+    'Text novel reader not supported yet',
+  );
 });
 
 test('resolveActiveSourceId defaults to ShizuTv and persists explicit user selection until changed', () => {
@@ -160,3 +172,84 @@ test('resolveActiveSourceId defaults to ShizuTv and persists explicit user selec
     DEFAULT_MANGA_SOURCE_ID,
   );
 });
+
+test('metadata-only sources are flagged and excluded from player/reader lists, and NOVEL stays isolated from MangaDex', () => {
+  const anidb: SourceInfo = {
+    id: 'ext-ay-anidb',
+    name: 'AniDB',
+    type: 'extension',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '14.1',
+    baseUrl: 'https://anidb.net',
+  };
+  const mal: SourceInfo = {
+    id: 'ext-ay-mal',
+    name: 'MyAnimeList',
+    type: 'extension',
+    mediaTypes: ['ANIME', 'MANGA'],
+    lang: 'en',
+    version: '14.2',
+  };
+  const brokenNoHost: SourceInfo = {
+    id: 'ext-ay-broken',
+    name: 'BrokenNoHost',
+    type: 'extension',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '1.0',
+  };
+  const mangadex: SourceInfo = {
+    id: 'mangadex-bridge',
+    name: 'MangaDex',
+    type: 'extension',
+    mediaTypes: ['MANGA'],
+    lang: 'multi',
+    version: '1.0',
+  };
+  const lnSource: SourceInfo = {
+    id: 'ext-ln-syosetsu',
+    name: 'Syosetsu',
+    type: 'extension',
+    mediaTypes: ['NOVEL'],
+    lang: 'ja',
+    version: '1.0',
+    baseUrl: 'https://ncode.syosetu.com',
+  };
+
+  assert.equal(isMetadataOnlySource(anidb), true);
+  assert.equal(isMetadataOnlySource(mal), true);
+  assert.equal(isMetadataOnlySource(SAMPLE_SOURCES[0]), false);
+
+  assert.equal(getSourcePlayabilityStatus(anidb, 'ANIME'), 'metadata-only');
+  assert.equal(getSourcePlayabilityStatus(brokenNoHost, 'ANIME'), 'missing-host');
+  assert.equal(getSourcePlayabilityStatus(lnSource, 'NOVEL'), 'novel-unsupported');
+  assert.equal(getSourcePlayabilityStatus(SAMPLE_SOURCES[1], 'ANIME'), 'playable');
+
+  const playableAnime = filterPlayableSourcesForPlayer(
+    [SAMPLE_SOURCES[0], anidb, mal, SAMPLE_SOURCES[1]],
+    'ANIME',
+  );
+  assert.deepEqual(
+    playableAnime.map((s) => s.id),
+    ['shonenx-hls-inbuilt', 'ext-ay-gotaku-en'],
+  );
+
+  // NOVEL titles must not receive MangaDex or Manga reader sources
+  const playableNovel = filterPlayableSourcesForPlayer([mangadex, anidb, lnSource], 'NOVEL');
+  assert.deepEqual(
+    playableNovel.map((s) => s.id),
+    ['ext-ln-syosetsu'],
+  );
+
+  assert.equal(
+    resolveActiveSourceId({
+      availableSources: [],
+      preferredSourceId: 'mangadex-bridge',
+      isManga: true,
+      mediaType: 'NOVEL',
+    }),
+    '',
+  );
+});
+

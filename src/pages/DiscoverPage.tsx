@@ -27,6 +27,7 @@ import { MediaCard } from '../components/MediaCard';
 import { MediaCardSkeleton } from '../components/MediaCardSkeleton';
 import { SkeletonBlock } from '../components/Skeleton';
 import { getMediaGridClassName } from '../utils/mediaCard';
+import { getSourcePlayabilityStatus } from '../utils/sourcePicker';
 import { useSlidingPill } from '../hooks/useSlidingPill';
 import { getBoundedStaggerDelay } from '../utils/appMotion';
 import {
@@ -619,6 +620,7 @@ export const DiscoverPage: React.FC = () => {
                 .filter((s) => s.mediaTypes.includes(mediaType))
                 .map((src) => {
                   const active = state.discoveryPrefs.activeSources.includes(src.id);
+                  const playability = getSourcePlayabilityStatus(src, mediaType);
                   return (
                     <button
                       key={src.id}
@@ -631,9 +633,24 @@ export const DiscoverPage: React.FC = () => {
                       }`}
                     >
                       <div className="space-y-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <Puzzle className="w-4 h-4 text-[var(--sx-primary)]" />
                           <span className="text-sm font-bold">{src.name}</span>
+                          {playability === 'metadata-only' && (
+                            <span className="px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-300 text-[10px] font-extrabold uppercase">
+                              Metadata Only
+                            </span>
+                          )}
+                          {playability === 'missing-host' && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-300 text-[10px] font-extrabold uppercase">
+                              No Host URL
+                            </span>
+                          )}
+                          {playability === 'novel-unsupported' && (
+                            <span className="px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-500 dark:text-slate-300 text-[10px] font-extrabold uppercase">
+                              Novel Unsupported
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-[var(--sx-on-surface-muted)]">
                           {src.description}

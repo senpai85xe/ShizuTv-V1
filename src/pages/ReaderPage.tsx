@@ -19,6 +19,7 @@ import {
   resolveMangaChapterPagesAsync,
   resolveMangaChaptersAsync,
 } from '../services/sourceEngine';
+import { filterPlayableSourcesForPlayer } from '../utils/sourcePicker';
 import { formatMediaDocumentTitle } from '../utils/documentTitle';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
@@ -47,18 +48,24 @@ export const ReaderPage: React.FC = () => {
     title: { english: 'ShizuTv Reader Preview' },
   };
   const isDemo = media.id === 'demo-manga';
+  const isNovel =
+    media.type === 'NOVEL' || String(media.format || '').toUpperCase() === 'NOVEL';
 
   const preferredSourceMeta = useMemo(() => {
-    const all = [...INBUILT_SOURCES, ...state.customSources];
+    const all = filterPlayableSourcesForPlayer(
+      [...INBUILT_SOURCES, ...state.customSources],
+      isNovel ? 'NOVEL' : 'MANGA',
+    );
+    if (isNovel) return undefined;
     const desiredId =
       routeState.sourceId ||
       state.discoveryPrefs.preferredMangaSourceId ||
       'mangadex-bridge';
     return all.find((s) => s.id === desiredId) ?? INBUILT_SOURCES.find((s) => s.id === 'mangadex-bridge');
-  }, [routeState.sourceId, state.discoveryPrefs.preferredMangaSourceId, state.customSources]);
+  }, [isNovel, routeState.sourceId, state.discoveryPrefs.preferredMangaSourceId, state.customSources]);
 
   const [activeSourceId, setActiveSourceId] = useState<string>(
-    routeState.sourceId || preferredSourceMeta?.id || 'mangadex-bridge',
+    isNovel ? '' : routeState.sourceId || preferredSourceMeta?.id || 'mangadex-bridge',
   );
   const activeSourceName =
     activeSourceId === 'mangadex-bridge'
@@ -74,11 +81,13 @@ export const ReaderPage: React.FC = () => {
       : routeState.sourceLang || preferredSourceMeta?.lang;
 
   const initialHasRealChapters =
+    !isNovel &&
     Array.isArray(routeState.chapters) &&
     routeState.chapters.length > 0 &&
     (isDemo || Boolean(routeState.chapters[0]?.sourceChapterId || routeState.chapters[0]?.chapterUrl));
 
   const [chapters, setChapters] = useState<UnifiedChapter[]>(() => {
+    if (isNovel) return [];
     if (isDemo) {
       return [{ id: 'ch-1', number: 1, title: 'Chapter 1', pageCount: 12 }];
     }
@@ -86,10 +95,12 @@ export const ReaderPage: React.FC = () => {
   });
   const [chapterIndex, setChapterIndex] = useState(routeState.chapterIndex ?? 0);
   const [pages, setPages] = useState<string[]>(() =>
-    isDemo ? resolveChapterPages(media, { id: 'ch-1', number: 1, title: 'Chapter 1', pageCount: 12 }) : [],
+    !isNovel && isDemo
+      ? resolveChapterPages(media, { id: 'ch-1', number: 1, title: 'Chapter 1', pageCount: 12 })
+      : [],
   );
-  const [loadingChapters, setLoadingChapters] = useState(!isDemo && !initialHasRealChapters);
-  const [loadingPages, setLoadingPages] = useState(!isDemo);
+  const [loadingChapters, setLoadingChapters] = useState(!isNovel && !isDemo && !initialHasRealChapters);
+  const [loadingPages, setLoadingPages] = useState(!isNovel && !isDemo);
   const [pagesError, setPagesError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
 
@@ -104,7 +115,7 @@ export const ReaderPage: React.FC = () => {
 
   // Fetch real chapters when launched directly/from bookmarks or when switching to MangaDex fallback
   useEffect(() => {
-    if (isDemo) return;
+    if (isDemo || isNovel) return;
     if (initialHasRealChapters && retryNonce === 0 && activeSourceId === (routeState.sourceId || preferredSourceMeta?.id || 'mangadex-bridge')) {
       return;
     }
@@ -143,11 +154,11 @@ export const ReaderPage: React.FC = () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [media.id, activeSourceId, retryNonce]);
+  }, [media.id, activeSourceId, retryNonce, isNovel]);
 
   // Resolve real pages whenever currentChapter changes
   useEffect(() => {
-    if (isDemo || !currentChapter) return;
+    if (isDemo || isNovel || !currentChapter) return;
     const controller = new AbortController();
     let cancelled = false;
     setLoadingPages(true);
@@ -310,7 +321,28 @@ export const ReaderPage: React.FC = () => {
         onClick={() => setChromeVisible((v) => !v)}
         className="flex-1 flex flex-col items-center justify-center py-16 px-2 sm:px-4 cursor-pointer"
       >
-        {loadingChapters || loadingPages ? (
+        {isNovel ? (
+          <div
+            data-testid="reader-novel-unsupported"
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-md mx-auto my-20 p-6 rounded-2xl bg-zinc-900/90 text-white border border-white/15 shadow-2xl text-center space-y-3"
+          >
+            <AlertCircle className="w-8 h-8 text-amber-400 mx-auto" />
+            <h2 className="text-base font-extrabold">Text Novel Reader Not Supported Yet</h2>
+            <p className="text-xs text-white/80 leading-relaxed">
+              Light Novel text chapters are not supported in this web reader yet. Novel entries are kept separate from Manga image sources.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => navigate(-1)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-extrabold"
+              >
+                <span>Back</span>
+              </button>
+            </div>
+          </div>
+        ) : loadingChapters || loadingPages ? (
           <div
             data-testid="reader-loading"
             className="flex flex-col items-center justify-center gap-3 py-24 text-center"

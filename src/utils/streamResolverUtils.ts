@@ -253,9 +253,12 @@ export function isViableTitleMatch(
 export function isMetadataOnlyCatalogHost(
   sourceBaseUrl?: string | null,
   sourceName?: string | null,
+  sourcePkg?: string | null,
+  sourceId?: string | null,
 ): boolean {
-  const combined = `${sourceBaseUrl || ''} ${sourceName || ''}`.toLowerCase();
-  return /\b(?:anidb\.net|myanimelist\.net|anilist\.co|kitsu\.io|kitsu\.app|anime-planet\.com|livechart\.me|notify\.moe|mangaupdates\.com|anidb)\b/.test(
+  const combined = `${sourceBaseUrl || ''} ${sourceName || ''} ${sourcePkg || ''} ${sourceId || ''}`
+    .toLowerCase();
+  return /\b(?:anidb\.net|anidb|myanimelist\.net|myanimelist|anilist\.co|anilist|kitsu\.io|kitsu\.app|kitsu|anime-planet\.com|anime-?planet|livechart\.me|livechart|notify\.moe|mangaupdates\.com|mangaupdates|baka-?updates|shikimori\.one|shikimori\.me|shikimori|simkl\.com|simkl|themoviedb\.org|thetvdb\.com|imdb\.com|trakt\.tv|annict\.com|annict|anisearch\.com|anisearch\.de|anisearch|novelupdates\.com|novelupdates|ranobedb\.org|ranobedb|vndb\.org|vndb|bangumi\.tv|bgm\.tv)\b/.test(
     combined,
   );
 }

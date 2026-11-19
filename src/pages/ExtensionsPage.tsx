@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
+  Ban,
   BookOpen,
   BookText,
   Check,
@@ -30,9 +31,10 @@ import {
   Trash2,
   Wrench,
   X,
+  XCircle,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
-import { ExtensionRepo, MediaType, SourceInfo, UnifiedMedia, getPreferredTitle } from '../types/media';
+import { ExtensionRepo, SourceInfo } from '../types/media';
 import {
   collectAvailableExtensionLanguages,
   ExtensionManagerFilter,
@@ -45,12 +47,12 @@ import {
   matchesExtensionMediaTab,
   reorderSourceIds,
 } from '../utils/extensionsManager';
-import { searchAniList } from '../services/anilist';
-import { searchJikan } from '../services/jikan';
+import { diagnoseExtensionAsync } from '../services/sourceEngine';
 import {
-  resolveEpisodesWithDiagnostics,
-  resolveMangaChaptersAsync,
-} from '../services/sourceEngine';
+  ExtensionDiagnosticReport,
+  formatCapabilityBadgeText,
+} from '../utils/extensionDiagnostics';
+import { getSourcePlayabilityStatus } from '../utils/sourcePicker';
 import { getBoundedStaggerDelay } from '../utils/appMotion';
 import {
   EXT_FROSTED_ACTIVE_BUBBLE,
@@ -69,17 +71,7 @@ type ExtensionSubTab = 'installed' | 'available';
 type TestKind = 'ping' | 'basic' | 'full';
 type RepoManagerTab = 'mangayomi' | 'legado' | 'lnreader' | 'aniyomi' | 'cloudstream';
 
-interface ExtensionTestResult {
-  sourceId: string;
-  sourceName: string;
-  status: 'pass' | 'warn' | 'fail';
-  durationMs: number;
-  summary: string;
-  detail?: string;
-  matchedMediaId?: string;
-  matchedTitle?: string;
-  sampleItems?: string[];
-}
+type ExtensionTestResult = ExtensionDiagnosticReport;
 
 const RECOMMENDED_REPOS: Array<{
   id: string;
@@ -156,6 +148,8 @@ export const ExtensionsPage: React.FC = () => {
   const navigate = useNavigate();
   const {
     state,
+    storageError,
+    clearStorageError,
     allSources,
     toggleSourceActive,
     setSourceOrder,
@@ -360,8 +354,7 @@ export const ExtensionsPage: React.FC = () => {
     setRunningTests(true);
     setTestResults([]);
 
-    const query = testQuery.trim() || 'Chainsaw Man';
-    const targetMediaType: MediaType = testMediaType === 'ANIME' ? 'ANIME' : 'MANGA';
+    const query = testQuery.trim() || 'Naruto';
     const nextResults: ExtensionTestResult[] = [];
 
     for (const sourceId of selectedTestIds) {
@@ -370,143 +363,27 @@ export const ExtensionsPage: React.FC = () => {
       const startedAt = performance.now();
 
       try {
-        if (testKind === 'ping') {
-          const pingRes = await fetch('/api/health');
-          const durationMs = Math.round(performance.now() - startedAt);
-          const hasHost = Boolean(source.baseUrl);
-          nextResults.push({
-            sourceId: source.id,
-            sourceName: source.name,
-            status: pingRes.ok ? 'pass' : 'warn',
-            durationMs,
-            summary: pingRes.ok
-              ? `Bridge ready (${durationMs} ms)`
-              : `HTTP ${pingRes.status}`,
-            detail: hasHost
-              ? `Configured host: ${source.baseUrl}`
-              : `Provider runtime (${getExtensionManagerType(source)}) active`,
-          });
-        } else if (testKind === 'basic') {
-          let matches: UnifiedMedia[] = [];
-          try {
-            const res = await searchAniList({ query, type: targetMediaType, perPage: 6 });
-            matches = res.items;
-          } catch {
-            matches = [];
-          }
-          if (matches.length === 0) {
-            try {
-              const res = await searchJikan(query, targetMediaType, 1);
-              matches = res.items;
-            } catch {
-              matches = [];
-            }
-          }
-          const durationMs = Math.round(performance.now() - startedAt);
-          const first = matches[0];
-          const firstTitle = first
-            ? getPreferredTitle(first.title, state.contentPrefs.titlePreference)
-            : null;
-          nextResults.push({
-            sourceId: source.id,
-            sourceName: source.name,
-            status: first ? 'pass' : 'warn',
-            durationMs,
-            summary: first
-              ? `${matches.length} title matches · Top: ${firstTitle}`
-              : `No search matches for "${query}"`,
-            detail: first
-              ? `${first.format || targetMediaType} · ${first.year || 'N/A'} · ${first.episodes ?? first.chapters ?? '?'} units`
-              : 'Try a Romaji or English title query.',
-            matchedMediaId: first?.id,
-            matchedTitle: firstTitle || undefined,
-          });
-        } else {
-          // Full test: Search + Real Episode/Chapter Resolution
-          let matches: UnifiedMedia[] = [];
-          try {
-            const res = await searchAniList({ query, type: targetMediaType, perPage: 4 });
-            matches = res.items;
-          } catch {
-            matches = [];
-          }
-          if (matches.length === 0) {
-            try {
-              const res = await searchJikan(query, targetMediaType, 1);
-              matches = res.items;
-            } catch {
-              matches = [];
-            }
-          }
-
-          if (!matches[0]) {
-            const durationMs = Math.round(performance.now() - startedAt);
-            nextResults.push({
-              sourceId: source.id,
-              sourceName: source.name,
-              status: 'fail',
-              durationMs,
-              summary: `Search returned 0 candidates for "${query}"`,
-              detail: 'Cannot resolve episode list without a matched entry.',
-            });
-          } else if (testMediaType === 'ANIME') {
-            const { episodes, trace } = await resolveEpisodesWithDiagnostics(matches[0], {
-              sourceId: source.id,
-              sourceName: source.name,
-              bypassCache: true,
-              recordTrace: true,
-            });
-            const durationMs = Math.round(performance.now() - startedAt);
-            const matchedTitle = getPreferredTitle(
-              matches[0].title,
-              state.contentPrefs.titlePreference,
-            );
-            nextResults.push({
-              sourceId: source.id,
-              sourceName: source.name,
-              status: episodes.length > 0 && trace.realTitleCount > 0 ? 'pass' : 'warn',
-              durationMs,
-              summary: `${episodes.length} episodes resolved (${trace.realTitleCount} named)`,
-              detail: `Matched "${trace.resolvedTitle}" · Winner: ${trace.winningPrimaryProvider}`,
-              matchedMediaId: matches[0].id,
-              matchedTitle,
-              sampleItems: episodes.slice(0, 3).map((e) => `Ep ${e.number}: ${e.title}`),
-            });
-          } else {
-            const { chapters, matchedTitle: sourceMatchTitle, sourceLabel } =
-              await resolveMangaChaptersAsync({
-                media: matches[0],
-                sourceId: source.id,
-                sourceName: source.name,
-                sourceBaseUrl: source.baseUrl,
-                sourceLang: source.lang,
-                bypassCache: true,
-              });
-            const durationMs = Math.round(performance.now() - startedAt);
-            const matchedTitle = getPreferredTitle(
-              matches[0].title,
-              state.contentPrefs.titlePreference,
-            );
-            nextResults.push({
-              sourceId: source.id,
-              sourceName: source.name,
-              status: chapters.length > 0 ? 'pass' : 'warn',
-              durationMs,
-              summary: `${chapters.length} chapters resolved`,
-              detail: `Matched "${sourceMatchTitle || matchedTitle}" via ${sourceLabel || source.name}`,
-              matchedMediaId: matches[0].id,
-              matchedTitle,
-              sampleItems: chapters.slice(0, 3).map((c) => `Ch ${c.number}: ${c.title}`),
-            });
-          }
-        }
+        const report = await diagnoseExtensionAsync({
+          source,
+          mediaType: testMediaType,
+          mode: testKind,
+          query,
+        });
+        nextResults.push(report);
       } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Test execution failed';
         nextResults.push({
           sourceId: source.id,
           sourceName: source.name,
           status: 'fail',
           durationMs: Math.round(performance.now() - startedAt),
-          summary: err instanceof Error ? err.message : 'Test execution failed',
+          summary: msg,
+          capabilities: {
+            metadataSearch: testKind === 'ping' ? 'untested' : 'unavailable',
+            episodeOrChapterListing: testKind === 'full' ? 'unavailable' : 'untested',
+            playbackOrReader: testKind === 'full' ? 'unavailable' : 'untested',
+            overallCompatibility: 'incompatible',
+          },
         });
       }
 
@@ -660,6 +537,11 @@ export const ExtensionsPage: React.FC = () => {
                         <div className="text-xs sm:text-sm font-extrabold truncate">{src.name}</div>
                         <div className="text-[11px] text-[var(--sx-on-surface-muted)] truncate">
                           {formatExtensionLangChip(src.lang)} · {formatExtensionVersion(src.version)}
+                          {getSourcePlayabilityStatus(src, testMediaType) === 'metadata-only'
+                            ? ' · Metadata Only'
+                            : getSourcePlayabilityStatus(src, testMediaType) === 'novel-unsupported'
+                              ? ' · Unsupported'
+                              : ''}
                         </div>
                       </div>
                     </div>
@@ -705,38 +587,109 @@ export const ExtensionsPage: React.FC = () => {
             <div className="py-7 flex flex-col items-center justify-center gap-2 text-[var(--sx-on-surface-muted)]">
               <FlaskConical className="w-8 h-8 opacity-45" />
               <p className="text-xs font-semibold text-center">
-                Select extensions above and tap Start Test to inspect health & episodes.
+                Select extensions above and tap Start Test to check search, listing, and real playback/reader compatibility.
               </p>
             </div>
           ) : (
             <div className="space-y-2.5">
               {testResults.map((res, idx) => {
                 const delay = getBoundedStaggerDelay(idx, 24, 8);
+                const capBadgeClass = (capStatus: ExtensionDiagnosticReport['capabilities']['metadataSearch']) => {
+                  if (capStatus === 'verified') {
+                    return 'bg-emerald-500/15 border-emerald-500/30 text-emerald-700 dark:text-emerald-300';
+                  }
+                  if (capStatus === 'unavailable') {
+                    return 'bg-red-500/15 border-red-500/30 text-red-700 dark:text-red-300';
+                  }
+                  if (capStatus === 'unsupported') {
+                    return 'bg-orange-500/15 border-orange-500/30 text-orange-700 dark:text-orange-300';
+                  }
+                  return 'bg-[var(--sx-on-surface)]/8 dark:bg-white/10 border-white/25 dark:border-white/10 text-[var(--sx-on-surface-muted)]';
+                };
+                const statusBadgeLabel =
+                  res.status === 'pass'
+                    ? 'Pass · Verified'
+                    : res.status === 'partial'
+                      ? 'Partial'
+                      : res.status === 'unsupported'
+                        ? 'Unsupported'
+                        : 'Fail';
+                const statusBadgeStyle =
+                  res.status === 'pass'
+                    ? 'bg-emerald-500/16 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                    : res.status === 'partial'
+                      ? 'bg-amber-500/16 border-amber-500/30 text-amber-700 dark:text-amber-300'
+                      : res.status === 'unsupported'
+                        ? 'bg-orange-500/16 border-orange-500/30 text-orange-700 dark:text-orange-300'
+                        : 'bg-red-500/16 border-red-500/30 text-red-700 dark:text-red-300';
                 return (
                   <div
                     key={res.sourceId}
+                    data-testid={`testing-result-${res.sourceId}`}
                     style={delay > 0 ? { animationDelay: `${delay}ms` } : undefined}
-                    className="sx-card-animate p-3 rounded-xl bg-[var(--sx-on-surface)]/5 dark:bg-white/[0.06] backdrop-blur-md border border-white/35 dark:border-white/10 space-y-1"
+                    className="sx-card-animate p-3 rounded-xl bg-[var(--sx-on-surface)]/5 dark:bg-white/[0.06] backdrop-blur-md border border-white/35 dark:border-white/10 space-y-1.5"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         {res.status === 'pass' ? (
                           <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                        ) : (
+                        ) : res.status === 'partial' ? (
                           <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                        ) : res.status === 'unsupported' ? (
+                          <Ban className="w-4 h-4 text-orange-600 dark:text-orange-400 shrink-0" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
                         )}
                         <span className="text-xs sm:text-sm font-extrabold truncate">
                           {res.sourceName}
                         </span>
                       </div>
-                      <span className="text-[11px] font-mono-tabular font-bold text-[var(--sx-on-surface-muted)] shrink-0">
-                        {res.durationMs} ms
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span
+                          className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold uppercase ${statusBadgeStyle}`}
+                        >
+                          {statusBadgeLabel}
+                        </span>
+                        <span className="text-[11px] font-mono-tabular font-bold text-[var(--sx-on-surface-muted)]">
+                          {res.durationMs} ms
+                        </span>
+                      </div>
                     </div>
                     <p className="text-xs font-bold">{res.summary}</p>
                     {res.detail && (
                       <p className="text-[11px] text-[var(--sx-on-surface-muted)]">{res.detail}</p>
                     )}
+                    <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                      <span
+                        className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${capBadgeClass(
+                          res.capabilities.metadataSearch,
+                        )}`}
+                      >
+                        {formatCapabilityBadgeText('search', res.capabilities.metadataSearch, testMediaType)}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${capBadgeClass(
+                          res.capabilities.episodeOrChapterListing,
+                        )}`}
+                      >
+                        {formatCapabilityBadgeText(
+                          'listing',
+                          res.capabilities.episodeOrChapterListing,
+                          testMediaType,
+                        )}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${capBadgeClass(
+                          res.capabilities.playbackOrReader,
+                        )}`}
+                      >
+                        {formatCapabilityBadgeText(
+                          'playback',
+                          res.capabilities.playbackOrReader,
+                          testMediaType,
+                        )}
+                      </span>
+                    </div>
                     {res.sampleItems && res.sampleItems.length > 0 && (
                       <div className="pt-1 space-y-0.5 text-[11px] font-mono-tabular text-[var(--sx-on-surface-muted)]">
                         {res.sampleItems.map((line, i) => (
@@ -1183,6 +1136,24 @@ export const ExtensionsPage: React.FC = () => {
         </div>
       </header>
 
+      {/* Storage Persistence Warning / Error Banner */}
+      {storageError && (
+        <div
+          data-testid="extensions-storage-error"
+          className="px-3.5 py-2.5 rounded-2xl bg-red-500/14 backdrop-blur-xl border border-red-500/30 text-xs font-bold text-red-700 dark:text-red-300 flex items-center justify-between gap-3"
+        >
+          <span>{storageError}</span>
+          <button
+            type="button"
+            onClick={clearStorageError}
+            aria-label="Dismiss storage warning"
+            className="w-6 h-6 rounded-full flex items-center justify-center hover:bg-red-500/20 shrink-0"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Media Type Tabs: Anime | Manga | Novel */}
       <SlidingSegmentedBar
         ariaLabel="Media Type"
@@ -1381,6 +1352,34 @@ export const ExtensionsPage: React.FC = () => {
                               18+
                             </span>
                           )}
+                          {(() => {
+                            const playability = getSourcePlayabilityStatus(src, mediaTab);
+                            if (playability === 'metadata-only') {
+                              return (
+                                <span
+                                  data-testid={`badge-metadata-only-${src.id}`}
+                                  className="px-2 py-0.5 rounded-md bg-orange-500/16 border border-orange-500/30 text-orange-700 dark:text-orange-300 text-[10px] font-extrabold uppercase"
+                                >
+                                  Metadata Only · Not Playable
+                                </span>
+                              );
+                            }
+                            if (playability === 'missing-host') {
+                              return (
+                                <span className="px-2 py-0.5 rounded-md bg-amber-500/16 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[10px] font-extrabold uppercase">
+                                  No Host URL
+                                </span>
+                              );
+                            }
+                            if (playability === 'novel-unsupported') {
+                              return (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-500/16 border border-slate-500/30 text-slate-600 dark:text-slate-300 text-[10px] font-extrabold uppercase">
+                                  Text Novel Unsupported
+                                </span>
+                              );
+                            }
+                            return null;
+                          })()}
                           {!isActive && (
                             <span className="px-2 py-0.5 rounded-md bg-amber-500/16 border border-amber-500/25 text-amber-700 dark:text-amber-300 text-[10px] font-extrabold uppercase">
                               Disabled
@@ -1526,6 +1525,16 @@ export const ExtensionsPage: React.FC = () => {
                                       18+
                                     </span>
                                   )}
+                                  {getSourcePlayabilityStatus(src, mediaTab) === 'metadata-only' && (
+                                    <span className="px-2 py-0.5 rounded-md bg-orange-500/16 border border-orange-500/30 text-orange-700 dark:text-orange-300 text-[10px] font-extrabold uppercase">
+                                      Metadata Only
+                                    </span>
+                                  )}
+                                  {getSourcePlayabilityStatus(src, mediaTab) === 'novel-unsupported' && (
+                                    <span className="px-2 py-0.5 rounded-md bg-slate-500/16 border border-slate-500/30 text-slate-600 dark:text-slate-300 text-[10px] font-extrabold uppercase">
+                                      Novel Unsupported
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1617,25 +1626,35 @@ export const ExtensionsPage: React.FC = () => {
                   </div>
                 )}
 
-                <div className="flex items-center justify-between gap-2 p-3 rounded-2xl bg-[var(--sx-on-surface)]/5 dark:bg-white/[0.06] border border-white/35 dark:border-white/10">
-                  <div>
-                    <div className="text-xs font-extrabold">Enable in Source Picker</div>
-                    <div className="text-[11px] text-[var(--sx-on-surface-muted)]">
-                      Controls whether this extension appears on Watch & Read tabs
-                    </div>
+                {getSourcePlayabilityStatus(inspectSource, mediaTab) === 'metadata-only' ? (
+                  <div className="p-3 rounded-2xl bg-orange-500/12 border border-orange-500/25 text-xs text-orange-700 dark:text-orange-300 font-bold">
+                    Metadata-only catalog source: kept in your installed extensions list, and hidden from video/manga player pickers because it does not host playable streams or chapters.
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => toggleSourceActive(inspectSource.id)}
-                    className={`px-3.5 h-8 rounded-full text-xs font-extrabold transition-all duration-200 ${
-                      isActive
-                        ? 'bg-[var(--sx-primary)]/90 text-[var(--sx-on-primary)]'
-                        : `${EXT_FROSTED_ICON_BTN} text-[var(--sx-on-surface-muted)]`
-                    }`}
-                  >
-                    {isActive ? 'Enabled' : 'Disabled'}
-                  </button>
-                </div>
+                ) : getSourcePlayabilityStatus(inspectSource, mediaTab) === 'novel-unsupported' ? (
+                  <div className="p-3 rounded-2xl bg-slate-500/12 border border-slate-500/25 text-xs text-[var(--sx-on-surface-muted)] font-bold">
+                    Text-based Light Novel reading is not supported yet. Novel sources remain separate from Manga image readers.
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-2 p-3 rounded-2xl bg-[var(--sx-on-surface)]/5 dark:bg-white/[0.06] border border-white/35 dark:border-white/10">
+                    <div>
+                      <div className="text-xs font-extrabold">Enable in Source Picker</div>
+                      <div className="text-[11px] text-[var(--sx-on-surface-muted)]">
+                        Controls whether this extension appears on Watch &amp; Read tabs
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleSourceActive(inspectSource.id)}
+                      className={`px-3.5 h-8 rounded-full text-xs font-extrabold transition-all duration-200 ${
+                        isActive
+                          ? 'bg-[var(--sx-primary)]/90 text-[var(--sx-on-primary)]'
+                          : `${EXT_FROSTED_ICON_BTN} text-[var(--sx-on-surface-muted)]`
+                      }`}
+                    >
+                      {isActive ? 'Enabled' : 'Disabled'}
+                    </button>
+                  </div>
+                )}
 
                 {/* Accessible Reorder Controls */}
                 <div className="flex items-center justify-between gap-2">

@@ -18,6 +18,12 @@ import {
   isViableTitleMatch,
   scoreGogoSearchCandidate,
 } from '../utils/streamResolverUtils.ts';
+import {
+  buildCapabilitiesBreakdown,
+  type ExtensionDiagnoseMode,
+  type ExtensionDiagnosticReport,
+  resolveDiagnosticOverallStatus,
+} from '../utils/extensionDiagnostics.ts';
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -25,6 +31,7 @@ const MANGADEX_UA = 'ShizuTv/2.1 (+https://mangadex.org)';
 
 export interface ResolveMangaChaptersParams {
   mediaId: string;
+  mediaType?: string;
   titles: {
     overrideTitle?: string | null;
     english?: string | null;
@@ -54,6 +61,7 @@ export interface ResolvedMangaChaptersResult {
 
 export interface ResolveMangaPagesParams {
   mediaId: string;
+  mediaType?: string;
   titles: {
     overrideTitle?: string | null;
     english?: string | null;
@@ -308,6 +316,11 @@ async function resolveCustomExtensionMangaChapters(
 export async function resolveMangaChaptersServer(
   params: ResolveMangaChaptersParams,
 ): Promise<ResolvedMangaChaptersResult> {
+  if (params.mediaType && params.mediaType.trim().toUpperCase() === 'NOVEL') {
+    throw new Error(
+      'Text-based Light Novel reading is not supported yet. Novel titles cannot use Manga image chapter sources.',
+    );
+  }
   const plan = resolveMangaHostPlan(params);
   if (plan.mode === 'missing-host') {
     throw new Error(
@@ -347,6 +360,11 @@ export async function resolveMangaChaptersServer(
 export async function resolveMangaChapterPagesServer(
   params: ResolveMangaPagesParams,
 ): Promise<ResolvedMangaPagesResult> {
+  if (params.mediaType && params.mediaType.trim().toUpperCase() === 'NOVEL') {
+    throw new Error(
+      'Text-based Light Novel reading is not supported yet. Novel titles cannot use Manga image page sources.',
+    );
+  }
   const plan = resolveMangaHostPlan(params);
   if (plan.mode === 'missing-host') {
     throw new Error(
@@ -465,4 +483,343 @@ export async function resolveMangaChapterPagesServer(
   };
   pagesCache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, payload });
   return payload;
+}
+
+function looksBlockedChallenge(status: number, body: string): boolean {
+  if (status === 403 || status === 429 || status === 503) {
+    if (/just a moment|cf-challenge|cloudflare|attention required|enable javascript/i.test(body)) {
+      return true;
+    }
+  }
+  return /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(body);
+}
+
+export async function diagnoseMangaExtensionServer(params: {
+  sourceId: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  sourcePkg?: string;
+  mode: ExtensionDiagnoseMode;
+  query: string;
+}): Promise<ExtensionDiagnosticReport> {
+  const startedAt = Date.now();
+  const sourceLabel = params.sourceName || params.sourceId;
+  const query = params.query.trim() || 'Naruto';
+
+  if (
+    isMetadataOnlyCatalogHost(
+      params.sourceBaseUrl,
+      params.sourceName,
+      params.sourcePkg,
+      params.sourceId,
+    )
+  ) {
+    const unsupportedReason = `${sourceLabel} is a metadata/tracking catalog and cannot supply readable manga chapters or pages.`;
+    return {
+      sourceId: params.sourceId,
+      sourceName: sourceLabel,
+      status: 'unsupported',
+      durationMs: Date.now() - startedAt,
+      summary: 'Unsupported: Metadata-only catalog source',
+      detail: unsupportedReason,
+      capabilities: buildCapabilitiesBreakdown({
+        mode: params.mode,
+        mediaTab: 'MANGA',
+        unsupportedReason,
+        isMetadataCatalogOnly: true,
+        searchMatched: false,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+      }),
+    };
+  }
+
+  const plan = resolveMangaHostPlan(params);
+  if (plan.mode === 'missing-host') {
+    const unsupportedReason = `No valid HTTP base URL is configured for "${sourceLabel}".`;
+    return {
+      sourceId: params.sourceId,
+      sourceName: sourceLabel,
+      status: 'unsupported',
+      durationMs: Date.now() - startedAt,
+      summary: 'Unsupported: Missing host URL',
+      detail: unsupportedReason,
+      capabilities: buildCapabilitiesBreakdown({
+        mode: params.mode,
+        mediaTab: 'MANGA',
+        unsupportedReason,
+        searchMatched: false,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+      }),
+    };
+  }
+
+  const probeHost = plan.mode === 'mangadex' ? MANGADEX_API_BASE : plan.baseUrl!;
+
+  if (params.mode === 'ping') {
+    try {
+      const target = plan.mode === 'mangadex' ? `${MANGADEX_API_BASE}/ping` : `${probeHost}/`;
+      const res = await fetchHtml(target, plan.mode === 'mangadex' ? { 'User-Agent': MANGADEX_UA } : {});
+      if (looksBlockedChallenge(res.status, res.text)) {
+        const unsupportedReason = `${sourceLabel} returned an anti-bot challenge (HTTP ${res.status}).`;
+        return {
+          sourceId: params.sourceId,
+          sourceName: sourceLabel,
+          status: 'unsupported',
+          durationMs: Date.now() - startedAt,
+          summary: `Blocked by upstream protection (HTTP ${res.status})`,
+          detail: unsupportedReason,
+          capabilities: buildCapabilitiesBreakdown({
+            mode: 'ping',
+            mediaTab: 'MANGA',
+            unsupportedReason,
+            searchMatched: false,
+            listingAvailable: false,
+            playbackOrPagesVerified: false,
+          }),
+        };
+      }
+      if (!res.ok) {
+        return {
+          sourceId: params.sourceId,
+          sourceName: sourceLabel,
+          status: 'fail',
+          durationMs: Date.now() - startedAt,
+          summary: `Host returned HTTP ${res.status}`,
+          detail: `${target} did not return 2xx. Reader capability not tested in Ping mode.`,
+          capabilities: buildCapabilitiesBreakdown({
+            mode: 'ping',
+            mediaTab: 'MANGA',
+            searchMatched: false,
+            listingAvailable: false,
+            playbackOrPagesVerified: false,
+          }),
+        };
+      }
+      return {
+        sourceId: params.sourceId,
+        sourceName: sourceLabel,
+        status: 'partial',
+        durationMs: Date.now() - startedAt,
+        summary: `Host reachable (HTTP ${res.status}) · Reader not verified`,
+        detail: `${target} responded cleanly. Run Full test to verify chapters and reader pages.`,
+        capabilities: buildCapabilitiesBreakdown({
+          mode: 'ping',
+          mediaTab: 'MANGA',
+          searchMatched: true,
+          listingAvailable: false,
+          playbackOrPagesVerified: false,
+        }),
+      };
+    } catch (err) {
+      return {
+        sourceId: params.sourceId,
+        sourceName: sourceLabel,
+        status: 'fail',
+        durationMs: Date.now() - startedAt,
+        summary: err instanceof Error ? err.message : 'Host unreachable',
+        detail: `Failed to reach ${probeHost}`,
+        capabilities: buildCapabilitiesBreakdown({
+          mode: 'ping',
+          mediaTab: 'MANGA',
+          searchMatched: false,
+          listingAvailable: false,
+          playbackOrPagesVerified: false,
+        }),
+      };
+    }
+  }
+
+  // Basic or Full: perform real search against target extension/MangaDex
+  let searchMatchedTitle: string | undefined;
+  let searchMatchedCount = 0;
+  let blockedReason: string | null = null;
+
+  if (plan.mode === 'mangadex') {
+    try {
+      const searchJson = await fetchJson<{ data?: MangaDexSearchItem[] }>(
+        `${MANGADEX_API_BASE}/manga?title=${encodeURIComponent(query)}&limit=10&contentRating[]=safe&contentRating[]=suggestive`,
+        { 'User-Agent': MANGADEX_UA },
+      );
+      const best = pickBestMangaDexMatch(searchJson.data || [], [query]);
+      if (best) {
+        searchMatchedTitle = best.matchedTitle;
+        searchMatchedCount = (searchJson.data || []).length;
+      }
+    } catch (err) {
+      return {
+        sourceId: params.sourceId,
+        sourceName: sourceLabel,
+        status: 'fail',
+        durationMs: Date.now() - startedAt,
+        summary: err instanceof Error ? err.message : 'MangaDex search failed',
+        capabilities: buildCapabilitiesBreakdown({
+          mode: params.mode,
+          mediaTab: 'MANGA',
+          searchMatched: false,
+          listingAvailable: false,
+          playbackOrPagesVerified: false,
+        }),
+      };
+    }
+  } else {
+    const endpoints = [
+      `${probeHost}/?s=${encodeURIComponent(query)}&post_type=wp-manga`,
+      `${probeHost}/?s=${encodeURIComponent(query)}`,
+      `${probeHost}/search?q=${encodeURIComponent(query)}`,
+      `${probeHost}/search?keyword=${encodeURIComponent(query)}`,
+    ];
+    for (const ep of endpoints) {
+      try {
+        const res = await fetchHtml(ep, { Referer: `${probeHost}/` });
+        if (looksBlockedChallenge(res.status, res.text)) {
+          blockedReason = `${sourceLabel} is protected by an anti-bot challenge (HTTP ${res.status}).`;
+          break;
+        }
+        if (!res.ok) continue;
+        const parsed = parseMangaSearchHtml(res.text, res.url || probeHost);
+        const viable = parsed.filter((c) => isViableTitleMatch(c, [query], 'MANGA'));
+        if (viable.length > 0) {
+          searchMatchedTitle = viable[0].title;
+          searchMatchedCount = viable.length;
+          break;
+        }
+      } catch {
+        // Try next search URL
+      }
+    }
+  }
+
+  if (blockedReason) {
+    return {
+      sourceId: params.sourceId,
+      sourceName: sourceLabel,
+      status: 'unsupported',
+      durationMs: Date.now() - startedAt,
+      summary: 'Unsupported in Web Bridge: Upstream protection',
+      detail: blockedReason,
+      capabilities: buildCapabilitiesBreakdown({
+        mode: params.mode,
+        mediaTab: 'MANGA',
+        unsupportedReason: blockedReason,
+        searchMatched: false,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+      }),
+    };
+  }
+
+  if (params.mode === 'basic') {
+    const searchOk = Boolean(searchMatchedTitle);
+    return {
+      sourceId: params.sourceId,
+      sourceName: sourceLabel,
+      status: resolveDiagnosticOverallStatus({
+        mode: 'basic',
+        searchMatched: searchOk,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+        errorOccurred: !searchOk,
+      }),
+      durationMs: Date.now() - startedAt,
+      summary: searchOk
+        ? `Search matched ${searchMatchedCount} result${searchMatchedCount === 1 ? '' : 's'} · Top: ${searchMatchedTitle} (Pages untested)`
+        : `No matching manga found on ${sourceLabel} for "${query}"`,
+      detail: searchOk
+        ? 'Site search succeeded on this source. Run Full test to verify chapters and reader pages.'
+        : 'Source site returned 0 viable manga matches.',
+      matchedTitle: searchMatchedTitle,
+      capabilities: buildCapabilitiesBreakdown({
+        mode: 'basic',
+        mediaTab: 'MANGA',
+        searchMatched: searchOk,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+      }),
+    };
+  }
+
+  // Full test: chapter listing + chapter 1 reader page resolution
+  let listingAvailable = false;
+  let pagesVerified = false;
+  let sampleItems: string[] = [];
+  let detailMsg = '';
+
+  try {
+    const chResult = await resolveMangaChaptersServer({
+      mediaId: `diag-${params.sourceId}`,
+      mediaType: 'MANGA',
+      titles: { english: query, romaji: query },
+      sourceId: params.sourceId,
+      sourceName: params.sourceName,
+      sourceBaseUrl: params.sourceBaseUrl,
+      sourceLang: params.sourceLang,
+      bypassCache: true,
+    });
+    listingAvailable = chResult.chapters.length > 0;
+    searchMatchedTitle = chResult.matchedTitle || searchMatchedTitle;
+    sampleItems = chResult.chapters.slice(0, 3).map((c) => `Ch ${c.number}: ${c.title}`);
+
+    if (listingAvailable) {
+      const firstCh = chResult.chapters[0];
+      const pageRes = await resolveMangaChapterPagesServer({
+        mediaId: `diag-${params.sourceId}`,
+        mediaType: 'MANGA',
+        titles: { english: query, romaji: query },
+        chapter: {
+          id: firstCh.id,
+          number: firstCh.number,
+          title: firstCh.title,
+          sourceChapterId: firstCh.sourceChapterId,
+          chapterUrl: firstCh.chapterUrl,
+        },
+        sourceId: params.sourceId,
+        sourceName: params.sourceName,
+        sourceBaseUrl: params.sourceBaseUrl,
+        sourceLang: params.sourceLang,
+        bypassCache: true,
+      });
+      pagesVerified = pageRes.pages.length > 0;
+      detailMsg = pagesVerified
+        ? `Verified "${searchMatchedTitle}" (${chResult.chapters.length} chapters, Ch ${firstCh.number} returned ${pageRes.pages.length} readable pages).`
+        : `Loaded chapter list (${chResult.chapters.length} chapters) but Chapter ${firstCh.number} returned 0 pages.`;
+    }
+  } catch (err) {
+    detailMsg = err instanceof Error ? err.message : 'Chapter/page resolution failed.';
+  }
+
+  const overall = resolveDiagnosticOverallStatus({
+    mode: 'full',
+    searchMatched: Boolean(searchMatchedTitle),
+    listingAvailable,
+    playbackOrPagesVerified: pagesVerified,
+    errorOccurred: !pagesVerified && !listingAvailable && !searchMatchedTitle,
+  });
+
+  return {
+    sourceId: params.sourceId,
+    sourceName: sourceLabel,
+    status: overall,
+    durationMs: Date.now() - startedAt,
+    summary:
+      overall === 'pass'
+        ? `Verified reader pages (${sampleItems.length > 0 ? sampleItems[0] : query})`
+        : listingAvailable
+          ? `Chapters found, but reader pages failed to load`
+          : searchMatchedTitle
+            ? `Matched "${searchMatchedTitle}", but chapters unavailable`
+            : `No playable manga chapters found on ${sourceLabel}`,
+    detail: detailMsg || undefined,
+    matchedTitle: searchMatchedTitle,
+    sampleItems,
+    capabilities: buildCapabilitiesBreakdown({
+      mode: 'full',
+      mediaTab: 'MANGA',
+      searchMatched: Boolean(searchMatchedTitle),
+      listingAvailable,
+      playbackOrPagesVerified: pagesVerified,
+    }),
+  };
 }

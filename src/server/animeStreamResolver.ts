@@ -25,6 +25,12 @@ import {
   sortEmbedsForAudioLanguage,
   type StreamAudioLanguage,
 } from '../utils/streamResolverUtils.ts';
+import {
+  buildCapabilitiesBreakdown,
+  type ExtensionDiagnoseMode,
+  type ExtensionDiagnosticReport,
+  resolveDiagnosticOverallStatus,
+} from '../utils/extensionDiagnostics.ts';
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -1521,4 +1527,386 @@ export async function resolveAnimeEpisodeStream(
   }
 
   throw new Error(lastError);
+}
+
+function looksBlockedChallengeHtml(status: number, body: string): boolean {
+  if (status === 403 || status === 429 || status === 503) {
+    if (/just a moment|cf-challenge|cloudflare|attention required|enable javascript/i.test(body)) {
+      return true;
+    }
+  }
+  return /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(body);
+}
+
+export async function diagnoseAnimeExtensionServer(params: {
+  sourceId: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  sourcePkg?: string;
+  mode: ExtensionDiagnoseMode;
+  query: string;
+}): Promise<ExtensionDiagnosticReport> {
+  const startedAt = Date.now();
+  const sourceLabel = params.sourceName || params.sourceId;
+  const query = params.query.trim() || 'Naruto';
+
+  if (
+    isMetadataOnlyCatalogHost(
+      params.sourceBaseUrl,
+      params.sourceName,
+      params.sourcePkg,
+      params.sourceId,
+    )
+  ) {
+    const unsupportedReason = `${sourceLabel} is a metadata/tracking catalog and does not host playable video streams.`;
+    return {
+      sourceId: params.sourceId,
+      sourceName: sourceLabel,
+      status: 'unsupported',
+      durationMs: Date.now() - startedAt,
+      summary: 'Unsupported: Metadata-only catalog source',
+      detail: unsupportedReason,
+      capabilities: buildCapabilitiesBreakdown({
+        mode: params.mode,
+        mediaTab: 'ANIME',
+        unsupportedReason,
+        isMetadataCatalogOnly: true,
+        searchMatched: false,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+      }),
+    };
+  }
+
+  const hostPlan = resolveProviderHostPlan({
+    sourceId: params.sourceId,
+    sourceName: params.sourceName,
+    sourceBaseUrl: params.sourceBaseUrl,
+  });
+
+  if (hostPlan.mode === 'missing-host' || hostPlan.hosts.length === 0) {
+    const unsupportedReason = `Extension "${sourceLabel}" does not have a valid HTTP base URL configured.`;
+    return {
+      sourceId: params.sourceId,
+      sourceName: sourceLabel,
+      status: 'unsupported',
+      durationMs: Date.now() - startedAt,
+      summary: 'Unsupported: Missing stream host URL',
+      detail: unsupportedReason,
+      capabilities: buildCapabilitiesBreakdown({
+        mode: params.mode,
+        mediaTab: 'ANIME',
+        unsupportedReason,
+        searchMatched: false,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+      }),
+    };
+  }
+
+  const primaryHost = hostPlan.hosts[0];
+
+  if (params.mode === 'ping') {
+    let reachableHost: string | null = null;
+    let reachableStatus = 0;
+    let blockedReason: string | null = null;
+    let lastErr = '';
+
+    for (const host of hostPlan.hosts) {
+      try {
+        const res = await fetchText(`${host}/`, { Referer: `${host}/` }, 5000);
+        if (looksBlockedChallengeHtml(res.status, res.text)) {
+          blockedReason = `${host} returned an anti-bot challenge (HTTP ${res.status}).`;
+          break;
+        }
+        if (res.ok) {
+          reachableHost = host;
+          reachableStatus = res.status;
+          break;
+        }
+        lastErr = `HTTP ${res.status}`;
+      } catch (err) {
+        lastErr = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (blockedReason) {
+      return {
+        sourceId: params.sourceId,
+        sourceName: sourceLabel,
+        status: 'unsupported',
+        durationMs: Date.now() - startedAt,
+        summary: 'Blocked by upstream anti-bot challenge',
+        detail: blockedReason,
+        capabilities: buildCapabilitiesBreakdown({
+          mode: 'ping',
+          mediaTab: 'ANIME',
+          unsupportedReason: blockedReason,
+          searchMatched: false,
+          listingAvailable: false,
+          playbackOrPagesVerified: false,
+        }),
+      };
+    }
+
+    if (!reachableHost) {
+      return {
+        sourceId: params.sourceId,
+        sourceName: sourceLabel,
+        status: 'fail',
+        durationMs: Date.now() - startedAt,
+        summary: `Host unreachable (${lastErr || 'No response'})`,
+        detail: `Tried ${primaryHost}. Stream playback was not tested.`,
+        capabilities: buildCapabilitiesBreakdown({
+          mode: 'ping',
+          mediaTab: 'ANIME',
+          searchMatched: false,
+          listingAvailable: false,
+          playbackOrPagesVerified: false,
+        }),
+      };
+    }
+
+    return {
+      sourceId: params.sourceId,
+      sourceName: sourceLabel,
+      status: 'partial',
+      durationMs: Date.now() - startedAt,
+      summary: `Host reachable (HTTP ${reachableStatus}) · Playback not verified`,
+      detail: `${reachableHost} responded cleanly. Run Full test to verify episodes and video playback.`,
+      capabilities: buildCapabilitiesBreakdown({
+        mode: 'ping',
+        mediaTab: 'ANIME',
+        searchMatched: true,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+      }),
+    };
+  }
+
+  // Basic or Full: real title search on the extension's actual host(s)
+  const queries = [query];
+  const targetTitles = [query];
+  let matchedCandidates: Array<GogoSearchCandidate & { score: number }> = [];
+  let searchHostUsed = primaryHost;
+  let blockedReason: string | null = null;
+
+  for (const host of hostPlan.hosts) {
+    try {
+      if (hostPlan.mode === 'inbuilt') {
+        matchedCandidates = await searchGogoAcrossQueries(
+          host,
+          queries,
+          targetTitles,
+          'sub',
+          'TV',
+          'ja',
+        );
+      } else if (hostPlan.mode === 'hianime') {
+        const res = await fetchText(
+          `${host}/search?keyword=${encodeURIComponent(query)}`,
+          { Referer: `${host}/` },
+          6500,
+        );
+        if (looksBlockedChallengeHtml(res.status, res.text)) {
+          blockedReason = `${host} returned an anti-bot challenge (HTTP ${res.status}).`;
+          break;
+        }
+        if (res.ok) {
+          matchedCandidates = parseGenericSearchHtml(res.text, host)
+            .filter((c) => isViableTitleMatch(c, targetTitles, 'TV'))
+            .map((c) => ({
+              ...c,
+              score: scoreGogoSearchCandidate(c, {
+                titles: targetTitles,
+                category: 'sub',
+                format: 'TV',
+                audioLanguage: 'ja',
+              }),
+            }))
+            .sort((a, b) => b.score - a.score);
+        }
+      } else {
+        // Check first for anti-bot block on custom host homepage/search
+        const probeRes = await fetchText(
+          `${host}/?s=${encodeURIComponent(query)}`,
+          { Referer: `${host}/` },
+          5500,
+        ).catch(() => null);
+        if (probeRes && looksBlockedChallengeHtml(probeRes.status, probeRes.text)) {
+          blockedReason = `${sourceLabel} (${host}) is protected by an anti-bot challenge (HTTP ${probeRes.status}).`;
+          break;
+        }
+        matchedCandidates = await searchGenericSiteAcrossQueries(
+          host,
+          queries,
+          targetTitles,
+          'sub',
+          'TV',
+          'ja',
+        );
+      }
+
+      if (matchedCandidates.length > 0) {
+        searchHostUsed = host;
+        break;
+      }
+    } catch {
+      // Try next host
+    }
+  }
+
+  if (blockedReason) {
+    return {
+      sourceId: params.sourceId,
+      sourceName: sourceLabel,
+      status: 'unsupported',
+      durationMs: Date.now() - startedAt,
+      summary: 'Unsupported in Web Bridge: Upstream protection',
+      detail: blockedReason,
+      capabilities: buildCapabilitiesBreakdown({
+        mode: params.mode,
+        mediaTab: 'ANIME',
+        unsupportedReason: blockedReason,
+        searchMatched: false,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+      }),
+    };
+  }
+
+  const topCandidate = matchedCandidates[0];
+
+  if (params.mode === 'basic') {
+    const searchOk = Boolean(topCandidate);
+    return {
+      sourceId: params.sourceId,
+      sourceName: sourceLabel,
+      status: resolveDiagnosticOverallStatus({
+        mode: 'basic',
+        searchMatched: searchOk,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+        errorOccurred: !searchOk,
+      }),
+      durationMs: Date.now() - startedAt,
+      summary: searchOk
+        ? `Search matched ${matchedCandidates.length} title${matchedCandidates.length === 1 ? '' : 's'} · Top: ${topCandidate.title} (Playback untested)`
+        : `No matching anime entries found on ${sourceLabel} for "${query}"`,
+      detail: searchOk
+        ? `Host: ${searchHostUsed}. Run Full test to verify episode listing and video stream resolution.`
+        : `Queried ${searchHostUsed} directly without metadata fallback; 0 matching results found.`,
+      matchedTitle: topCandidate?.title,
+      sampleItems: matchedCandidates.slice(0, 3).map((c) => c.title),
+      capabilities: buildCapabilitiesBreakdown({
+        mode: 'basic',
+        mediaTab: 'ANIME',
+        searchMatched: searchOk,
+        listingAvailable: false,
+        playbackOrPagesVerified: false,
+      }),
+    };
+  }
+
+  // Full capability test: Search -> Episode Listing -> Episode 1 Playable Stream
+  let listingAvailable = false;
+  let playbackVerified = false;
+  let streamError: string | null = null;
+  let resolvedPayload: ResolvedAnimeStreamPayload | null = null;
+
+  if (topCandidate) {
+    const slug = extractSlugFromGogoHref(topCandidate.href);
+    if (hostPlan.mode === 'hianime' || /-\d+(?:\?|$|\/)/.test(topCandidate.href)) {
+      const idMatch = topCandidate.href.match(/-(\d+)(?:\?|$|\/)/);
+      if (idMatch?.[1]) {
+        try {
+          const epListRes = await fetchText(
+            `${searchHostUsed}/ajax/v2/episode/list/${idMatch[1]}`,
+            {
+              Referer: `${searchHostUsed}${topCandidate.href}`,
+              'X-Requested-With': 'XMLHttpRequest',
+            },
+            6500,
+          );
+          if (epListRes.ok && /data-number=["']\d+["']/i.test(epListRes.text)) {
+            listingAvailable = true;
+          }
+        } catch {
+          // Checked by full stream attempt below
+        }
+      }
+    } else if (slug) {
+      const epUrls = await resolveEpisodePageUrls(
+        searchHostUsed,
+        slug,
+        1,
+        topCandidate.href,
+      ).catch(() => []);
+      if (epUrls.length > 0) {
+        listingAvailable = true;
+      }
+    }
+  }
+
+  try {
+    resolvedPayload = await resolveAnimeEpisodeStream({
+      mediaId: `diag-${params.sourceId}`,
+      titles: { english: query, romaji: query },
+      format: 'TV',
+      episodeNumber: 1,
+      category: 'sub',
+      audioLanguage: 'ja',
+      sourceId: params.sourceId,
+      sourceName: params.sourceName,
+      sourceBaseUrl: params.sourceBaseUrl,
+      sourceLang: params.sourceLang,
+      bypassCache: true,
+    });
+    if (resolvedPayload?.url) {
+      playbackVerified = true;
+      listingAvailable = true;
+    }
+  } catch (err) {
+    streamError = err instanceof Error ? err.message : String(err);
+  }
+
+  const searchOk = Boolean(topCandidate) || playbackVerified;
+  const overall = resolveDiagnosticOverallStatus({
+    mode: 'full',
+    searchMatched: searchOk,
+    listingAvailable,
+    playbackOrPagesVerified: playbackVerified,
+    errorOccurred: !playbackVerified && !listingAvailable && !searchOk,
+  });
+
+  return {
+    sourceId: params.sourceId,
+    sourceName: sourceLabel,
+    status: overall,
+    durationMs: Date.now() - startedAt,
+    summary:
+      overall === 'pass' && resolvedPayload
+        ? `Playable stream verified (${resolvedPayload.quality} · ${resolvedPayload.matchedTitle})`
+        : listingAvailable
+          ? `Found "${topCandidate?.title || query}", but video stream failed to resolve`
+          : searchOk
+            ? `Search matched "${topCandidate?.title || query}", but episode/stream extraction failed`
+            : `No matching anime or playable stream found on ${sourceLabel}`,
+    detail:
+      overall === 'pass' && resolvedPayload
+        ? `Resolved Ep 1 via ${resolvedPayload.serverName} (${resolvedPayload.mirrors.length} mirror${resolvedPayload.mirrors.length === 1 ? '' : 's'}).`
+        : streamError || `Tested host ${searchHostUsed} with query "${query}".`,
+    matchedTitle: resolvedPayload?.matchedTitle || topCandidate?.title,
+    sampleItems:
+      resolvedPayload?.mirrors.map((m, idx) => `Mirror ${idx + 1}: ${m.serverName} (${m.quality})`) ||
+      (topCandidate ? [topCandidate.title] : []),
+    capabilities: buildCapabilitiesBreakdown({
+      mode: 'full',
+      mediaTab: 'ANIME',
+      searchMatched: searchOk,
+      listingAvailable,
+      playbackOrPagesVerified: playbackVerified,
+    }),
+  };
 }

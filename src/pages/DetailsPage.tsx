@@ -81,6 +81,7 @@ import {
 } from '../utils/inlinePlayer';
 import {
   filterAvailableSources,
+  filterPlayableSourcesForPlayer,
   formatSourceAvailabilityLabel,
   getSourceManagerBadge,
   resolveActiveSourceId,
@@ -241,32 +242,43 @@ export const DetailsPage: React.FC = () => {
   const [selectedRangeId, setSelectedRangeId] = useState<string>('all');
   const [itemFilterMode, setItemFilterMode] = useState<'all' | 'downloaded' | 'bookmarked'>('all');
 
-  const isManga = media.type === 'MANGA' || media.type === 'NOVEL';
+  const isNovel =
+    media.type === 'NOVEL' ||
+    resolvedType === 'NOVEL' ||
+    String(media.format || '').toUpperCase() === 'NOVEL';
+  const isMangaOnly = !isNovel && media.type === 'MANGA';
+  const isReadingMedia = isMangaOnly || isNovel;
   const availableSources = useMemo(() => {
     const combined = [...INBUILT_SOURCES, ...state.customSources];
-    const typeMatched = combined.filter((s) => {
-      const types = Array.isArray(s.mediaTypes) && s.mediaTypes.length > 0 ? s.mediaTypes : ['ANIME'];
-      return isManga
-        ? types.includes('MANGA') || types.includes('NOVEL')
-        : types.includes('ANIME') || types.includes('MOVIE') || types.includes('TV');
-    });
+    const typeMatched = filterPlayableSourcesForPlayer(
+      combined.filter((s) => {
+        const types = Array.isArray(s.mediaTypes) && s.mediaTypes.length > 0 ? s.mediaTypes : ['ANIME'];
+        if (isNovel) return types.includes('NOVEL');
+        if (isMangaOnly) return types.includes('MANGA');
+        return types.includes('ANIME') || types.includes('MOVIE') || types.includes('TV');
+      }),
+      media.type,
+    );
     const activeMatched = typeMatched.filter((s) =>
       state.discoveryPrefs.activeSources.includes(s.id),
     );
     return activeMatched.length > 0 ? activeMatched : typeMatched;
-  }, [isManga, state.customSources, state.discoveryPrefs.activeSources]);
+  }, [isNovel, isMangaOnly, media.type, state.customSources, state.discoveryPrefs.activeSources]);
 
-  const preferredSourceIdForType = isManga
-    ? state.discoveryPrefs.preferredMangaSourceId
-    : state.discoveryPrefs.preferredAnimeSourceId;
+  const preferredSourceIdForType = isNovel
+    ? undefined
+    : isMangaOnly
+      ? state.discoveryPrefs.preferredMangaSourceId
+      : state.discoveryPrefs.preferredAnimeSourceId;
   const selectedSourceId = useMemo(
     () =>
       resolveActiveSourceId({
         availableSources,
         preferredSourceId: preferredSourceIdForType,
-        isManga,
+        isManga: isMangaOnly,
+        mediaType: media.type,
       }),
-    [availableSources, preferredSourceIdForType, isManga],
+    [availableSources, preferredSourceIdForType, isMangaOnly, media.type],
   );
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [sourcePickerQuery, setSourcePickerQuery] = useState('');
@@ -384,7 +396,15 @@ export const DetailsPage: React.FC = () => {
     }
     fetchMediaDetails(id, resolvedType, initialMedia?.providerId)
       .then((full) => {
-        const merged = { ...initialMedia, ...full };
+        const merged: UnifiedMedia = {
+          ...initialMedia,
+          ...full,
+          type:
+            resolvedType === 'NOVEL' ||
+            String(full.format || '').toUpperCase() === 'NOVEL'
+              ? 'NOVEL'
+              : full.type,
+        };
         setMedia(merged);
       })
       .catch(() => {
@@ -394,7 +414,7 @@ export const DetailsPage: React.FC = () => {
   }, [id, resolvedType]);
 
   useEffect(() => {
-    if (!id || isManga || loadingDetails || !media.id) return;
+    if (!id || isReadingMedia || loadingDetails || !media.id) return;
     let cancelled = false;
     setResolvingEpisodes(true);
     const sourceMeta = availableSources.find((s) => s.id === selectedSourceId);
@@ -427,7 +447,7 @@ export const DetailsPage: React.FC = () => {
     };
   }, [
     id,
-    isManga,
+    isReadingMedia,
     loadingDetails,
     media.id,
     media.idMal,
@@ -440,7 +460,14 @@ export const DetailsPage: React.FC = () => {
   ]);
 
   useEffect(() => {
-    if (!id || !isManga || loadingDetails || !media.id) return;
+    if (!id || !isMangaOnly || loadingDetails || !media.id) {
+      if (isNovel) {
+        setChapters([]);
+        setResolvingChapters(false);
+        setChaptersError(null);
+      }
+      return;
+    }
     let cancelled = false;
     setResolvingChapters(true);
     setChaptersError(null);
@@ -474,7 +501,8 @@ export const DetailsPage: React.FC = () => {
     };
   }, [
     id,
-    isManga,
+    isMangaOnly,
+    isNovel,
     loadingDetails,
     media.id,
     media.title?.english,
@@ -501,7 +529,11 @@ export const DetailsPage: React.FC = () => {
 
     const timer = window.setTimeout(async () => {
       try {
-        const targetSearchType: MediaType = isManga ? 'MANGA' : 'ANIME';
+        const targetSearchType: MediaType = isNovel
+          ? 'NOVEL'
+          : isMangaOnly
+            ? 'MANGA'
+            : 'ANIME';
         let items: UnifiedMedia[] = [];
         try {
           const al = await searchAniList({
@@ -534,7 +566,7 @@ export const DetailsPage: React.FC = () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [wrongTitleOpen, wrongTitleDraft, isManga]);
+  }, [wrongTitleOpen, wrongTitleDraft, isNovel, isMangaOnly]);
 
   useEffect(() => {
     if (!sourcePickerOpen && !wrongTitleOpen && !trailerOpen && !audioPickerOpen) return;
@@ -568,7 +600,7 @@ export const DetailsPage: React.FC = () => {
   );
 
   useEffect(() => {
-    if (isManga) return;
+    if (isReadingMedia) return;
     if (!resolvedWatchStream || resolvedWatchStream.sourceId !== selectedSourceId) return;
     if (!Array.isArray(resolvedWatchStream.availableAudios) || resolvedWatchStream.availableAudios.length === 0) {
       return;
@@ -580,7 +612,7 @@ export const DetailsPage: React.FC = () => {
       updatePlayerPrefs({ audioLanguage: selectableAudioOptions[0].code });
     }
   }, [
-    isManga,
+    isReadingMedia,
     resolvedWatchStream,
     selectedSourceId,
     selectableAudioOptions,
@@ -591,19 +623,27 @@ export const DetailsPage: React.FC = () => {
     () => filterAvailableSources(availableSources, sourcePickerQuery),
     [availableSources, sourcePickerQuery],
   );
-  const isResolvingItems = isManga ? resolvingChapters : resolvingEpisodes;
+  const isResolvingItems = isMangaOnly
+    ? resolvingChapters
+    : isNovel
+      ? false
+      : resolvingEpisodes;
   const sourceAvailabilityLabel = formatSourceAvailabilityLabel({
     mediaType: media.type,
     resolving: isResolvingItems,
-    resolvedCount: isManga ? chapters.length : episodes.length,
-    expectedCount: isManga ? media.chapters : matchedOverrideMedia?.episodes ?? media.episodes,
+    resolvedCount: isMangaOnly ? chapters.length : isNovel ? 0 : episodes.length,
+    expectedCount: isReadingMedia
+      ? media.chapters
+      : matchedOverrideMedia?.episodes ?? media.episodes,
     status: matchedOverrideMedia?.status ?? media.status,
     hasOverride: Boolean(matchedTitleOverride.trim()),
   });
   const comments = state.comments[media.id] || [];
-  const totalCount = isManga
+  const totalCount = isMangaOnly
     ? chapters.length || media.chapters || 0
-    : episodes.length || media.episodes || 0;
+    : isNovel
+      ? media.chapters || 0
+      : episodes.length || media.episodes || 0;
   const currentProgress = libEntry?.progress ?? 0;
   const progressPercent =
     totalCount > 0 ? Math.min(100, Math.round((currentProgress / totalCount) * 100)) : 0;
@@ -660,7 +700,7 @@ export const DetailsPage: React.FC = () => {
     [media.relations],
   );
 
-  const rawItemsCount = isManga ? chapters.length : episodes.length;
+  const rawItemsCount = isNovel ? 0 : isMangaOnly ? chapters.length : episodes.length;
   const rangeChunkSize = rawItemsCount > 300 ? 50 : rawItemsCount > 100 ? 25 : 12;
   const episodeRanges = useMemo(
     () => buildEpisodeRanges(rawItemsCount, rangeChunkSize),
@@ -694,7 +734,8 @@ export const DetailsPage: React.FC = () => {
   }, [chapters, activeRange, epOrderAsc, itemFilterMode, downloadedNumbers, bookmarkedSet, epFilter]);
 
   const resumeIndex = useMemo(() => {
-    if (isManga) {
+    if (isNovel) return 0;
+    if (isMangaOnly) {
       if (chapters.length === 0) return 0;
       const targetNum = historyEntry?.chapterNumber ?? (currentProgress > 0 ? currentProgress + 1 : 1);
       const foundIdx = chapters.findIndex((c) => c.number === targetNum);
@@ -704,9 +745,9 @@ export const DetailsPage: React.FC = () => {
     const targetNum = historyEntry?.episodeNumber ?? (currentProgress > 0 ? currentProgress + 1 : 1);
     const foundIdx = episodes.findIndex((e) => e.number === targetNum);
     return foundIdx >= 0 ? foundIdx : 0;
-  }, [isManga, chapters, episodes, historyEntry, currentProgress]);
+  }, [isNovel, isMangaOnly, chapters, episodes, historyEntry, currentProgress]);
 
-  const resumeItem = isManga ? chapters[resumeIndex] : episodes[resumeIndex];
+  const resumeItem = isNovel ? undefined : isMangaOnly ? chapters[resumeIndex] : episodes[resumeIndex];
   const hasStarted = Boolean(historyEntry) || currentProgress > 0;
   const activeInlineEpisodeIndex = hasPickedInlineEpisode ? inlineEpisodeIndex : resumeIndex;
   const activeInlineEpisode = episodes[activeInlineEpisodeIndex] ?? resumeItem;
@@ -725,19 +766,20 @@ export const DetailsPage: React.FC = () => {
   };
 
   const handleDownloadItem = (item: { id: string; number: number; title: string }) => {
+    if (isNovel) return;
     const existing = downloadTaskByNumber.get(item.number);
     if (existing && existing.status !== 'completed') {
       toggleDownloadPause(existing.id);
       return;
     }
 
-    const quality = isManga ? 'Chapter' : state.playerPrefs.defaultQuality;
+    const quality = isMangaOnly ? 'Chapter' : state.playerPrefs.defaultQuality;
     const taskId = enqueueDownload(media, item.number, item.title, quality);
     const safeTitle = (media.title.english || media.title.romaji || 'Media')
       .replace(/[^a-z0-9\-_]+/gi, '_')
       .slice(0, 40);
 
-    if (isManga) {
+    if (isMangaOnly) {
       const ch = chapters.find((c) => c.number === item.number) ?? {
         id: item.id,
         number: item.number,
@@ -849,7 +891,11 @@ export const DetailsPage: React.FC = () => {
   };
 
   const handleLaunchMedia = (indexOverride?: number) => {
-    if (isManga && chapters.length > 0) {
+    if (isNovel) {
+      switchTab('watch');
+      return;
+    }
+    if (isMangaOnly && chapters.length > 0) {
       const idx = typeof indexOverride === 'number' ? indexOverride : resumeIndex;
       navigate('/reader', {
         state: {
@@ -865,7 +911,7 @@ export const DetailsPage: React.FC = () => {
       });
       return;
     }
-    if (!isManga && episodes.length > 0) {
+    if (!isReadingMedia && episodes.length > 0) {
       const idx =
         typeof indexOverride === 'number' ? indexOverride : activeInlineEpisodeIndex;
       setHasPickedInlineEpisode(true);
@@ -1009,7 +1055,7 @@ export const DetailsPage: React.FC = () => {
 
         {/* Hero Lockup (or Inline Player when Watch tab is open for Anime) */}
         <div ref={heroRef}>
-          {activeTab === 'watch' && !isManga ? (
+          {activeTab === 'watch' && !isReadingMedia ? (
             <InlineAnimePlayer
               media={media}
               episodes={episodes}
@@ -1131,14 +1177,14 @@ export const DetailsPage: React.FC = () => {
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <span className="w-7 h-7 rounded-full bg-[var(--sx-on-surface)]/8 dark:bg-white/10 flex items-center justify-center">
-                    {isManga ? (
+                    {isReadingMedia ? (
                       <BookOpen className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
                     ) : (
                       <Play className="w-3.5 h-3.5 text-[var(--sx-primary)] fill-current" />
                     )}
                   </span>
                   <h2 className="text-sm font-extrabold">
-                    {isManga ? 'Reading Progress' : 'Watching Progress'}
+                    {isReadingMedia ? 'Reading Progress' : 'Watching Progress'}
                   </h2>
                 </div>
 
@@ -1279,7 +1325,7 @@ export const DetailsPage: React.FC = () => {
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
                     <div>
                       <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                        {isManga ? 'Chapters' : 'Episodes'}
+                        {isReadingMedia ? 'Chapters' : 'Episodes'}
                       </p>
                       <p className="text-sm font-extrabold tabular-nums mt-0.5">
                         {totalCount > 0 ? totalCount : '—'}
@@ -1287,10 +1333,10 @@ export const DetailsPage: React.FC = () => {
                     </div>
                     <div>
                       <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                        {isManga ? 'Volumes' : 'Duration'}
+                        {isReadingMedia ? 'Volumes' : 'Duration'}
                       </p>
                       <p className="text-sm font-extrabold tabular-nums mt-0.5">
-                        {isManga
+                        {isReadingMedia
                           ? media.volumes || '—'
                           : media.duration
                             ? `${media.duration}m`
@@ -1299,7 +1345,7 @@ export const DetailsPage: React.FC = () => {
                     </div>
                     <div>
                       <p className="text-[11px] font-bold text-[var(--sx-on-surface-muted)]">
-                        {isManga ? 'Release' : 'Season'}
+                        {isReadingMedia ? 'Release' : 'Season'}
                       </p>
                       <p className="text-sm font-extrabold mt-0.5">
                         {media.season && media.year
@@ -1547,10 +1593,16 @@ export const DetailsPage: React.FC = () => {
                     </span>
                     <div>
                       <p className="text-xs font-extrabold">
-                        {isManga ? 'Chapter List & Sources' : 'Episode List & Sources'}
+                        {isNovel
+                          ? 'Novel Reader Status & Sources'
+                          : isMangaOnly
+                            ? 'Chapter List & Sources'
+                            : 'Episode List & Sources'}
                       </p>
                       <p className="text-[11px] text-[var(--sx-on-surface-muted)]">
-                        {rawItemsCount} available · Switch source or inspect ranges
+                        {isNovel
+                          ? 'Text novel reader not supported yet'
+                          : `${rawItemsCount} available · Switch source or inspect ranges`}
                       </p>
                     </div>
                   </div>
@@ -1709,7 +1761,7 @@ export const DetailsPage: React.FC = () => {
               <ScrollReveal index={12}>
                 <section className="space-y-2.5">
                 <h2 className="text-sm sm:text-base font-extrabold tracking-tight px-1">
-                  Recommended {isManga ? 'Manga' : 'Anime'}
+                  Recommended {isNovel ? 'Light Novels' : isMangaOnly ? 'Manga' : 'Anime'}
                 </h2>
                 <div className="flex gap-3.5 overflow-x-auto no-scrollbar sx-carousel-scroll pb-2">
                   {media.recommendations.map((rec, idx) => (
@@ -1738,7 +1790,7 @@ export const DetailsPage: React.FC = () => {
             className={`${tabTransitionClass} space-y-4`}
           >
             {/* Audio Language Selector Card (Compact, Directly Above Anime Source) */}
-            {!isManga && (
+            {!isReadingMedia && (
               <section
                 data-testid="details-audio-language-card"
                 className={`${frostedCardClass} px-3 py-2 space-y-2`}
@@ -1857,7 +1909,7 @@ export const DetailsPage: React.FC = () => {
                       </span>
                     )}
                     <span className="w-4 h-4 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] absolute -bottom-1 -right-1 flex items-center justify-center shadow-sm">
-                      {isManga ? (
+                      {isReadingMedia ? (
                         <BookOpen className="w-2.5 h-2.5" />
                       ) : (
                         <Play className="w-2.5 h-2.5 fill-current ml-0.5" />
@@ -1867,7 +1919,7 @@ export const DetailsPage: React.FC = () => {
 
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="text-xs sm:text-sm font-extrabold truncate group-hover:text-[var(--sx-primary)] transition-colors">
-                      {activeSource?.name || 'ShizuTv Core'}
+                      {activeSource?.name || (isNovel ? 'No Playable Novel Source' : 'ShizuTv Core')}
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/14 text-[var(--sx-primary)] text-[10px] font-extrabold">
@@ -1886,7 +1938,7 @@ export const DetailsPage: React.FC = () => {
                 </button>
 
                 <div className="flex items-center gap-1 shrink-0">
-                  {!isManga && (
+                  {!isReadingMedia && (
                     <button
                       type="button"
                       data-testid="diagnose-episodes-btn"
@@ -1919,19 +1971,21 @@ export const DetailsPage: React.FC = () => {
                     <Settings className="w-3.5 h-3.5" />
                   </button>
 
-                  <button
-                    type="button"
-                    data-testid="refresh-episodes-btn"
-                    disabled={isResolvingItems}
-                    onClick={() => setEpisodeRefreshNonce((n) => n + 1)}
-                    title={isManga ? 'Refresh chapter list' : 'Refresh episode list'}
-                    aria-label={isManga ? 'Refresh chapter list' : 'Refresh episode list'}
-                    className="w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors disabled:opacity-50"
-                  >
-                    <RefreshCw
-                      className={`w-3.5 h-3.5 ${isResolvingItems ? 'animate-spin' : ''}`}
-                    />
-                  </button>
+                  {!isNovel && (
+                    <button
+                      type="button"
+                      data-testid="refresh-episodes-btn"
+                      disabled={isResolvingItems}
+                      onClick={() => setEpisodeRefreshNonce((n) => n + 1)}
+                      title={isMangaOnly ? 'Refresh chapter list' : 'Refresh episode list'}
+                      aria-label={isMangaOnly ? 'Refresh chapter list' : 'Refresh episode list'}
+                      className="w-8 h-8 rounded-full inline-flex items-center justify-center bg-[var(--sx-on-surface)]/7 dark:bg-white/10 backdrop-blur-md border border-white/35 dark:border-white/12 hover:border-[var(--sx-primary)] transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${isResolvingItems ? 'animate-spin' : ''}`}
+                      />
+                    </button>
+                  )}
 
                   <button
                     type="button"
@@ -1978,8 +2032,33 @@ export const DetailsPage: React.FC = () => {
               </div>
             </section>
 
-            {/* Filter & Episode Tools Row */}
-            {(() => {
+            {/* Filter & Episode Tools Row (or explicit Unsupported panel for Light Novels) */}
+            {isNovel ? (
+              <section
+                data-testid="novel-unsupported-card"
+                className={`${frostedCardClass} p-7 text-center space-y-3`}
+              >
+                <BookOpen className="w-8 h-8 text-amber-400 mx-auto" />
+                <div className="space-y-1.5">
+                  <p className="text-sm font-extrabold">
+                    Text-Based Novel Reading Not Supported Yet
+                  </p>
+                  <p className="text-xs text-[var(--sx-on-surface-muted)] max-w-md mx-auto leading-relaxed">
+                    Light Novel sources and titles are separated from Manga image readers. Manga image bridges (including MangaDex) will not be loaded as a fallback here.
+                  </p>
+                </div>
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/settings/extensions')}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--sx-on-surface)]/10 dark:bg-white/10 border border-white/30 dark:border-white/15 text-xs font-extrabold hover:border-[var(--sx-primary)] transition-colors"
+                  >
+                    <Settings className="w-3.5 h-3.5 text-[var(--sx-primary)]" />
+                    <span>Manage Extensions</span>
+                  </button>
+                </div>
+              </section>
+            ) : (() => {
               const activeEpStyle = resolveEpisodeChapterStyle(
                 state.uiPrefs.episodeChapterStyle,
               );
@@ -1998,7 +2077,7 @@ export const DetailsPage: React.FC = () => {
               };
               const StyleIcon = styleIconMap[activeEpStyle];
 
-              const listItems = isManga
+              const listItems = isMangaOnly
                 ? filteredChapters.map((ch) => {
                     const isCurrent = currentProgress + 1 === ch.number;
                     return {
@@ -2047,7 +2126,7 @@ export const DetailsPage: React.FC = () => {
                   {/* Sticky Search + Controls Toolbar while scrolling Episodes / Chapters */}
                   <div
                     data-testid="episode-sticky-toolbar"
-                    className="sticky top-0 z-30 pt-2.5 pb-2 -mx-2 px-2 space-y-2.5 bg-gradient-to-b from-[var(--sx-surface)]/95 via-[var(--sx-surface)]/90 to-transparent backdrop-blur-xl rounded-b-2xl"
+                    className="sticky top-0 z-30 pt-1.5 pb-1 space-y-2.5 bg-transparent"
                   >
                     {/* Episode Search Input */}
                     <div className="relative">
@@ -2057,15 +2136,15 @@ export const DetailsPage: React.FC = () => {
                         data-testid="details-episode-search-input"
                         value={epFilter}
                         onChange={(e) => setEpFilter(e.target.value)}
-                        placeholder={isManga ? 'Search chapters...' : 'Search episodes...'}
-                        className="w-full pl-10 pr-3 py-2.5 rounded-full bg-[var(--sx-surface-container)]/92 dark:bg-[var(--sx-surface-container)]/90 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/5 shadow-md text-xs font-semibold focus:outline-none focus:border-[var(--sx-primary)]"
+                        placeholder={isMangaOnly ? 'Search chapters...' : 'Search episodes...'}
+                        className="w-full pl-10 pr-3 py-2.5 rounded-full bg-white/24 dark:bg-white/[0.08] backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/8 shadow-[0_8px_28px_rgba(15,23,42,0.08)] text-xs font-semibold focus:outline-none focus:border-[var(--sx-primary)] transition-colors"
                       />
                     </div>
 
                     {/* Episode / Chapter Filter, Style, Sort & Range Card */}
                     <div
                       data-testid="episode-controls-card"
-                      className="rounded-[var(--sx-radius)] bg-[var(--sx-surface-container)]/92 dark:bg-[var(--sx-surface-container)]/90 backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 shadow-[0_12px_34px_rgba(15,23,42,0.16)] ring-1 ring-inset ring-white/25 dark:ring-white/5 p-2.5 sm:p-3 space-y-2.5"
+                      className="rounded-[var(--sx-radius)] bg-white/24 dark:bg-white/[0.08] backdrop-blur-2xl backdrop-saturate-150 border border-white/45 dark:border-white/15 ring-1 ring-inset ring-white/25 dark:ring-white/8 shadow-[0_10px_32px_rgba(15,23,42,0.10)] p-2.5 sm:p-3 space-y-2.5"
                     >
                       {/* Top Row: Online / Downloaded / Bookmarked + Ep Style & Sort By actions */}
                       <div className="flex items-center justify-between gap-2">
@@ -2088,7 +2167,7 @@ export const DetailsPage: React.FC = () => {
                               className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums leading-none ${
                                 itemFilterMode === 'all'
                                   ? 'bg-[var(--sx-primary)]/18 text-[var(--sx-primary)]'
-                                  : 'bg-[var(--sx-surface-container)]/85 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
+                                  : 'bg-[var(--sx-on-surface)]/10 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
                               }`}
                             >
                               {rawItemsCount}
@@ -2107,7 +2186,7 @@ export const DetailsPage: React.FC = () => {
                             className={`inline-flex items-center justify-center w-8 h-8 rounded-full border transition-colors shrink-0 ${
                               itemFilterMode === 'downloaded'
                                 ? 'bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 border-[var(--sx-primary)]/35 text-[var(--sx-primary)] shadow-sm'
-                                : 'bg-[var(--sx-surface-high)]/65 dark:bg-white/6 border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
+                                : 'bg-[var(--sx-on-surface)]/7 dark:bg-white/6 border-white/35 dark:border-white/12 text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
                             }`}
                           >
                             <Download className="w-3.5 h-3.5 shrink-0" />
@@ -2125,7 +2204,7 @@ export const DetailsPage: React.FC = () => {
                             className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full border text-xs font-extrabold transition-colors shrink-0 ${
                               itemFilterMode === 'bookmarked'
                                 ? 'bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 border-[var(--sx-primary)]/35 text-[var(--sx-primary)] shadow-sm'
-                                : 'bg-[var(--sx-surface-high)]/65 dark:bg-white/6 border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
+                                : 'bg-[var(--sx-on-surface)]/7 dark:bg-white/6 border-white/35 dark:border-white/12 text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
                             }`}
                           >
                             <Bookmark
@@ -2152,7 +2231,7 @@ export const DetailsPage: React.FC = () => {
                             }
                             aria-label={`Layout style: ${styleDef.name}`}
                             title={`Switch layout (current: ${styleDef.name})`}
-                            className="inline-flex items-center justify-center gap-1.5 w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-full bg-[var(--sx-surface-high)]/75 dark:bg-white/8 border border-[var(--sx-outline)] text-xs font-extrabold text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors whitespace-nowrap"
+                            className="inline-flex items-center justify-center gap-1.5 w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/8 border border-white/35 dark:border-white/12 text-xs font-extrabold text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors whitespace-nowrap"
                           >
                             <StyleIcon className="w-3.5 h-3.5 text-[var(--sx-primary)] shrink-0" />
                             <span className="hidden sm:inline">{styleDef.name}</span>
@@ -2164,7 +2243,7 @@ export const DetailsPage: React.FC = () => {
                             onClick={() => setEpOrderAsc((v) => !v)}
                             aria-label={`Sort order: ${epOrderAsc ? 'Ascending' : 'Descending'}`}
                             title={`Sort order: ${epOrderAsc ? 'Asc' : 'Desc'}`}
-                            className="inline-flex items-center justify-center gap-1.5 w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-full bg-[var(--sx-surface-high)]/75 dark:bg-white/8 border border-[var(--sx-outline)] text-xs font-extrabold text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors whitespace-nowrap"
+                            className="inline-flex items-center justify-center gap-1.5 w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-full bg-[var(--sx-on-surface)]/7 dark:bg-white/8 border border-white/35 dark:border-white/12 text-xs font-extrabold text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)] transition-colors whitespace-nowrap"
                           >
                             <ArrowDownUp className="w-3.5 h-3.5 text-[var(--sx-primary)] shrink-0" />
                             <span className="hidden sm:inline">{epOrderAsc ? 'Asc' : 'Desc'}</span>
@@ -2185,7 +2264,7 @@ export const DetailsPage: React.FC = () => {
                             className={`inline-flex items-center gap-2 px-3 py-1.5 text-xs font-extrabold whitespace-nowrap border transition-colors tabular-nums shrink-0 ${
                               selectedRangeId === 'all'
                                 ? 'rounded-full bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 border-[var(--sx-primary)]/35 text-[var(--sx-primary)] shadow-sm'
-                                : 'rounded-xl bg-[var(--sx-surface-high)]/65 dark:bg-white/6 border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
+                                : 'rounded-xl bg-[var(--sx-on-surface)]/7 dark:bg-white/6 border-white/35 dark:border-white/12 text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
                             }`}
                           >
                             <span>All</span>
@@ -2193,7 +2272,7 @@ export const DetailsPage: React.FC = () => {
                               className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums leading-none ${
                                 selectedRangeId === 'all'
                                   ? 'bg-[var(--sx-primary)]/18 text-[var(--sx-primary)]'
-                                  : 'bg-[var(--sx-surface-container)]/85 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
+                                  : 'bg-[var(--sx-on-surface)]/10 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
                               }`}
                             >
                               {rawItemsCount}
@@ -2211,7 +2290,7 @@ export const DetailsPage: React.FC = () => {
                                 className={`inline-flex items-center gap-2 px-3 py-1.5 text-xs font-extrabold whitespace-nowrap border transition-colors tabular-nums shrink-0 ${
                                   isSelected
                                     ? 'rounded-full bg-[var(--sx-primary)]/16 dark:bg-[var(--sx-primary)]/22 border-[var(--sx-primary)]/35 text-[var(--sx-primary)] shadow-sm'
-                                    : 'rounded-xl bg-[var(--sx-surface-high)]/65 dark:bg-white/6 border-[var(--sx-outline)] text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
+                                    : 'rounded-xl bg-[var(--sx-on-surface)]/7 dark:bg-white/6 border-white/35 dark:border-white/12 text-[var(--sx-on-surface)] hover:border-[var(--sx-primary)]/45'
                                 }`}
                               >
                                 <span>{range.label}</span>
@@ -2219,7 +2298,7 @@ export const DetailsPage: React.FC = () => {
                                   className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums leading-none ${
                                     isSelected
                                       ? 'bg-[var(--sx-primary)]/18 text-[var(--sx-primary)]'
-                                      : 'bg-[var(--sx-surface-container)]/85 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
+                                      : 'bg-[var(--sx-on-surface)]/10 dark:bg-white/10 text-[var(--sx-on-surface-muted)]'
                                   }`}
                                 >
                                   {rangeCount}
@@ -2234,7 +2313,7 @@ export const DetailsPage: React.FC = () => {
 
                   {(loadingDetails || isResolvingItems) && rawItemsCount === 0 ? (
                     <EpisodeListSkeleton style={activeEpStyle} />
-                  ) : isManga && chaptersError && rawItemsCount === 0 ? (
+                  ) : isMangaOnly && chaptersError && rawItemsCount === 0 ? (
                     <div
                       data-testid="manga-chapters-error"
                       className={`${frostedCardClass} p-7 text-center space-y-3`}
@@ -2270,23 +2349,23 @@ export const DetailsPage: React.FC = () => {
                   ) : listItems.length === 0 ? (
                     <div className={`${frostedCardClass} p-8 text-center space-y-2`}>
                       <p className="text-sm font-bold">
-                        No {isManga ? 'chapters' : 'episodes'} match your filter
+                        No {isMangaOnly ? 'chapters' : 'episodes'} match your filter
                       </p>
                       <p className="text-xs text-[var(--sx-on-surface-muted)]">
                         {itemFilterMode === 'bookmarked'
-                          ? `Bookmark favorite ${isManga ? 'chapters' : 'episodes'} in Classic style to see them here.`
+                          ? `Bookmark favorite ${isMangaOnly ? 'chapters' : 'episodes'} in Classic style to see them here.`
                           : 'Try clearing the search box or switching range to All.'}
                       </p>
                     </div>
                   ) : (
                     <EpisodeChapterList
                       items={listItems}
-                      unitLabel={isManga ? 'CHAPTER' : 'EPISODE'}
+                      unitLabel={isMangaOnly ? 'CHAPTER' : 'EPISODE'}
                       style={activeEpStyle}
-                      isManga={isManga}
+                      isManga={isMangaOnly}
                       translucent
                       onSelectItem={(item) => {
-                        if (isManga) {
+                        if (isMangaOnly) {
                           const realIndex = chapters.findIndex((c) => c.id === item.id);
                           handleLaunchMedia(realIndex >= 0 ? realIndex : 0);
                         } else {
@@ -2556,7 +2635,7 @@ export const DetailsPage: React.FC = () => {
               <p className="text-[10px] sm:text-[11px] font-semibold text-[var(--sx-on-surface-muted)] truncate">
                 {[
                   media.format || media.type,
-                  totalCount > 0 ? `${totalCount} ${isManga ? 'ch' : 'eps'}` : null,
+                  totalCount > 0 ? `${totalCount} ${isReadingMedia ? 'ch' : 'eps'}` : null,
                   typeof media.score === 'number' && media.score > 0
                     ? `★ ${media.score.toFixed(1)}`
                     : null,
@@ -2618,7 +2697,7 @@ export const DetailsPage: React.FC = () => {
       />
 
       {/* Floating Start / Continue Reading Dock on Watch Tab for Manga */}
-      {activeTab === 'watch' && isManga && resumeItem && (
+      {activeTab === 'watch' && isMangaOnly && resumeItem && (
         <div className="fixed bottom-[98px] left-1/2 -translate-x-1/2 z-30 w-[calc(100%-2rem)] max-w-md">
           <button
             type="button"
@@ -2628,27 +2707,15 @@ export const DetailsPage: React.FC = () => {
           >
             <div className="flex items-center gap-3 min-w-0">
               <span className="w-10 h-10 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] flex items-center justify-center shrink-0 shadow-md">
-                {isManga ? (
-                  <BookOpen className="w-4 h-4" />
-                ) : (
-                  <Play className="w-4 h-4 fill-current ml-0.5" />
-                )}
+                <BookOpen className="w-4 h-4" />
               </span>
               <div className="min-w-0 text-left">
                 <p className="text-[11px] font-extrabold uppercase tracking-wider text-[var(--sx-on-surface-muted)]">
-                  {hasStarted
-                    ? isManga
-                      ? 'Continue Reading'
-                      : 'Continue Watching'
-                    : isManga
-                      ? 'Start Reading'
-                      : 'Start Watching'}
+                  {hasStarted ? 'Continue Reading' : 'Start Reading'}
                 </p>
                 <p className="text-xs sm:text-sm font-extrabold truncate">
                   {(() => {
-                    const unit = isManga
-                      ? `Chapter ${resumeItem.number}`
-                      : `Episode ${resumeItem.number}`;
+                    const unit = `Chapter ${resumeItem.number}`;
                     return resumeItem.title.toLowerCase() === unit.toLowerCase()
                       ? unit
                       : `${unit} · ${resumeItem.title}`;
@@ -2688,8 +2755,8 @@ export const DetailsPage: React.FC = () => {
               { key: 'info', label: 'Info', Icon: Info },
               {
                 key: 'watch',
-                label: isManga ? 'Read' : 'Watch',
-                Icon: isManga ? BookOpen : Play,
+                label: isReadingMedia ? 'Read' : 'Watch',
+                Icon: isReadingMedia ? BookOpen : Play,
               },
               {
                 key: 'comments',
@@ -2713,7 +2780,7 @@ export const DetailsPage: React.FC = () => {
                 data-testid={`details-tab-${key}`}
                 onClick={() => {
                   switchTab(key);
-                  if (key === 'watch' && !isManga && typeof window !== 'undefined') {
+                  if (key === 'watch' && !isReadingMedia && typeof window !== 'undefined') {
                     window.scrollTo({ top: 0, behavior: 'smooth' });
                   }
                 }}
@@ -2802,7 +2869,7 @@ export const DetailsPage: React.FC = () => {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
                       <label className="text-xs font-bold text-[var(--sx-on-surface-muted)]">
-                        {isManga ? 'Chapters Read' : 'Episodes Watched'}
+                        {isReadingMedia ? 'Chapters Read' : 'Episodes Watched'}
                       </label>
                       <div className="flex items-center gap-1.5">
                         <button
@@ -2901,7 +2968,13 @@ export const DetailsPage: React.FC = () => {
               onClick={() => setSourcePickerOpen(false)}
               role="dialog"
               aria-modal="true"
-              aria-label={isManga ? 'Select Manga Source' : 'Select Anime Source'}
+              aria-label={
+                isNovel
+                  ? 'Select Novel Source'
+                  : isMangaOnly
+                    ? 'Select Manga Source'
+                    : 'Select Anime Source'
+              }
             >
               <div
                 onClick={(e) => e.stopPropagation()}
@@ -2913,7 +2986,11 @@ export const DetailsPage: React.FC = () => {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <Puzzle className="w-5 h-5 text-[var(--sx-primary)] shrink-0" />
                     <h2 className="text-base sm:text-lg font-extrabold truncate">
-                      {isManga ? 'Select Manga Source' : 'Select Anime Source'}
+                      {isNovel
+                        ? 'Select Novel Source'
+                        : isMangaOnly
+                          ? 'Select Manga Source'
+                          : 'Select Anime Source'}
                     </h2>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -2974,9 +3051,13 @@ export const DetailsPage: React.FC = () => {
                           data-testid={`source-picker-item-${src.id}`}
                           onClick={() => {
                             const isSwitching = src.id !== selectedSourceId;
-                            setPreferredSource(isManga ? 'MANGA' : 'ANIME', src.id);
+                            if (isMangaOnly) {
+                              setPreferredSource('MANGA', src.id);
+                            } else if (!isReadingMedia) {
+                              setPreferredSource('ANIME', src.id);
+                            }
                             setResolvedWatchStream(null);
-                            if (!isManga && isSwitching) {
+                            if (!isReadingMedia && isSwitching) {
                               const nextAudio = resolvePreferredAudioForSource({
                                 currentAudioLang: state.playerPrefs.audioLanguage,
                                 sourceLang: src.lang,
@@ -3009,7 +3090,7 @@ export const DetailsPage: React.FC = () => {
                                 </span>
                               )}
                               <span className="w-4 h-4 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] absolute -bottom-1 -right-1 flex items-center justify-center">
-                                {isManga ? (
+                                {isReadingMedia ? (
                                   <BookOpen className="w-2.5 h-2.5" />
                                 ) : (
                                   <Play className="w-2.5 h-2.5 fill-current ml-0.5" />

@@ -16,12 +16,20 @@ import {
   isSafeExternalHttpUrl,
   parseExtensionRepoManifest,
 } from './src/utils/extensionRepoParser.ts';
-import { resolveAnimeEpisodeStream } from './src/server/animeStreamResolver.ts';
 import {
+  diagnoseAnimeExtensionServer,
+  resolveAnimeEpisodeStream,
+} from './src/server/animeStreamResolver.ts';
+import {
+  diagnoseMangaExtensionServer,
   resolveMangaChapterPagesServer,
   resolveMangaChaptersServer,
 } from './src/server/mangaResolver.ts';
-import { rewriteM3u8Manifest } from './src/utils/streamResolverUtils.ts';
+import {
+  buildCapabilitiesBreakdown,
+  type ExtensionDiagnoseMode,
+} from './src/utils/extensionDiagnostics.ts';
+import { isMetadataOnlyCatalogHost, rewriteM3u8Manifest } from './src/utils/streamResolverUtils.ts';
 import type { ExtensionRepo, SourceInfo } from './src/types/media.ts';
 
 type WatchPartyTrack = 'H-Sub' | 'Dub';
@@ -1336,9 +1344,17 @@ async function startServer() {
   app.post('/api/manga/chapters', async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const rawTitles = (body.titles ?? {}) as Record<string, unknown>;
+    const mediaType = typeof body.mediaType === 'string' ? body.mediaType.trim().toUpperCase() : undefined;
+    if (mediaType === 'NOVEL') {
+      res.status(422).json({
+        message: 'Text-based Light Novel reading is not supported yet. Novel titles cannot use Manga image chapter sources.',
+      });
+      return;
+    }
     try {
       const resolved = await resolveMangaChaptersServer({
         mediaId: typeof body.mediaId === 'string' ? body.mediaId : 'unknown',
+        mediaType,
         titles: {
           overrideTitle:
             typeof rawTitles.overrideTitle === 'string' ? rawTitles.overrideTitle : null,
@@ -1371,11 +1387,19 @@ async function startServer() {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const rawTitles = (body.titles ?? {}) as Record<string, unknown>;
     const rawChapter = (body.chapter ?? {}) as Record<string, unknown>;
+    const mediaType = typeof body.mediaType === 'string' ? body.mediaType.trim().toUpperCase() : undefined;
+    if (mediaType === 'NOVEL') {
+      res.status(422).json({
+        message: 'Text-based Light Novel reading is not supported yet. Novel titles cannot use Manga image page sources.',
+      });
+      return;
+    }
     const chNumRaw = Number(rawChapter.number);
     const chNum = Number.isFinite(chNumRaw) && chNumRaw >= 0 ? chNumRaw : 1;
     try {
       const resolved = await resolveMangaChapterPagesServer({
         mediaId: typeof body.mediaId === 'string' ? body.mediaId : 'unknown',
+        mediaType,
         titles: {
           overrideTitle:
             typeof rawTitles.overrideTitle === 'string' ? rawTitles.overrideTitle : null,
@@ -1411,6 +1435,85 @@ async function startServer() {
           err instanceof Error
             ? err.message
             : 'Unable to load manga chapter pages from this source.',
+      });
+    }
+  });
+
+  app.post('/api/extensions/diagnose', async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sourceId = typeof body.sourceId === 'string' ? body.sourceId.trim() : '';
+    if (!sourceId) {
+      res.status(400).json({ message: 'sourceId is required.' });
+      return;
+    }
+
+    const sourceName = typeof body.sourceName === 'string' ? body.sourceName.trim() : sourceId;
+    const sourceBaseUrl =
+      typeof body.sourceBaseUrl === 'string' ? body.sourceBaseUrl.trim() : undefined;
+    const sourceLang = typeof body.sourceLang === 'string' ? body.sourceLang.trim() : undefined;
+    const sourcePkg = typeof body.sourcePkg === 'string' ? body.sourcePkg.trim() : undefined;
+    const mediaTypeRaw =
+      typeof body.mediaType === 'string' ? body.mediaType.trim().toUpperCase() : 'ANIME';
+    const mediaTab: 'ANIME' | 'MANGA' | 'NOVEL' =
+      mediaTypeRaw === 'MANGA' ? 'MANGA' : mediaTypeRaw === 'NOVEL' ? 'NOVEL' : 'ANIME';
+    const modeRaw = typeof body.mode === 'string' ? body.mode.trim().toLowerCase() : 'basic';
+    const mode: ExtensionDiagnoseMode =
+      modeRaw === 'ping' ? 'ping' : modeRaw === 'full' ? 'full' : 'basic';
+    const query = typeof body.query === 'string' && body.query.trim() ? body.query.trim() : 'Naruto';
+
+    if (mediaTab === 'NOVEL') {
+      const unsupportedReason =
+        'Text-based Light Novel reading is not supported in the web reader yet. Novel extensions are kept separate from Manga image sources.';
+      res.json({
+        sourceId,
+        sourceName,
+        status: 'unsupported',
+        durationMs: 1,
+        summary: 'Unsupported: Text Novel runtime not supported yet',
+        detail: unsupportedReason,
+        capabilities: buildCapabilitiesBreakdown({
+          mode,
+          mediaTab: 'NOVEL',
+          unsupportedReason,
+          isMetadataCatalogOnly: isMetadataOnlyCatalogHost(
+            sourceBaseUrl,
+            sourceName,
+            sourcePkg,
+            sourceId,
+          ),
+          searchMatched: false,
+          listingAvailable: false,
+          playbackOrPagesVerified: false,
+        }),
+      });
+      return;
+    }
+
+    try {
+      const report =
+        mediaTab === 'MANGA'
+          ? await diagnoseMangaExtensionServer({
+              sourceId,
+              sourceName,
+              sourceBaseUrl,
+              sourceLang,
+              sourcePkg,
+              mode,
+              query,
+            })
+          : await diagnoseAnimeExtensionServer({
+              sourceId,
+              sourceName,
+              sourceBaseUrl,
+              sourceLang,
+              sourcePkg,
+              mode,
+              query,
+            });
+      res.json(report);
+    } catch (err) {
+      res.status(500).json({
+        message: err instanceof Error ? err.message : 'Extension diagnostics execution failed.',
       });
     }
   });

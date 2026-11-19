@@ -55,6 +55,14 @@ import {
 } from '../data/themePresets';
 import { INBUILT_SOURCES } from '../services/sourceEngine';
 import { sortSourcesByOrder } from '../utils/extensionsManager';
+import {
+  APP_STATE_STORAGE_KEY,
+  LEGACY_STATE_STORAGE_KEY,
+  loadPersistedRepoCatalog,
+  persistStateAndCatalog,
+  PersistResult,
+  REPO_CATALOG_STORAGE_KEY,
+} from '../utils/extensionPersistence';
 import { fetchAniListViewer, saveAniListMediaEntry } from '../services/anilist';
 import {
   clearAniListServerCookieSession,
@@ -213,17 +221,15 @@ export const DEFAULT_HOME_SECTIONS: HomeSection[] = [
   },
 ];
 
-const STORAGE_KEY = 'shizutv_state_v2';
-const LEGACY_STORAGE_KEY = 'shonenx_state_v2';
+const STORAGE_KEY = APP_STATE_STORAGE_KEY;
+const LEGACY_STORAGE_KEY = LEGACY_STATE_STORAGE_KEY;
+
+let lastSyncPersistResult: PersistResult | null = null;
 
 function persistStateSync(next: PersistedState): PersistedState {
-  try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    }
-  } catch {
-    // Ignore storage quota errors
-  }
+  lastSyncPersistResult = persistStateAndCatalog(
+    next as unknown as Record<string, unknown> & { repoCatalog?: SourceInfo[] },
+  );
   return next;
 }
 
@@ -368,9 +374,7 @@ function loadInitialState(): PersistedState {
     const parsedCustomSources = Array.isArray(parsed.customSources)
       ? (parsed.customSources as SourceInfo[])
       : DEFAULT_STATE.customSources;
-    const parsedRepoCatalog = Array.isArray(parsed.repoCatalog)
-      ? (parsed.repoCatalog as SourceInfo[])
-      : DEFAULT_STATE.repoCatalog;
+    const parsedRepoCatalog = loadPersistedRepoCatalog(parsed.repoCatalog);
     const parsedSourceOrder = Array.isArray(parsed.sourceOrder)
       ? (parsed.sourceOrder as string[])
       : DEFAULT_STATE.sourceOrder;
@@ -472,6 +476,8 @@ interface AppContextValue {
   logs: LogEntry[];
   addLog: (level: LogEntry['level'], scope: string, message: string) => void;
   clearLogs: () => void;
+  storageError: string | null;
+  clearStorageError: () => void;
 
   // Theme & UI
   updateThemePrefs: (patch: Partial<ThemePrefs>) => void;
@@ -592,15 +598,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const clearLogs = useCallback(() => setLogs([]), []);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const clearStorageError = useCallback(() => setStorageError(null), []);
+  const lastLoggedPersistErrRef = useRef<string | null>(null);
 
-  // Persist to localStorage
+  // Persist to localStorage cleanly (core state isolated from large repoCatalog + quota recovery)
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // Ignore storage quota errors
+    const result = persistStateAndCatalog(
+      state as unknown as Record<string, unknown> & { repoCatalog?: SourceInfo[] },
+    );
+    lastSyncPersistResult = result;
+    if (!result.ok && result.error) {
+      setStorageError(result.error);
+      if (lastLoggedPersistErrRef.current !== result.error) {
+        lastLoggedPersistErrRef.current = result.error;
+        addLog('ERROR', 'Storage', result.error);
+      }
+    } else {
+      lastLoggedPersistErrRef.current = null;
+      setStorageError((prev) => (prev ? null : prev));
     }
-  }, [state]);
+  }, [state, addLog]);
 
   // Restore AniList session from server HTTP-only cookie if local token is absent, or refresh viewer profile
   useEffect(() => {
@@ -1191,10 +1209,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const setSourceOrder = useCallback((order: string[]) => {
-    setState((prev) => ({
-      ...prev,
-      sourceOrder: order,
-    }));
+    setState((prev) =>
+      persistStateSync({
+        ...prev,
+        sourceOrder: order,
+      }),
+    );
   }, []);
 
   const installCatalogExtension = useCallback(
@@ -1209,12 +1229,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const nextActive = prev.discoveryPrefs.activeSources.includes(source.id)
           ? prev.discoveryPrefs.activeSources
           : [...prev.discoveryPrefs.activeSources, source.id];
-        return {
+        return persistStateSync({
           ...prev,
           customSources: nextCustom,
           discoveryPrefs: { ...prev.discoveryPrefs, activeSources: nextActive },
-        };
+        });
       });
+      if (lastSyncPersistResult && !lastSyncPersistResult.ok && lastSyncPersistResult.error) {
+        setStorageError(lastSyncPersistResult.error);
+      }
       addLog('INFO', 'Extensions', `Installed extension "${source.name}" (${source.lang.toUpperCase()})`);
     },
     [addLog],
@@ -1223,19 +1246,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const installAllCatalogExtensions = useCallback(
     (sources: SourceInfo[]): number => {
       if (sources.length === 0) return 0;
-      let installedCount = 0;
+      const existingIdsNow = new Set([
+        ...INBUILT_SOURCES.map((s) => s.id),
+        ...state.customSources.map((s) => s.id),
+      ]);
+      const expectedCount = sources.filter((s) => !existingIdsNow.has(s.id)).length;
       setState((prev) => {
         const existingIds = new Set([
           ...INBUILT_SOURCES.map((s) => s.id),
           ...prev.customSources.map((s) => s.id),
         ]);
         const newItems = sources.filter((s) => !existingIds.has(s.id));
-        installedCount = newItems.length;
         const allowNsfw = prev.contentPrefs.adultContentMode !== 'safe';
         const autoEnable = newItems
           .filter((s) => allowNsfw || !s.isNsfw)
           .map((s) => s.id);
-        return {
+        return persistStateSync({
           ...prev,
           customSources: [...prev.customSources, ...newItems],
           discoveryPrefs: {
@@ -1244,12 +1270,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               new Set([...prev.discoveryPrefs.activeSources, ...autoEnable]),
             ),
           },
-        };
+        });
       });
-      addLog('INFO', 'Extensions', `Batch installed ${sources.length} catalog extensions`);
-      return installedCount || sources.length;
+      if (lastSyncPersistResult && !lastSyncPersistResult.ok && lastSyncPersistResult.error) {
+        setStorageError(lastSyncPersistResult.error);
+      }
+      addLog('INFO', 'Extensions', `Batch installed ${expectedCount} catalog extensions`);
+      return expectedCount;
     },
-    [addLog],
+    [addLog, state.customSources],
   );
 
   const uninstallExtension = useCallback(
@@ -1347,7 +1376,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : manager;
 
       const importedSources = payload.sources;
-      const allowNsfw = state.contentPrefs.adultContentMode !== 'safe';
       const shouldAutoInstall = options?.autoInstall === true;
       const newRepo: ExtensionRepo = {
         id: `repo-${Date.now()}`,
@@ -1358,7 +1386,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addedAt: new Date().toISOString(),
       };
 
+      const persistBox: { current: PersistResult | null } = { current: null };
       setState((prev) => {
+        const allowNsfw = prev.contentPrefs.adultContentMode !== 'safe';
         const existingRepo = prev.repos.find((r) => r.url === cleanUrl);
         const upsertedRepo: ExtensionRepo = existingRepo
           ? {
@@ -1395,7 +1425,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           nextActiveSources = Array.from(new Set([...nextActiveSources, ...autoEnabledIds]));
         }
 
-        return {
+        const nextState: PersistedState = {
           ...prev,
           repos: existingRepo
             ? prev.repos.map((r) => (r.url === cleanUrl ? upsertedRepo : r))
@@ -1407,7 +1437,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             activeSources: nextActiveSources,
           },
         };
+        persistStateSync(nextState);
+        persistBox.current = lastSyncPersistResult;
+        return nextState;
       });
+
+      const persistOutcome = persistBox.current;
+      if (persistOutcome && !persistOutcome.ok && persistOutcome.error) {
+        setStorageError(persistOutcome.error);
+        addLog('ERROR', 'Storage', persistOutcome.error);
+        if (!persistOutcome.compactedCatalog) {
+          throw new Error(persistOutcome.error);
+        }
+      }
 
       addLog(
         'INFO',
@@ -1416,7 +1458,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       return { repo: newRepo, addedCount: importedSources.length };
     },
-    [addLog, state.contentPrefs.adultContentMode],
+    [addLog],
   );
 
   const refreshExtensionRepo = useCallback(
@@ -1560,7 +1602,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const resetAllData = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+      localStorage.removeItem(REPO_CATALOG_STORAGE_KEY);
+    } catch {
+      // Ignore storage removal errors
+    }
+    setStorageError(null);
     setState(DEFAULT_STATE);
     addLog('WARN', 'System', 'Reset all preferences and local library');
   }, [addLog]);
@@ -1580,6 +1629,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     logs,
     addLog,
     clearLogs,
+    storageError,
+    clearStorageError,
     updateThemePrefs,
     applyPreset,
     updateUiPrefs,

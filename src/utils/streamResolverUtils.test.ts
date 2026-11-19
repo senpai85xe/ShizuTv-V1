@@ -371,6 +371,11 @@ test('isViableTitleMatch rejects unrelated schoolgirl movie on The God of War an
 
   assert.equal(isMetadataOnlyCatalogHost('https://anidb.net', 'AniDB'), true);
   assert.equal(isMetadataOnlyCatalogHost('https://myanimelist.net/anime', 'MAL'), true);
+  assert.equal(isMetadataOnlyCatalogHost('', 'AniList', 'eu.kanade.tachiyomi.extension.all.anilist'), true);
+  assert.equal(isMetadataOnlyCatalogHost('https://kitsu.app', 'Kitsu'), true);
+  assert.equal(isMetadataOnlyCatalogHost('https://www.novelupdates.com', 'NovelUpdates'), true);
+  assert.equal(isMetadataOnlyCatalogHost('https://shikimori.one', 'Shikimori'), true);
+  assert.equal(isMetadataOnlyCatalogHost('https://vndb.org', 'VNDB'), true);
   assert.equal(isMetadataOnlyCatalogHost('https://animexin.dev', 'AnimeXin'), false);
 });
 

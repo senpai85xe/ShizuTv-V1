@@ -64,7 +64,11 @@ import {
   shouldAutoStartPlayback,
   SubtitleCue,
 } from '../utils/inlinePlayer';
-import { resolveActiveSourceId } from '../utils/sourcePicker';
+import {
+  filterPlayableSourcesForPlayer,
+  isMetadataOnlySource,
+  resolveActiveSourceId,
+} from '../utils/sourcePicker';
 import {
   computeSwipeSeekTarget,
   computeSwipeVerticalLevel,
@@ -130,11 +134,14 @@ export const PlayerPage: React.FC = () => {
 
   const availableAnimeSources = useMemo(() => {
     const combined = [...INBUILT_SOURCES, ...state.customSources];
-    const typeMatched = combined.filter(
-      (s) =>
-        s.mediaTypes.includes('ANIME') ||
-        s.mediaTypes.includes('MOVIE') ||
-        s.mediaTypes.includes('TV'),
+    const typeMatched = filterPlayableSourcesForPlayer(
+      combined.filter(
+        (s) =>
+          s.mediaTypes.includes('ANIME') ||
+          s.mediaTypes.includes('MOVIE') ||
+          s.mediaTypes.includes('TV'),
+      ),
+      'ANIME',
     );
     const activeMatched = typeMatched.filter((s) =>
       state.discoveryPrefs.activeSources.includes(s.id),
@@ -142,16 +149,27 @@ export const PlayerPage: React.FC = () => {
     return activeMatched.length > 0 ? activeMatched : typeMatched;
   }, [state.customSources, state.discoveryPrefs.activeSources]);
 
-  const activeSourceId = useMemo(
-    () =>
-      routeState.sourceId ||
+  const activeSourceId = useMemo(() => {
+    const routeMeta = routeState.sourceId
+      ? [...INBUILT_SOURCES, ...state.customSources].find((s) => s.id === routeState.sourceId)
+      : undefined;
+    const validRouteId =
+      routeState.sourceId && !isMetadataOnlySource(routeMeta) ? routeState.sourceId : undefined;
+    return (
+      validRouteId ||
       resolveActiveSourceId({
         availableSources: availableAnimeSources,
         preferredSourceId: state.discoveryPrefs.preferredAnimeSourceId,
         isManga: false,
-      }),
-    [routeState.sourceId, availableAnimeSources, state.discoveryPrefs.preferredAnimeSourceId],
-  );
+        mediaType: 'ANIME',
+      })
+    );
+  }, [
+    routeState.sourceId,
+    state.customSources,
+    availableAnimeSources,
+    state.discoveryPrefs.preferredAnimeSourceId,
+  ]);
   const activeSourceMeta = useMemo(
     () => availableAnimeSources.find((s) => s.id === activeSourceId),
     [availableAnimeSources, activeSourceId],

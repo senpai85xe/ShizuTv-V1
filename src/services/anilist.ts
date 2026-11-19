@@ -80,7 +80,12 @@ async function gqlRequest<T>(
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function mapAniListMedia(m: any): UnifiedMedia {
-  const mediaType: MediaType = m.type === 'MANGA' ? 'MANGA' : 'ANIME';
+  const mediaType: MediaType =
+    m.type === 'MANGA'
+      ? String(m.format || '').toUpperCase() === 'NOVEL'
+        ? 'NOVEL'
+        : 'MANGA'
+      : 'ANIME';
   const airingAt = m.nextAiringEpisode?.airingAt
     ? new Date(m.nextAiringEpisode.airingAt * 1000).toISOString()
     : null;
