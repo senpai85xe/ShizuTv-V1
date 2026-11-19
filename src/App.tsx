@@ -21,6 +21,7 @@ import { ContinueHistoryPage } from './pages/ContinueHistoryPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { EpisodeDiagnosticsPage } from './pages/EpisodeDiagnosticsPage';
 import { ExtensionsPage } from './pages/ExtensionsPage';
+import { BackendSettingsPage } from './pages/BackendSettingsPage';
 import {
   AboutSettingsPage,
   BackupSettingsPage,
@@ -105,6 +106,7 @@ export const App: React.FC = () => {
                   <Route path="/settings/discord" element={<DiscordSettingsPage />} />
                   <Route path="/settings/logs" element={<LogsSettingsPage />} />
                   <Route path="/settings/diagnostics" element={<EpisodeDiagnosticsPage />} />
+                  <Route path="/settings/backend" element={<BackendSettingsPage />} />
                   <Route path="/settings/about" element={<AboutSettingsPage />} />
                 </Route>
 

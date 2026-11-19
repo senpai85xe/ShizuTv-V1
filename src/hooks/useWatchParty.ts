@@ -149,7 +149,19 @@ export function useWatchParty({
       clearReconnectTimer();
       setStatus(desiredRoomRef.current ? 'reconnecting' : 'connecting');
 
-      const ws = new WebSocket(buildWatchPartyWsUrl());
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(buildWatchPartyWsUrl());
+      } catch (err) {
+        pendingConnectActionRef.current = null;
+        setStatus('disconnected');
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Watch Party server URL is not configured.',
+        );
+        return;
+      }
       wsRef.current = ws;
 
       ws.onopen = () => {

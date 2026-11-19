@@ -75,9 +75,11 @@ export function buildAniListAuthorizeUrl(params: {
 export function isTrustedOAuthMessageOrigin(
   origin: string,
   currentOrigin?: string | null,
+  extraTrustedOrigin?: string | null,
 ): boolean {
   if (typeof origin !== 'string' || !origin.trim()) return false;
   if (currentOrigin && origin === currentOrigin) return true;
+  if (extraTrustedOrigin && origin === extraTrustedOrigin) return true;
   try {
     const parsed = new URL(origin);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {

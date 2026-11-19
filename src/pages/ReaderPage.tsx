@@ -22,6 +22,7 @@ import {
 import { filterPlayableSourcesForPlayer } from '../utils/sourcePicker';
 import { formatMediaDocumentTitle } from '../utils/documentTitle';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { tryResolveApiUrl } from '../utils/backendConfig';
 
 interface ReaderLocationState {
   media?: UnifiedMedia;
@@ -178,7 +179,10 @@ export const ReaderPage: React.FC = () => {
     })
       .then((res) => {
         if (cancelled) return;
-        setPages(res.pages);
+        const resolvedPages = res.pages.map((p) =>
+          p.startsWith('/api/') ? tryResolveApiUrl(p) || p : p,
+        );
+        setPages(resolvedPages);
         recordHistory({
           mediaId: media.id,
           mediaType: media.type,

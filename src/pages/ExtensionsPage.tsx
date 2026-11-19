@@ -207,6 +207,8 @@ export const ExtensionsPage: React.FC = () => {
 
   const switchView = (nextView: ExtensionsSubView) => {
     if (nextView === view) return;
+    setRepoError(null);
+    setRepoNotice(null);
     setViewAnimClass(nextView === 'main' ? 'sx-page-pop-enter' : 'sx-page-push-enter');
     setView(nextView);
   };
@@ -1033,6 +1035,8 @@ export const ExtensionsPage: React.FC = () => {
           options={REPO_MANAGERS}
           value={repoManagerTab}
           onChange={(mgr) => {
+            setRepoError(null);
+            setRepoNotice(null);
             setRepoManagerTab(mgr);
             setRepoManagerInput(mgr);
           }}
@@ -1043,7 +1047,11 @@ export const ExtensionsPage: React.FC = () => {
           ariaLabel="Repository Media Type"
           options={REPO_MEDIA_OPTIONS}
           value={repoMediaTab}
-          onChange={(next) => setRepoMediaTab(next)}
+          onChange={(next) => {
+            setRepoError(null);
+            setRepoNotice(null);
+            setRepoMediaTab(next);
+          }}
         />
 
         {repoNotice && (
@@ -1441,6 +1449,8 @@ export const ExtensionsPage: React.FC = () => {
         options={MEDIA_TAB_OPTIONS}
         value={mediaTab}
         onChange={(next) => {
+          setRepoError(null);
+          setRepoNotice(null);
           setMediaTab(next);
           setLangFilter('all');
         }}
@@ -1452,6 +1462,8 @@ export const ExtensionsPage: React.FC = () => {
         options={SUBTAB_OPTIONS}
         value={subTab}
         onChange={(next) => {
+          setRepoError(null);
+          setRepoNotice(null);
           setSubTab(next);
           setLangFilter('all');
         }}
@@ -1835,6 +1847,24 @@ export const ExtensionsPage: React.FC = () => {
           className="sx-mode-enter space-y-4"
           data-testid="extensions-available-list"
         >
+          {repoError && (
+            <div
+              data-testid="extensions-available-repo-error"
+              role="alert"
+              className="sx-mode-enter px-3.5 py-2.5 rounded-2xl bg-red-500/14 backdrop-blur-xl border border-red-500/28 text-xs font-bold text-red-700 dark:text-red-300 flex items-center justify-between gap-3"
+            >
+              <span>{repoError}</span>
+              <button
+                type="button"
+                onClick={() => setRepoError(null)}
+                aria-label="Dismiss repository error"
+                className="w-6 h-6 rounded-full flex items-center justify-center hover:bg-red-500/20 shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {groupedAvailable.length === 0 ? (
             <div className={`p-7 rounded-2xl ${EXT_FROSTED_SURFACE} text-center space-y-3`}>
               <div className="w-11 h-11 rounded-2xl bg-[var(--sx-primary)]/14 border border-[var(--sx-primary)]/25 text-[var(--sx-primary)] flex items-center justify-center mx-auto">

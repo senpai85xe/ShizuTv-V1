@@ -43,6 +43,12 @@ import type {
   ExtensionDiagnoseMode,
   ExtensionDiagnosticReport,
 } from '../utils/extensionDiagnostics';
+import {
+  parseJsonResponseSafely,
+  resolveApiUrl,
+  rewriteMangaPagesUrls,
+  rewriteVideoStreamUrls,
+} from '../utils/backendConfig';
 
 export { ExtensionCapabilityError };
 
@@ -574,7 +580,7 @@ async function resolveStreamViaApi(params: ResolveVideoStreamParams): Promise<Vi
         }
       : null;
 
-  const response = await fetch('/api/stream/resolve', {
+  const response = await fetch(resolveApiUrl('/api/stream/resolve'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
@@ -607,18 +613,14 @@ async function resolveStreamViaApi(params: ResolveVideoStreamParams): Promise<Vi
     let errMessage = `Failed to resolve episode stream (HTTP ${response.status}).`;
     let errCode: ExtensionCapabilityErrorCode | undefined;
     let errCapability: ExtensionCapabilityName | undefined;
-    try {
-      const errData = (await response.json()) as {
-        message?: string;
-        code?: ExtensionCapabilityErrorCode;
-        capability?: ExtensionCapabilityName;
-      };
-      if (errData?.message) errMessage = errData.message;
-      if (errData?.code) errCode = errData.code;
-      if (errData?.capability) errCapability = errData.capability;
-    } catch {
-      // Ignore JSON parse error
-    }
+    const errData = await parseJsonResponseSafely<{
+      message?: string;
+      code?: ExtensionCapabilityErrorCode;
+      capability?: ExtensionCapabilityName;
+    }>(response, 'stream resolution');
+    if (errData?.message) errMessage = errData.message;
+    if (errData?.code) errCode = errData.code;
+    if (errData?.capability) errCapability = errData.capability;
     if (errCode) {
       throw new ExtensionCapabilityError({
         code: errCode,
@@ -632,11 +634,14 @@ async function resolveStreamViaApi(params: ResolveVideoStreamParams): Promise<Vi
     throw new Error(errMessage);
   }
 
-  const data = (await response.json()) as VideoStream;
+  const data = await parseJsonResponseSafely<VideoStream>(
+    response,
+    'stream resolution',
+  );
   if (!data?.url) {
     throw new Error('Resolved stream payload did not include a playable URL.');
   }
-  return data;
+  return rewriteVideoStreamUrls(data);
 }
 
 /**
@@ -958,7 +963,7 @@ export class ServerBackedAnimeExtensionAdapter extends ExtensionAdapter {
     query: string,
     options?: ExtensionSearchOptions,
   ): Promise<ExtensionTitleSearchResponse> {
-    const response = await fetch('/api/extensions/search', {
+    const response = await fetch(resolveApiUrl('/api/extensions/search'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: options?.signal,
@@ -972,9 +977,9 @@ export class ServerBackedAnimeExtensionAdapter extends ExtensionAdapter {
       }),
     });
 
-    const payload = (await response.json().catch(() => null)) as
-      | (ExtensionTitleSearchResponse & { message?: string })
-      | null;
+    const payload = await parseJsonResponseSafely<
+      ExtensionTitleSearchResponse & { message?: string }
+    >(response, `extension search (${this.source.name})`);
 
     if (!response.ok && !payload) {
       throw new Error(`Failed to search ${this.source.name} (HTTP ${response.status}).`);
@@ -997,7 +1002,7 @@ export class ServerBackedAnimeExtensionAdapter extends ExtensionAdapter {
       selected.href &&
       selected.sourceId === this.source.id
     ) {
-      const response = await fetch('/api/extensions/episodes', {
+      const response = await fetch(resolveApiUrl('/api/extensions/episodes'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: input.signal,
@@ -1017,9 +1022,9 @@ export class ServerBackedAnimeExtensionAdapter extends ExtensionAdapter {
         }),
       });
 
-      const payload = (await response.json().catch(() => null)) as
-        | (ExtensionEpisodesResponse & { message?: string })
-        | null;
+      const payload = await parseJsonResponseSafely<
+        ExtensionEpisodesResponse & { message?: string }
+      >(response, `extension episodes (${this.source.name || this.source.id})`);
 
       if (!response.ok && !payload) {
         throw new Error(
@@ -1512,7 +1517,7 @@ export async function resolveMangaChaptersAsync(
   if (params.media.type === 'NOVEL') {
     throw new Error('Text-based Light Novel reading is not supported yet. Novel titles do not use Manga image sources.');
   }
-  const response = await fetch('/api/manga/chapters', {
+  const response = await fetch(resolveApiUrl('/api/manga/chapters'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: params.signal,
@@ -1536,20 +1541,19 @@ export async function resolveMangaChaptersAsync(
 
   if (!response.ok) {
     let errMessage = `Failed to load chapters (HTTP ${response.status}).`;
-    try {
-      const errData = (await response.json()) as { message?: string };
-      if (errData?.message) errMessage = errData.message;
-    } catch {
-      // Ignore JSON parse error
-    }
+    const errData = await parseJsonResponseSafely<{ message?: string }>(
+      response,
+      'manga chapters',
+    );
+    if (errData?.message) errMessage = errData.message;
     throw new Error(errMessage);
   }
 
-  const data = (await response.json()) as {
+  const data = await parseJsonResponseSafely<{
     chapters?: UnifiedChapter[];
     matchedTitle?: string;
     sourceLabel?: string;
-  };
+  }>(response, 'manga chapters');
   if (!Array.isArray(data?.chapters) || data.chapters.length === 0) {
     throw new Error('No chapters found on this manga source.');
   }
@@ -1578,7 +1582,7 @@ export async function resolveMangaChapterPagesAsync(
   if (params.media.type === 'NOVEL') {
     throw new Error('Text-based Light Novel reading is not supported yet. Novel titles do not use Manga image sources.');
   }
-  const response = await fetch('/api/manga/pages', {
+  const response = await fetch(resolveApiUrl('/api/manga/pages'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: params.signal,
@@ -1609,21 +1613,23 @@ export async function resolveMangaChapterPagesAsync(
 
   if (!response.ok) {
     let errMessage = `Failed to load chapter pages (HTTP ${response.status}).`;
-    try {
-      const errData = (await response.json()) as { message?: string };
-      if (errData?.message) errMessage = errData.message;
-    } catch {
-      // Ignore JSON parse error
-    }
+    const errData = await parseJsonResponseSafely<{ message?: string }>(
+      response,
+      'manga pages',
+    );
+    if (errData?.message) errMessage = errData.message;
     throw new Error(errMessage);
   }
 
-  const data = (await response.json()) as { pages?: string[]; sourceLabel?: string };
+  const data = await parseJsonResponseSafely<{ pages?: string[]; sourceLabel?: string }>(
+    response,
+    'manga pages',
+  );
   if (!Array.isArray(data?.pages) || data.pages.length === 0) {
     throw new Error('No readable pages returned for this chapter.');
   }
   return {
-    pages: data.pages,
+    pages: rewriteMangaPagesUrls(data.pages),
     sourceLabel: data.sourceLabel,
   };
 }
@@ -1692,7 +1698,7 @@ export async function diagnoseExtensionAsync(params: {
   }
 
   const exec = (async () => {
-    const response = await fetch('/api/extensions/diagnose', {
+    const response = await fetch(resolveApiUrl('/api/extensions/diagnose'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: params.signal,
@@ -1710,9 +1716,9 @@ export async function diagnoseExtensionAsync(params: {
       }),
     });
 
-    const payload = (await response.json().catch(() => null)) as
-      | (ExtensionDiagnosticReport & { message?: string })
-      | null;
+    const payload = await parseJsonResponseSafely<
+      ExtensionDiagnosticReport & { message?: string }
+    >(response, `extension diagnostics (${params.source.name})`);
     if (!response.ok || !payload?.capabilities) {
       throw new Error(payload?.message || `Diagnostics failed (HTTP ${response.status}).`);
     }

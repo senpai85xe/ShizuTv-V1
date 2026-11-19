@@ -37,6 +37,7 @@ import {
   computePipCornerPosition,
   snapPipCorner,
 } from '../utils/pipPlayer';
+import { tryResolveApiUrl } from '../utils/backendConfig';
 
 function getViewportDimensions() {
   if (typeof window === 'undefined') {
@@ -239,7 +240,10 @@ export const FloatingPipPlayer: React.FC = () => {
   ]);
 
   const activeMirror = stream?.mirrors?.[mirrorIndex] ?? null;
-  const activeStreamUrl = activeMirror?.url || stream?.url || '';
+  const rawStreamUrl = activeMirror?.url || stream?.url || '';
+  const activeStreamUrl = rawStreamUrl.startsWith('/api/')
+    ? tryResolveApiUrl(rawStreamUrl) || ''
+    : rawStreamUrl;
   const activeStreamIsHls = activeMirror ? activeMirror.isHls : Boolean(stream?.isHls);
 
   const scheduleHideHud = (currentlyPlaying: boolean) => {
@@ -347,7 +351,11 @@ export const FloatingPipPlayer: React.FC = () => {
   const pipActiveTrack =
     stream?.subtitles?.find((s) => s.lang === pipTrackLang) ??
     (pipTrackLang === 'en' ? stream?.subtitles?.[0] : undefined);
-  const pipTrackUrl = pipActiveTrack?.url;
+  const pipTrackUrl = pipActiveTrack?.url
+    ? pipActiveTrack.url.startsWith('/api/')
+      ? tryResolveApiUrl(pipActiveTrack.url) ?? undefined
+      : pipActiveTrack.url
+    : undefined;
   const pipTrackLangKey =
     currentEpisode && pipActiveTrack
       ? `${currentEpisode.id}:${pipActiveTrack.lang}`
@@ -360,7 +368,13 @@ export const FloatingPipPlayer: React.FC = () => {
 
     let cancelled = false;
     fetch(pipTrackUrl)
-      .then((res) => (res.ok ? res.text() : ''))
+      .then(async (res) => {
+        if (!res.ok) return '';
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('text/html')) return '';
+        const text = await res.text();
+        return /^<!doctype\s+html|^<html[\s>]/i.test(text.trimStart()) ? '' : text;
+      })
       .then((rawText) => {
         if (cancelled || !rawText.trim()) return;
         const parsed = parseSubtitleText(rawText);

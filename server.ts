@@ -17,6 +17,10 @@ import {
   parseExtensionRepoManifest,
 } from './src/utils/extensionRepoParser.ts';
 import {
+  buildApiCorsHeaders,
+  getAllowedCorsOrigins,
+} from './src/utils/corsConfig.ts';
+import {
   diagnoseAnimeExtensionServer,
   ExtensionCapabilityError,
   resolveAnimeEpisodeStream,
@@ -588,6 +592,36 @@ function detachFromCurrentRoom(ws: WebSocket) {
 async function startServer() {
   const app = express();
   app.use(express.json());
+
+  const allowedCorsOrigins = getAllowedCorsOrigins({
+    appUrl: process.env.APP_URL,
+    extraOrigins: process.env.CORS_ALLOWED_ORIGINS,
+    port: PORT,
+  });
+
+  app.use('/api', (req, res, next) => {
+    const corsHeaders = buildApiCorsHeaders(
+      typeof req.headers.origin === 'string' ? req.headers.origin : undefined,
+      allowedCorsOrigins,
+    );
+    for (const [header, value] of Object.entries(corsHeaders)) {
+      res.setHeader(header, value);
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
+  app.get('/api/health', (_req, res) => {
+    res.json({
+      ok: true,
+      service: 'shizutv-backend',
+      version: '2.1.8',
+      timestamp: new Date().toISOString(),
+    });
+  });
 
   const resolveServerRedirectUri = (queryOrigin?: string) => {
     if (queryOrigin) {
@@ -1760,7 +1794,9 @@ async function startServer() {
         contentType.includes('mpegurl') || pathnameLower.endsWith('.m3u8');
       const isVtt = contentType.includes('text/vtt') || pathnameLower.endsWith('.vtt');
 
-      res.setHeader('Access-Control-Allow-Origin', '*');
+      if (!res.getHeader('Access-Control-Allow-Origin')) {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
 
       if (!upstream.ok && upstream.status !== 206) {

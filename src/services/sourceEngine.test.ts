@@ -685,3 +685,144 @@ test('Batch 2 migrated client adapters route HiAnime, GogoClone, and WordPress A
     globalThis.fetch = originalFetch;
   }
 });
+
+test('Capacitor Android native calls route /api endpoints to runtime backend URL, rewrite proxy URLs, and surface clear errors', async () => {
+  const { BACKEND_URL_STORAGE_KEY, BackendNotConfiguredError, NonJsonResponseError } =
+    await import('../utils/backendConfig.ts');
+  const { diagnoseExtensionAsync, resolveMangaChapterPagesAsync } = await import('./sourceEngine.ts');
+
+  const originalWindow = (globalThis as { window?: unknown }).window;
+  const originalCapacitor = (globalThis as { Capacitor?: unknown }).Capacitor;
+  const originalFetch = globalThis.fetch;
+  const storageMap = new Map<string, string>();
+  const requestedUrls: string[] = [];
+
+  (globalThis as { window?: unknown }).window = {
+    location: { origin: 'https://localhost', protocol: 'https:', host: 'localhost' },
+    localStorage: {
+      getItem: (k: string) => storageMap.get(k) ?? null,
+      setItem: (k: string, v: string) => void storageMap.set(k, v),
+      removeItem: (k: string) => void storageMap.delete(k),
+    },
+    dispatchEvent: () => true,
+  };
+  (globalThis as { Capacitor?: unknown }).Capacitor = {
+    isNativePlatform: () => true,
+    getPlatform: () => 'android',
+    Plugins: {},
+  };
+
+  try {
+    // 1. Without backend configured on native Android -> explicit BackendNotConfiguredError before fetch
+    await assert.rejects(
+      () =>
+        resolveVideoStreamAsync({
+          media: sampleMedia,
+          episode: sampleEpisode,
+          server: sampleServer,
+          sourceId: 'shonenx-hls-inbuilt',
+        }),
+      BackendNotConfiguredError,
+    );
+
+    // 2. With runtime backend configured -> routes to configured origin & rewrites proxy URLs
+    storageMap.set(BACKEND_URL_STORAGE_KEY, 'https://api.android-test.example');
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      requestedUrls.push(url);
+
+      if (url === 'https://api.android-test.example/api/stream/resolve') {
+        return new Response(
+          JSON.stringify({
+            url: '/api/stream/proxy?url=abc',
+            quality: '1080p',
+            isHls: true,
+            serverName: 'HD-1 (Sub)',
+            sourceId: 'shonenx-hls-inbuilt',
+            mirrors: [
+              { name: 'Backup', url: '/api/stream/proxy?url=def', quality: '720p', isHls: true },
+            ],
+            subtitles: [{ url: '/api/stream/proxy?url=sub', lang: 'en', label: 'English' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url === 'https://api.android-test.example/api/manga/pages') {
+        return new Response(
+          JSON.stringify({
+            pages: ['/api/stream/proxy?url=p1', 'https://cdn.manga.example/p2.jpg'],
+            sourceLabel: 'MangaDex',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url === 'https://api.android-test.example/api/extensions/diagnose') {
+        return new Response('<!doctype html><html><body>Fallback HTML</body></html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        });
+      }
+      return new Response('Not Found', { status: 404 });
+    }) as typeof fetch;
+
+    const stream = await resolveVideoStreamAsync({
+      media: sampleMedia,
+      episode: sampleEpisode,
+      server: sampleServer,
+      sourceId: 'shonenx-hls-inbuilt',
+    });
+    assert.equal(stream.url, 'https://api.android-test.example/api/stream/proxy?url=abc');
+    assert.equal(stream.mirrors?.[0].url, 'https://api.android-test.example/api/stream/proxy?url=def');
+    assert.equal(stream.subtitles?.[0].url, 'https://api.android-test.example/api/stream/proxy?url=sub');
+
+    const mangaPages = await resolveMangaChapterPagesAsync({
+      media: { ...sampleMedia, type: 'MANGA' },
+      chapter: { id: 'ch-1', number: 1, title: 'Chapter 1' },
+      sourceId: 'mangadex',
+    });
+    assert.deepEqual(mangaPages.pages, [
+      'https://api.android-test.example/api/stream/proxy?url=p1',
+      'https://cdn.manga.example/p2.jpg',
+    ]);
+
+    // 3. HTML HTTP 200 response produces NonJsonResponseError instead of opaque "Diagnostics failed (HTTP 200)."
+    await assert.rejects(
+      () =>
+        diagnoseExtensionAsync({
+          source: {
+            id: 'shonenx-hls-inbuilt',
+            name: 'ShizuTv Stream (Inbuilt)',
+            type: 'inbuilt',
+            mediaTypes: ['ANIME'],
+            lang: 'en',
+            version: '2.1.5',
+          },
+          mediaType: 'ANIME',
+          mode: 'full',
+          query: 'Naruto',
+        }),
+      (err: unknown) =>
+        err instanceof NonJsonResponseError && /Received HTML instead of JSON/i.test(err.message),
+    );
+
+    assert.deepEqual(requestedUrls, [
+      'https://api.android-test.example/api/stream/resolve',
+      'https://api.android-test.example/api/manga/pages',
+      'https://api.android-test.example/api/extensions/diagnose',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWindow === undefined) {
+      delete (globalThis as { window?: unknown }).window;
+    } else {
+      (globalThis as { window?: unknown }).window = originalWindow;
+    }
+    if (originalCapacitor === undefined) {
+      delete (globalThis as { Capacitor?: unknown }).Capacitor;
+    } else {
+      (globalThis as { Capacitor?: unknown }).Capacitor = originalCapacitor;
+    }
+  }
+});
+

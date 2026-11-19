@@ -71,6 +71,10 @@ import {
   isAndroidNativeBridgeAvailable,
   removeStagedAniyomiExtension,
 } from '../native/aniyomiPlugin';
+import {
+  parseJsonResponseSafely,
+  resolveApiUrl,
+} from '../utils/backendConfig';
 import { fetchAniListViewer, saveAniListMediaEntry } from '../services/anilist';
 import {
   clearAniListServerCookieSession,
@@ -1391,7 +1395,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Please enter a repository manifest URL.');
       }
 
-      const response = await fetch('/api/extensions/fetch-repo', {
+      const response = await fetch(resolveApiUrl('/api/extensions/fetch-repo'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1401,12 +1405,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }),
       });
 
-      const payload = (await response.json().catch(() => ({}))) as {
+      const payload = await parseJsonResponseSafely<{
         repoName?: string;
         format?: string;
         sources?: SourceInfo[];
         message?: string;
-      };
+      }>(response, 'extension repository manifest');
 
       if (!response.ok || !Array.isArray(payload.sources) || payload.sources.length === 0) {
         throw new Error(payload.message || 'Failed to fetch extension repository manifest.');

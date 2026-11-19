@@ -40,6 +40,7 @@ import {
 import { INBUILT_SOURCES, resolveVideoServers, resolveVideoStreamAsync } from '../services/sourceEngine';
 import { fetchAniSkipIntervals, SkipInterval } from '../services/aniskip';
 import { clampSeekTarget, formatPlayerTime } from '../utils/detailsLayout';
+import { tryResolveApiUrl } from '../utils/backendConfig';
 import {
   AudioLanguageCode,
   AudioLanguageOption,
@@ -286,7 +287,10 @@ export const PlayerPage: React.FC = () => {
   ]);
 
   const activeMirror = stream?.mirrors?.[mirrorIndex] ?? null;
-  const activeStreamUrl = activeMirror?.url || stream?.url || '';
+  const rawStreamUrl = activeMirror?.url || stream?.url || '';
+  const activeStreamUrl = rawStreamUrl.startsWith('/api/')
+    ? tryResolveApiUrl(rawStreamUrl) || ''
+    : rawStreamUrl;
   const activeStreamIsHls = activeMirror ? activeMirror.isHls : Boolean(stream?.isHls);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1089,7 +1093,11 @@ export const PlayerPage: React.FC = () => {
   const activeTrack =
     stream?.subtitles?.find((s) => s.lang === activeSubLang) ??
     (activeSubLang === 'en' ? stream?.subtitles?.[0] : undefined);
-  const activeTrackUrl = activeTrack?.url;
+  const activeTrackUrl = activeTrack?.url
+    ? activeTrack.url.startsWith('/api/')
+      ? tryResolveApiUrl(activeTrack.url) ?? undefined
+      : activeTrack.url
+    : undefined;
   const activeTrackLangKey = activeTrack ? `${currentEpisode.id}:${activeTrack.lang}` : trackKey;
 
   useEffect(() => {
@@ -1099,7 +1107,13 @@ export const PlayerPage: React.FC = () => {
 
     let cancelled = false;
     fetch(activeTrackUrl)
-      .then((res) => (res.ok ? res.text() : ''))
+      .then(async (res) => {
+        if (!res.ok) return '';
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('text/html')) return '';
+        const text = await res.text();
+        return /^<!doctype\s+html|^<html[\s>]/i.test(text.trimStart()) ? '' : text;
+      })
       .then((rawText) => {
         if (cancelled || !rawText.trim()) return;
         const parsed = parseSubtitleText(rawText);

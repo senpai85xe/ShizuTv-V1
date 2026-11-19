@@ -1,4 +1,5 @@
 import { TrackerProfile } from '../types/media';
+import { resolveWsUrl } from './backendConfig';
 
 export type WatchPartyTrack = 'H-Sub' | 'Dub';
 
@@ -306,13 +307,7 @@ export function buildWatchPartyWsUrl(locationLike?: {
   protocol?: string;
   host?: string;
 }): string {
-  const loc =
-    locationLike ??
-    (typeof window !== 'undefined'
-      ? { protocol: window.location.protocol, host: window.location.host }
-      : { protocol: 'http:', host: '127.0.0.1:3000' });
-  const wsProto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProto}//${loc.host || '127.0.0.1:3000'}/ws/watch-party`;
+  return resolveWsUrl('/ws/watch-party', { locationLike });
 }
 
 export function buildWatchPartyInviteUrl(

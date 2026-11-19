@@ -11,6 +11,12 @@ import {
   resolveAniListRedirectUri,
   serializeAniListSession,
 } from '../utils/anilistOAuth';
+import {
+  getEffectiveBackendConfig,
+  parseJsonResponseSafely,
+  resolveApiUrl,
+  tryResolveApiUrl,
+} from '../utils/backendConfig';
 
 export interface AniListOAuthStatus {
   configured: boolean;
@@ -51,21 +57,23 @@ export async function resolveAniListInputToToken(
 ): Promise<{ accessToken: string; expiresIn: number | null }> {
   const codeMatch = extractAniListCodeFromInput(rawInput);
   if (codeMatch) {
-    const response = await fetch('/api/auth/anilist/exchange-code', {
+    const backendOrigin = getEffectiveBackendConfig().baseUrl;
+    const response = await fetch(resolveApiUrl('/api/auth/anilist/exchange-code'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
         code: codeMatch.code,
         redirectUri: codeMatch.redirectUri,
-        origin: typeof window !== 'undefined' ? window.location.origin : undefined,
+        origin:
+          backendOrigin || (typeof window !== 'undefined' ? window.location.origin : undefined),
       }),
     });
-    const payload = (await response.json().catch(() => ({}))) as {
+    const payload = await parseJsonResponseSafely<{
       accessToken?: string;
       expiresIn?: number | null;
       message?: string;
-    };
+    }>(response, 'AniList OAuth code exchange');
     if (!response.ok || !payload.accessToken) {
       throw new Error(
         payload.message || 'Could not exchange the authorization code from that URL.',
@@ -143,35 +151,40 @@ export function clearAniListSession(): void {
 }
 
 export function getExpectedAniListCallbackUrl(): string {
+  const backendOrigin = getEffectiveBackendConfig().baseUrl;
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : undefined;
-  return resolveAniListRedirectUri(undefined, currentOrigin);
+  return resolveAniListRedirectUri(backendOrigin, currentOrigin);
 }
 
 export async function fetchAniListOAuthStatus(): Promise<AniListOAuthStatus> {
-  const originParam =
-    typeof window !== 'undefined'
-      ? `?origin=${encodeURIComponent(window.location.origin)}`
-      : '';
-  const response = await fetch(`/api/auth/anilist/status${originParam}`, {
+  const backendOrigin = getEffectiveBackendConfig().baseUrl;
+  const requestOrigin =
+    backendOrigin || (typeof window !== 'undefined' ? window.location.origin : '');
+  const originParam = requestOrigin ? `?origin=${encodeURIComponent(requestOrigin)}` : '';
+  const response = await fetch(resolveApiUrl(`/api/auth/anilist/status${originParam}`), {
     credentials: 'include',
   });
+  const payload = await parseJsonResponseSafely<AniListOAuthStatus & { message?: string }>(
+    response,
+    'AniList OAuth status',
+  );
   if (!response.ok) {
-    throw new Error('Unable to inspect AniList OAuth configuration.');
+    throw new Error(payload.message || 'Unable to inspect AniList OAuth configuration.');
   }
-  return (await response.json()) as AniListOAuthStatus;
+  return payload;
 }
 
 export async function fetchAniListAuthorizeUrl(): Promise<AniListAuthUrlResponse> {
-  const originParam =
-    typeof window !== 'undefined'
-      ? `?origin=${encodeURIComponent(window.location.origin)}`
-      : '';
-  const response = await fetch(`/api/auth/anilist/url${originParam}`, {
+  const backendOrigin = getEffectiveBackendConfig().baseUrl;
+  const requestOrigin =
+    backendOrigin || (typeof window !== 'undefined' ? window.location.origin : '');
+  const originParam = requestOrigin ? `?origin=${encodeURIComponent(requestOrigin)}` : '';
+  const response = await fetch(resolveApiUrl(`/api/auth/anilist/url${originParam}`), {
     credentials: 'include',
   });
-  const payload = (await response.json().catch(() => ({}))) as Partial<AniListAuthUrlResponse> & {
-    message?: string;
-  };
+  const payload = await parseJsonResponseSafely<
+    Partial<AniListAuthUrlResponse> & { message?: string }
+  >(response, 'AniList OAuth authorize URL');
   if (payload.configured === false) {
     const redirectUri = payload.redirectUri || getExpectedAniListCallbackUrl();
     throw new AniListOAuthNotConfiguredError(
@@ -199,7 +212,9 @@ export async function persistAniListServerCookieSession(
   expiresIn?: number | null,
 ): Promise<void> {
   try {
-    await fetch('/api/auth/anilist/session', {
+    const endpoint = tryResolveApiUrl('/api/auth/anilist/session');
+    if (!endpoint) return;
+    await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -212,14 +227,16 @@ export async function persistAniListServerCookieSession(
 
 export async function restoreAniListSessionFromServer(): Promise<AniListOAuthSession | null> {
   try {
-    const response = await fetch('/api/auth/anilist/session', {
+    const endpoint = tryResolveApiUrl('/api/auth/anilist/session');
+    if (!endpoint) return null;
+    const response = await fetch(endpoint, {
       credentials: 'include',
     });
     if (!response.ok) return null;
-    const data = (await response.json()) as {
+    const data = await parseJsonResponseSafely<{
       accessToken?: string | null;
       expiresIn?: number | null;
-    };
+    }>(response, 'AniList session restore');
     if (!data.accessToken || typeof data.accessToken !== 'string') {
       return null;
     }
@@ -235,7 +252,9 @@ export async function restoreAniListSessionFromServer(): Promise<AniListOAuthSes
 export async function clearAniListServerCookieSession(): Promise<void> {
   clearAniListSession();
   try {
-    await fetch('/api/auth/anilist/logout', {
+    const endpoint = tryResolveApiUrl('/api/auth/anilist/logout');
+    if (!endpoint) return;
+    await fetch(endpoint, {
       method: 'POST',
       credentials: 'include',
     });
@@ -252,6 +271,7 @@ function waitForAniListPopupCallback(
   return new Promise((resolve, reject) => {
     let settled = false;
     const currentOrigin = window.location.origin;
+    const backendOrigin = getEffectiveBackendConfig().baseUrl;
 
     const cleanup = () => {
       window.removeEventListener('message', onMessage);
@@ -260,7 +280,7 @@ function waitForAniListPopupCallback(
     };
 
     const onMessage = (event: MessageEvent) => {
-      if (!isTrustedOAuthMessageOrigin(event.origin, currentOrigin)) {
+      if (!isTrustedOAuthMessageOrigin(event.origin, currentOrigin, backendOrigin)) {
         return;
       }
       const parsed = parseOAuthPopupMessage(event.data);

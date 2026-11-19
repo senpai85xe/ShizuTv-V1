@@ -32,6 +32,12 @@ import {
   CreateWatchRoomModal,
   CreateWatchRoomPayload,
 } from '../components/CreateWatchRoomModal';
+import {
+  BackendNotConfiguredError,
+  NonJsonResponseError,
+  parseJsonResponseSafely,
+  resolveApiUrl,
+} from '../utils/backendConfig';
 
 const watchGlassCardClass =
   'bg-white/32 dark:bg-white/[0.06] backdrop-blur-2xl backdrop-saturate-150 border border-white/50 dark:border-white/14 ring-1 ring-inset ring-white/25 dark:ring-white/8 shadow-[0_12px_32px_-12px_rgba(0,0,0,0.16)]';
@@ -68,13 +74,13 @@ export const WatchTogetherPage: React.FC = () => {
       setLoadingRooms(true);
     }
     try {
-      const res = await fetch('/api/watch-party/rooms');
+      const res = await fetch(resolveApiUrl('/api/watch-party/rooms'));
+      const data = await parseJsonResponseSafely<{
+        rooms?: WatchPartyRoom[];
+        allLiveRooms?: WatchPartyRoom[];
+        endedRooms?: WatchPartyEndedRoom[];
+      }>(res, 'watch party rooms');
       if (res.ok) {
-        const data = (await res.json()) as {
-          rooms?: WatchPartyRoom[];
-          allLiveRooms?: WatchPartyRoom[];
-          endedRooms?: WatchPartyEndedRoom[];
-        };
         if (Array.isArray(data.rooms)) {
           setPublicRooms(filterPublicRooms(data.rooms));
         }
@@ -208,21 +214,33 @@ export const WatchTogetherPage: React.FC = () => {
     setJoining(true);
     setJoinError(null);
     try {
-      const res = await fetch(`/api/watch-party/rooms/${encodeURIComponent(normalizedInputCode)}`);
+      const res = await fetch(
+        resolveApiUrl(`/api/watch-party/rooms/${encodeURIComponent(normalizedInputCode)}`),
+      );
+      const data = await parseJsonResponseSafely<{
+        exists?: boolean;
+        room?: WatchPartyRoom;
+        message?: string;
+      }>(res, 'watch party room lookup');
       if (!res.ok) {
-        setJoinError(`Room ${normalizedInputCode} was not found. Check the code and try again.`);
+        setJoinError(
+          data.message || `Room ${normalizedInputCode} was not found. Check the code and try again.`,
+        );
         setJoining(false);
         return;
       }
-      const data = (await res.json()) as { exists?: boolean; room?: WatchPartyRoom };
       if (!data.exists || !data.room) {
         setJoinError(`Room ${normalizedInputCode} was not found.`);
         setJoining(false);
         return;
       }
       navigateIntoRoom(normalizedInputCode, data.room);
-    } catch {
-      setJoinError('Unable to reach Watch Party server. Please try again.');
+    } catch (err) {
+      if (err instanceof BackendNotConfiguredError || err instanceof NonJsonResponseError) {
+        setJoinError(err.message);
+      } else {
+        setJoinError('Unable to reach Watch Party server. Please try again.');
+      }
       setJoining(false);
     }
   };

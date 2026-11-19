@@ -18,6 +18,7 @@ import {
   Sparkles,
   Tv,
   Activity,
+  Server,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { getNavBarStyleLabel } from '../utils/navBarStyles';
@@ -26,6 +27,10 @@ import { ScrollReveal } from '../components/ScrollReveal';
 import { PWAInstallButton } from '../components/PWAInstallButton';
 import { AniListAccountCard } from '../components/AniListLoginButton';
 import { getBoundedStaggerDelay } from '../utils/appMotion';
+import {
+  BACKEND_CONFIG_CHANGED_EVENT,
+  getEffectiveBackendConfig,
+} from '../utils/backendConfig';
 
 interface SettingItem {
   path: string;
@@ -38,6 +43,18 @@ interface SettingItem {
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
   const { state, allSources } = useApp();
+  const [backendVersion, setBackendVersion] = React.useState(0);
+
+  React.useEffect(() => {
+    const onChanged = () => setBackendVersion((v) => v + 1);
+    window.addEventListener(BACKEND_CONFIG_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(BACKEND_CONFIG_CHANGED_EVENT, onChanged);
+  }, []);
+
+  const backendConfig = React.useMemo(() => {
+    void backendVersion;
+    return getEffectiveBackendConfig();
+  }, [backendVersion]);
 
   const activePreset = BUILT_IN_PRESETS.find((p) => p.id === state.themePrefs.activePresetId);
   const activeScheme = EXCLUSIVE_SCHEMES.find((s) => s.id === state.themePrefs.exclusiveScheme);
@@ -110,6 +127,23 @@ export const SettingsPage: React.FC = () => {
           title: 'Extensions & Repositories',
           subtitle: `${state.discoveryPrefs.activeSources.length}/${allSources.length} sources active · ${state.repos.length} repos`,
           icon: Puzzle,
+        },
+        {
+          path: '/settings/backend',
+          title: 'Backend Server',
+          subtitle: backendConfig.baseUrl
+            ? `Routing API & sockets to ${backendConfig.baseUrl}`
+            : backendConfig.isNative
+              ? 'Not configured · Tap to enter your Express backend HTTPS URL'
+              : 'Same-origin (/api/*) · Optional Android/custom server override',
+          icon: Server,
+          badge: backendConfig.baseUrl
+            ? backendConfig.source === 'runtime'
+              ? 'Custom'
+              : 'Env'
+            : backendConfig.isNative
+              ? 'Action Needed'
+              : 'Web',
         },
         {
           path: '/settings/backup',

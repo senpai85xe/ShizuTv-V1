@@ -291,3 +291,46 @@ test('sanitizeRoomNameUpdate and formatWatchRoomMetaLine handle valid and empty 
   assert.equal(formatWatchRoomMetaLine({ format: '', year: null }), '');
 });
 
+test('buildWatchPartyWsUrl honors configured backend URL and rejects unconfigured Capacitor native', async () => {
+  const { BackendNotConfiguredError, setRuntimeBackendUrl, clearRuntimeBackendUrl } = await import(
+    './backendConfig.ts'
+  );
+  const originalWindow = (globalThis as { window?: unknown }).window;
+  const originalCapacitor = (globalThis as { Capacitor?: unknown }).Capacitor;
+  const storage = new Map<string, string>();
+
+  (globalThis as { window?: unknown }).window = {
+    location: { origin: 'https://localhost', protocol: 'https:', host: 'localhost' },
+    localStorage: {
+      getItem: (k: string) => storage.get(k) ?? null,
+      setItem: (k: string, v: string) => void storage.set(k, v),
+      removeItem: (k: string) => void storage.delete(k),
+    },
+    dispatchEvent: () => true,
+  };
+  (globalThis as { Capacitor?: unknown }).Capacitor = {
+    isNativePlatform: () => true,
+    getPlatform: () => 'android',
+    Plugins: {},
+  };
+
+  try {
+    assert.throws(() => buildWatchPartyWsUrl(), BackendNotConfiguredError);
+    setRuntimeBackendUrl('https://wp-backend.example');
+    assert.equal(buildWatchPartyWsUrl(), 'wss://wp-backend.example/ws/watch-party');
+    clearRuntimeBackendUrl();
+  } finally {
+    if (originalWindow === undefined) {
+      delete (globalThis as { window?: unknown }).window;
+    } else {
+      (globalThis as { window?: unknown }).window = originalWindow;
+    }
+    if (originalCapacitor === undefined) {
+      delete (globalThis as { Capacitor?: unknown }).Capacitor;
+    } else {
+      (globalThis as { Capacitor?: unknown }).Capacitor = originalCapacitor;
+    }
+  }
+});
+
+

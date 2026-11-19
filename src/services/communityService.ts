@@ -1,13 +1,19 @@
 import { CommunityCategory, CommunityLinkedAnime, CommunityPost } from '../utils/community';
 import { getOrCreateWatchPartyClientId } from '../utils/watchParty';
+import { parseJsonResponseSafely, resolveApiUrl } from '../utils/backendConfig';
 
 export async function fetchCommunityPosts(): Promise<CommunityPost[]> {
   const clientId = getOrCreateWatchPartyClientId();
-  const res = await fetch(`/api/community/posts?clientId=${encodeURIComponent(clientId)}`);
+  const res = await fetch(
+    resolveApiUrl(`/api/community/posts?clientId=${encodeURIComponent(clientId)}`),
+  );
+  const data = await parseJsonResponseSafely<{ posts?: CommunityPost[]; message?: string }>(
+    res,
+    'community posts',
+  );
   if (!res.ok) {
-    throw new Error('Failed to load community posts');
+    throw new Error(data.message || 'Failed to load community posts');
   }
-  const data = (await res.json()) as { posts?: CommunityPost[] };
   return Array.isArray(data.posts) ? data.posts : [];
 }
 
@@ -20,7 +26,7 @@ export async function createCommunityPost(input: {
   authorAvatar?: string;
 }): Promise<CommunityPost> {
   const clientId = getOrCreateWatchPartyClientId();
-  const res = await fetch('/api/community/posts', {
+  const res = await fetch(resolveApiUrl('/api/community/posts'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -28,7 +34,10 @@ export async function createCommunityPost(input: {
       clientId,
     }),
   });
-  const data = (await res.json()) as { post?: CommunityPost; message?: string };
+  const data = await parseJsonResponseSafely<{ post?: CommunityPost; message?: string }>(
+    res,
+    'publish community post',
+  );
   if (!res.ok || !data.post) {
     throw new Error(data.message || 'Could not publish post');
   }
@@ -37,12 +46,18 @@ export async function createCommunityPost(input: {
 
 export async function voteCommunityPost(postId: string, vote: -1 | 0 | 1): Promise<CommunityPost> {
   const clientId = getOrCreateWatchPartyClientId();
-  const res = await fetch(`/api/community/posts/${encodeURIComponent(postId)}/vote`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clientId, vote }),
-  });
-  const data = (await res.json()) as { post?: CommunityPost; message?: string };
+  const res = await fetch(
+    resolveApiUrl(`/api/community/posts/${encodeURIComponent(postId)}/vote`),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId, vote }),
+    },
+  );
+  const data = await parseJsonResponseSafely<{ post?: CommunityPost; message?: string }>(
+    res,
+    'community vote',
+  );
   if (!res.ok || !data.post) {
     throw new Error(data.message || 'Vote failed');
   }
@@ -52,13 +67,19 @@ export async function voteCommunityPost(postId: string, vote: -1 | 0 | 1): Promi
 export async function recordCommunityPostView(postId: string): Promise<CommunityPost | null> {
   try {
     const clientId = getOrCreateWatchPartyClientId();
-    const res = await fetch(`/api/community/posts/${encodeURIComponent(postId)}/view`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId }),
-    });
+    const res = await fetch(
+      resolveApiUrl(`/api/community/posts/${encodeURIComponent(postId)}/view`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId }),
+      },
+    );
     if (!res.ok) return null;
-    const data = (await res.json()) as { post?: CommunityPost };
+    const data = await parseJsonResponseSafely<{ post?: CommunityPost }>(
+      res,
+      'community post view',
+    );
     return data.post ?? null;
   } catch {
     return null;
@@ -72,17 +93,23 @@ export async function addCommunityComment(input: {
   authorAvatar?: string;
 }): Promise<CommunityPost> {
   const clientId = getOrCreateWatchPartyClientId();
-  const res = await fetch(`/api/community/posts/${encodeURIComponent(input.postId)}/comments`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      clientId,
-      body: input.body,
-      authorName: input.authorName,
-      authorAvatar: input.authorAvatar,
-    }),
-  });
-  const data = (await res.json()) as { post?: CommunityPost; message?: string };
+  const res = await fetch(
+    resolveApiUrl(`/api/community/posts/${encodeURIComponent(input.postId)}/comments`),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientId,
+        body: input.body,
+        authorName: input.authorName,
+        authorAvatar: input.authorAvatar,
+      }),
+    },
+  );
+  const data = await parseJsonResponseSafely<{ post?: CommunityPost; message?: string }>(
+    res,
+    'community comment',
+  );
   if (!res.ok || !data.post) {
     throw new Error(data.message || 'Could not post comment');
   }
@@ -92,10 +119,16 @@ export async function addCommunityComment(input: {
 export async function deleteCommunityPost(postId: string): Promise<void> {
   const clientId = getOrCreateWatchPartyClientId();
   const res = await fetch(
-    `/api/community/posts/${encodeURIComponent(postId)}?clientId=${encodeURIComponent(clientId)}`,
+    resolveApiUrl(
+      `/api/community/posts/${encodeURIComponent(postId)}?clientId=${encodeURIComponent(clientId)}`,
+    ),
     { method: 'DELETE' },
   );
   if (!res.ok) {
-    throw new Error('Could not delete post');
+    const data = await parseJsonResponseSafely<{ message?: string }>(
+      res,
+      'delete community post',
+    ).catch(() => ({ message: undefined }));
+    throw new Error(data.message || 'Could not delete post');
   }
 }
