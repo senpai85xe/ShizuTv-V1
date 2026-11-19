@@ -101,6 +101,18 @@ export interface UnifiedEpisode {
   isFiller?: boolean;
   durationSeconds?: number;
   externalUrl?: string | null;
+  sourceId?: string | null;
+  sourceEpisodeId?: string | null;
+  episodeUrl?: string | null;
+  sourceAnimeHref?: string | null;
+  sourceAnimeSlug?: string | null;
+}
+
+export interface ExtensionEpisodesResponse {
+  compatible: boolean;
+  reason?: string;
+  sourceLabel?: string;
+  episodes: UnifiedEpisode[];
 }
 
 export interface MediaStreamingEpisode {
@@ -274,6 +286,21 @@ export interface SourceInfo {
   iconUrl?: string;
   description?: string;
   isNsfw?: boolean;
+}
+
+export interface MatchedSourceEntry {
+  sourceId: string;
+  title: string;
+  href: string;
+  slug: string;
+  cover?: string | null;
+}
+
+export interface ExtensionTitleSearchResponse {
+  compatible: boolean;
+  reason?: string;
+  sourceLabel?: string;
+  items: MatchedSourceEntry[];
 }
 
 export interface ExtensionRepo {

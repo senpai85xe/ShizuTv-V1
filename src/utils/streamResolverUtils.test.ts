@@ -5,20 +5,32 @@ import {
   buildStreamProxyUrl,
   buildStreamResolverCacheKey,
   detectAvailableAudiosFromSources,
+  detectExtensionWebCompatibilityIssue,
   extractDirectVideoUrlFromHtmlOrScript,
+  extractGotakuTitleId,
   extractMegaPlayStreamUrl,
   HIANIME_BRIDGE_HOSTS,
   INBUILT_PRIMARY_HOSTS,
+  isGotakuHost,
+  isMatchedEpisodeValidForSource,
+  isMatchedSourceEntryValidForSource,
   isMetadataOnlyCatalogHost,
   isSourceInherentLanguage,
   isViableTitleMatch,
+  looksLikeClientSpaHtml,
   mapSubtitleTracksFromSources,
+  matchesExtensionSearchQuery,
   parseGenericEmbedCandidates,
   parseGenericEpisodeLinks,
   parseGenericSearchHtml,
+  parseGotakuTitleSearchJson,
+  parseSourceEpisodeListHtml,
+  rankExtensionSearchCandidates,
   resolveProviderHostPlan,
   rewriteM3u8Manifest,
   scoreGogoSearchCandidate,
+  shouldUseExtensionEpisodesForSelection,
+  shouldUseExtensionWrongTitleSearch,
   sortEmbedsForAudioLanguage,
   unpackDeanEdwardsPacker,
 } from './streamResolverUtils';
@@ -419,6 +431,304 @@ test('parseGenericSearchHtml survives nested divs and parseGenericEmbedCandidate
     'https://cdn.mirror.example/hls/master.m3u8',
   );
 });
+
+test('Wrong Title? provider routing preserves Inbuilt & reading media and routes external anime extensions to source search', () => {
+  assert.equal(
+    shouldUseExtensionWrongTitleSearch({ sourceId: 'shonenx-hls-inbuilt', isReadingMedia: false }),
+    false,
+  );
+  assert.equal(
+    shouldUseExtensionWrongTitleSearch({ sourceId: 'ext-gotaku-en', isReadingMedia: false }),
+    true,
+  );
+  assert.equal(
+    shouldUseExtensionWrongTitleSearch({ sourceId: 'hianime-bridge', isReadingMedia: false }),
+    true,
+  );
+  assert.equal(
+    shouldUseExtensionWrongTitleSearch({ sourceId: 'ext-manga-source', isReadingMedia: true }),
+    false,
+  );
+});
+
+test('isMatchedSourceEntryValidForSource enforces active sourceId equality and rejects inbuilt or switched sources', () => {
+  const entry = {
+    sourceId: 'ext-animexin-en',
+    title: 'Naruto (Hindi)',
+    href: '/series/naruto-hindi/',
+    slug: 'series/naruto-hindi',
+  };
+
+  assert.equal(isMatchedSourceEntryValidForSource(entry, 'ext-animexin-en'), true);
+  assert.equal(isMatchedSourceEntryValidForSource(entry, 'ext-other-source'), false);
+  assert.equal(isMatchedSourceEntryValidForSource(entry, 'shonenx-hls-inbuilt'), false);
+  assert.equal(isMatchedSourceEntryValidForSource(null, 'ext-animexin-en'), false);
+});
+
+test('buildStreamResolverCacheKey separates selected source entries from generic title resolution', () => {
+  const genericKey = buildStreamResolverCacheKey({
+    mediaId: '20',
+    english: 'Naruto',
+    episodeNumber: 1,
+    category: 'dub',
+    audioLanguage: 'hi',
+    sourceId: 'ext-animexin-en',
+    sourceBaseUrl: 'https://animexin.example',
+  });
+  const selectedKey = buildStreamResolverCacheKey({
+    mediaId: '20',
+    english: 'Naruto',
+    episodeNumber: 1,
+    category: 'dub',
+    audioLanguage: 'hi',
+    sourceId: 'ext-animexin-en',
+    sourceBaseUrl: 'https://animexin.example',
+    selectedHref: '/series/naruto-hindi-dub/',
+    selectedSlug: 'series/naruto-hindi-dub',
+  });
+  assert.notEqual(genericKey, selectedKey);
+});
+
+test('SPA & Turnstile compatibility detection flags Gotaku-style JS shells while allowing SSR search results', () => {
+  const gotakuSpaHtml = `
+    <!doctype html>
+    <html>
+      <head><title>Gotaku</title></head>
+      <body>
+        <div id="root"></div>
+        <script id="boot">{"turnstile_site_key":"0x4AAAAAA"}</script>
+        <script type="module" src="/assets/index.js"></script>
+      </body>
+    </html>
+  `;
+  assert.equal(looksLikeClientSpaHtml(gotakuSpaHtml), true);
+  const spaReason = detectExtensionWebCompatibilityIssue({
+    status: 200,
+    html: gotakuSpaHtml,
+    sourceLabel: 'Gotaku',
+    host: 'https://gotaku.to',
+    parsedCandidatesCount: 0,
+  });
+  assert.ok(spaReason && /Turnstile|JavaScript app/i.test(spaReason));
+
+  const cfChallengeReason = detectExtensionWebCompatibilityIssue({
+    status: 403,
+    html: '<title>Just a moment...</title><div>Cloudflare</div>',
+    sourceLabel: 'BlockedSite',
+    host: 'https://blocked.example',
+  });
+  assert.ok(cfChallengeReason && /anti-bot challenge/i.test(cfChallengeReason));
+
+  const ssrHtml = `
+    <div class="bsx">
+      <a href="/anime/chainsaw-man/" title="Chainsaw Man">Chainsaw Man</a>
+    </div>
+    <div class="sidebar">
+      <a href="/anime/one-piece/" title="One Piece">One Piece</a>
+    </div>
+  `;
+  assert.equal(looksLikeClientSpaHtml(ssrHtml), false);
+  assert.equal(
+    detectExtensionWebCompatibilityIssue({
+      status: 200,
+      html: ssrHtml,
+      sourceLabel: 'RealSSR',
+      host: 'https://realssr.example',
+      parsedCandidatesCount: 2,
+    }),
+    null,
+  );
+
+  const parsed = parseGenericSearchHtml(ssrHtml, 'https://realssr.example');
+  const ranked = rankExtensionSearchCandidates(parsed, 'Chainsaw Man');
+  assert.equal(ranked.length, 1);
+  assert.equal(ranked[0].href, '/anime/chainsaw-man/');
+  assert.equal(matchesExtensionSearchQuery({ href: '/anime/one-piece/', title: 'One Piece' }, 'Chainsaw Man'), false);
+});
+
+test('shouldUseExtensionEpisodesForSelection and isMatchedEpisodeValidForSource enforce external source matching', () => {
+  const validEntry = { sourceId: 'ext-custom', href: '/anime/frieren-cour-2/' };
+  assert.equal(
+    shouldUseExtensionEpisodesForSelection({
+      sourceId: 'shonenx-hls-inbuilt',
+      isReadingMedia: false,
+      selectedSourceEntry: validEntry,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldUseExtensionEpisodesForSelection({
+      sourceId: 'ext-custom',
+      isReadingMedia: true,
+      selectedSourceEntry: validEntry,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldUseExtensionEpisodesForSelection({
+      sourceId: 'ext-custom',
+      isReadingMedia: false,
+      selectedSourceEntry: validEntry,
+    }),
+    true,
+  );
+
+  assert.equal(
+    isMatchedEpisodeValidForSource(
+      { sourceId: 'ext-custom', sourceEpisodeId: 'ep-13', episodeUrl: '/watch/ep-13' },
+      'ext-custom',
+    ),
+    true,
+  );
+  assert.equal(
+    isMatchedEpisodeValidForSource(
+      { sourceId: 'ext-other', sourceEpisodeId: 'ep-13', episodeUrl: '/watch/ep-13' },
+      'ext-custom',
+    ),
+    false,
+  );
+  assert.equal(
+    isMatchedEpisodeValidForSource(
+      { sourceId: 'shonenx-hls-inbuilt', sourceEpisodeId: 'ep-13', episodeUrl: '/watch/ep-13' },
+      'shonenx-hls-inbuilt',
+    ),
+    false,
+  );
+});
+
+test('parseSourceEpisodeListHtml preserves non-standard numbering, source IDs, titles, URLs, and ordering across formats', () => {
+  const hianimeAjaxHtml = `
+    <div class="ss-list">
+      <a title="Zero Hour" class="ssl-item ep-item" data-number="0" data-id="90010" href="/watch/sample-99?ep=90010">
+        <div class="ep-name">Zero Hour</div>
+      </a>
+      <a title="The Second Cour Begins" class="ssl-item ep-item ssl-item-filler" data-number="13" data-id="90013" href="/watch/sample-99?ep=90013">
+        <div class="ep-name">The Second Cour Begins</div>
+      </a>
+      <a title="Recap Special" class="ssl-item ep-item" data-number="13.5" data-id="90014" href="/watch/sample-99?ep=90014">
+        <div class="ep-name">Recap Special</div>
+      </a>
+    </div>
+  `;
+  const hiParsed = parseSourceEpisodeListHtml(hianimeAjaxHtml, 'https://hianime.to');
+  assert.equal(hiParsed.length, 3);
+  assert.deepEqual(
+    hiParsed.map((e) => ({ id: e.sourceEpisodeId, num: e.number, title: e.title, filler: Boolean(e.isFiller) })),
+    [
+      { id: '90010', num: 0, title: 'Zero Hour', filler: false },
+      { id: '90013', num: 13, title: 'The Second Cour Begins', filler: true },
+      { id: '90014', num: 13.5, title: 'Recap Special', filler: false },
+    ],
+  );
+  assert.equal(hiParsed[1].episodeUrl, '/watch/sample-99?ep=90013');
+
+  // AnimeStream descending / custom order preserved as returned by source
+  const animeStreamHtml = `
+    <div class="eplister">
+      <ul>
+        <li>
+          <a href="https://ext.example/my-show-episode-14-hindi/">
+            <div class="epl-num">14</div>
+            <div class="epl-title">Hindi Climax</div>
+          </a>
+        </li>
+        <li>
+          <a href="https://ext.example/my-show-episode-13-hindi/">
+            <div class="epl-num">13</div>
+            <div class="epl-title">Hindi Awakening</div>
+          </a>
+        </li>
+      </ul>
+    </div>
+  `;
+  const asParsed = parseSourceEpisodeListHtml(animeStreamHtml, 'https://ext.example');
+  assert.equal(asParsed.length, 2);
+  assert.deepEqual(
+    asParsed.map((e) => ({ num: e.number, title: e.title, url: e.episodeUrl })),
+    [
+      { num: 14, title: 'Hindi Climax', url: '/my-show-episode-14-hindi/' },
+      { num: 13, title: 'Hindi Awakening', url: '/my-show-episode-13-hindi/' },
+    ],
+  );
+
+  // Direct anchor fallback filters out unrelated sidebar shows using animeSlug
+  const directHtml = `
+    <div class="episodes">
+      <a href="/watch/frieren-cour-2-episode-25/">Ep 25</a>
+      <a href="/watch/one-piece-episode-1100/">Ep 1100</a>
+    </div>
+  `;
+  const directParsed = parseSourceEpisodeListHtml(directHtml, 'https://ext.example', {
+    animeHref: '/anime/frieren-cour-2/',
+    animeSlug: 'anime/frieren-cour-2',
+  });
+  assert.equal(directParsed.length, 1);
+  assert.equal(directParsed[0].number, 25);
+  assert.equal(directParsed[0].episodeUrl, '/watch/frieren-cour-2-episode-25/');
+});
+
+test('buildStreamResolverCacheKey separates entries by selectedEpisodeId and selectedEpisodeUrl', () => {
+  const keyA = buildStreamResolverCacheKey({
+    mediaId: '20',
+    english: 'Naruto',
+    episodeNumber: 13,
+    category: 'sub',
+    sourceId: 'ext-custom',
+    selectedHref: '/anime/naruto-cour-2/',
+    selectedEpisodeId: 'ep-130',
+    selectedEpisodeUrl: '/watch/naruto-cour-2-ep-13/',
+  });
+  const keyB = buildStreamResolverCacheKey({
+    mediaId: '20',
+    english: 'Naruto',
+    episodeNumber: 13,
+    category: 'sub',
+    sourceId: 'ext-custom',
+    selectedHref: '/anime/naruto-cour-2/',
+    selectedEpisodeId: 'ep-131',
+    selectedEpisodeUrl: '/watch/naruto-cour-2-special-13/',
+  });
+  assert.notEqual(keyA, keyB);
+});
+
+test('Gotaku helpers identify host, extract title ID, parse /api/v1/titles JSON, and filter synopsis-only hits', () => {
+  assert.equal(isGotakuHost('https://gotaku.to'), true);
+  assert.equal(isGotakuHost('https://www.gotaku.to/title/lwk4qj'), true);
+  assert.equal(isGotakuHost('https://anichi.to'), false);
+
+  assert.equal(extractGotakuTitleId('/title/lwk4qj'), 'lwk4qj');
+  assert.equal(extractGotakuTitleId('title/53yf73?ep=1'), '53yf73');
+  assert.equal(extractGotakuTitleId('og1b09'), 'og1b09');
+  assert.equal(extractGotakuTitleId('/anime/naruto-shippuden'), null);
+
+  const parsed = parseGotakuTitleSearchJson(
+    {
+      data: [
+        {
+          id: '9gd76r',
+          url: '/title/9gd76r',
+          name: 'Onigiri',
+          poster_url: 'https://cdn.example/onigiri.jpg',
+        },
+        {
+          id: 'og1b09',
+          url: '/title/og1b09',
+          name: 'Demon Slayer: Kimetsu no Yaiba',
+          poster_url: 'https://cdn.example/ds.jpg',
+        },
+      ],
+    },
+    'https://gotaku.to',
+  );
+  assert.equal(parsed.length, 2);
+  const ranked = rankExtensionSearchCandidates(parsed, 'Demon Slayer');
+  assert.equal(ranked.length, 1);
+  assert.equal(ranked[0].title, 'Demon Slayer: Kimetsu no Yaiba');
+  assert.equal(ranked[0].href, '/title/og1b09');
+});
+
+
+
 
 
 

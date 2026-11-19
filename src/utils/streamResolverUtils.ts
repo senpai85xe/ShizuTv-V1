@@ -9,6 +9,7 @@ export interface MediaSearchTitlesInput {
 export interface GogoSearchCandidate {
   href: string;
   title: string;
+  cover?: string | null;
 }
 
 export interface RawSubtitleTrack {
@@ -759,6 +760,10 @@ export function buildStreamResolverCacheKey(params: {
   sourceId?: string | null;
   sourceBaseUrl?: string | null;
   sourceLang?: string | null;
+  selectedHref?: string | null;
+  selectedSlug?: string | null;
+  selectedEpisodeId?: string | null;
+  selectedEpisodeUrl?: string | null;
 }): string {
   return JSON.stringify({
     mediaId: params.mediaId,
@@ -772,6 +777,10 @@ export function buildStreamResolverCacheKey(params: {
     sourceId: params.sourceId || 'shonenx-hls-inbuilt',
     sourceBaseUrl: (params.sourceBaseUrl || '').replace(/\/+$/, ''),
     sourceLang: (params.sourceLang || '').toLowerCase(),
+    selectedHref: params.selectedHref || '',
+    selectedSlug: params.selectedSlug || '',
+    selectedEpisodeId: params.selectedEpisodeId || '',
+    selectedEpisodeUrl: params.selectedEpisodeUrl || '',
   });
 }
 
@@ -833,7 +842,7 @@ export function parseGenericSearchHtml(html: string, baseUrl: string): GogoSearc
   const results: GogoSearchCandidate[] = [];
   const seen = new Set<string>();
 
-  const pushResult = (rawHref: string, rawTitle: string) => {
+  const pushResult = (rawHref: string, rawTitle: string, rawCover?: string) => {
     const cleanHref = decodeHtmlEntities(rawHref);
     if (!cleanHref || cleanHref.startsWith('#') || cleanHref.startsWith('javascript:')) return;
     if (/\.(?:jpg|jpeg|png|webp|gif|svg|css|js|ico)(?:\?|$)/i.test(cleanHref)) return;
@@ -864,7 +873,21 @@ export function parseGenericSearchHtml(html: string, baseUrl: string): GogoSearc
     }
     if (seen.has(absUrl)) return;
     seen.add(absUrl);
-    results.push({ href: absUrl, title: cleanTitle });
+
+    let cover: string | null = null;
+    if (rawCover) {
+      const decodedCover = decodeHtmlEntities(rawCover);
+      if (decodedCover && !decodedCover.startsWith('data:')) {
+        try {
+          const coverUrl = new URL(decodedCover, baseUrl).toString();
+          if (/^https?:\/\//i.test(coverUrl)) cover = coverUrl;
+        } catch {
+          // Ignore malformed cover URL
+        }
+      }
+    }
+
+    results.push({ href: absUrl, title: cleanTitle, cover });
   };
 
   // Pattern 1: AnimeStream / WordPress / DooPlay card containers (scan up to 1600 chars after container open tag to survive nested divs)
@@ -884,8 +907,10 @@ export function parseGenericSearchHtml(html: string, baseUrl: string): GogoSearc
       chunk.match(/<div[^>]*class="[^"]*\btt\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i)?.[1] ||
       chunk.match(/<h[1-5][^>]*>([\s\S]*?)<\/h[1-5]>/i)?.[1];
     const altMatch = chunk.match(/\balt=["']([^"']+)["']/i)?.[1];
+    const imgSrc =
+      chunk.match(/<img[^>]+(?:data-src|data-lazy-src|src)=["']([^"']+)["']/i)?.[1] || undefined;
     const title = titleAttr || ttMatch || inner || altMatch || '';
-    pushResult(href, title);
+    pushResult(href, title, imgSrc);
   }
 
   // Pattern 2: Direct anchors pointing to anime/series/donghua/watch/toon pages
@@ -906,8 +931,10 @@ export function parseGenericSearchHtml(html: string, baseUrl: string): GogoSearc
     const titleAttr = attrs.match(/\btitle=["']([^"']+)["']/i)?.[1];
     const headingInside = innerText.match(/<(?:h[1-5]|div[^>]*class="[^"]*\btt\b[^"]*")[^>]*>([\s\S]*?)<\/(?:h[1-5]|div)>/i)?.[1];
     const altInside = innerText.match(/\balt=["']([^"']+)["']/i)?.[1];
+    const imgInside =
+      innerText.match(/<img[^>]+(?:data-src|data-lazy-src|src)=["']([^"']+)["']/i)?.[1] || undefined;
     const title = titleAttr || headingInside || innerText || altInside || '';
-    pushResult(href, title);
+    pushResult(href, title, imgInside);
   }
 
   return results;
@@ -1248,4 +1275,476 @@ export function extractDirectVideoUrlFromHtmlOrScript(
 
   return null;
 }
+
+/**
+ * Determines whether the Wrong Title? modal should search the selected external extension
+ * instead of global AniList/Jikan metadata.
+ * - ShizuTv Stream (Inbuilt) & reading media keep existing global metadata search.
+ */
+export function shouldUseExtensionWrongTitleSearch(params: {
+  sourceId?: string | null;
+  isReadingMedia?: boolean;
+}): boolean {
+  if (params.isReadingMedia) return false;
+  const cleanId = typeof params.sourceId === 'string' ? params.sourceId.trim() : '';
+  return Boolean(cleanId && cleanId !== 'shonenx-hls-inbuilt');
+}
+
+/**
+ * Validates that a manual source-entry override still belongs to the currently active source.
+ */
+export function isMatchedSourceEntryValidForSource<T extends { sourceId?: string | null; href?: string | null }>(
+  entry: T | null | undefined,
+  activeSourceId?: string | null,
+): entry is T {
+  if (!entry || !entry.href) return false;
+  const entrySource = typeof entry.sourceId === 'string' ? entry.sourceId.trim() : '';
+  const targetSource = typeof activeSourceId === 'string' ? activeSourceId.trim() : '';
+  if (!targetSource || targetSource === 'shonenx-hls-inbuilt') return false;
+  return Boolean(entrySource && entrySource === targetSource);
+}
+
+/**
+ * Detects empty client-rendered SPA shells (Vite/React/Next/Turnstile JS boots)
+ * where server-side HTML scraping cannot execute the site's frontend search or playback.
+ */
+export function looksLikeClientSpaHtml(html: string): boolean {
+  if (!html) return false;
+  const hasEmptyMount =
+    /<div\s+id=["'](?:root|app|__next)["'][^>]*>\s*<\/div>/i.test(html) ||
+    /<body[^>]*>\s*<div\s+id=["'](?:root|app)["'][^>]*>\s*<\/div>\s*(?:<script|<\/body)/i.test(html);
+  const hasTurnstileBoot =
+    /turnstile_site_key|challenges\.cloudflare\.com\/turnstile/i.test(html);
+  const hasNextDataPayload = /<script\s+id=["']__NEXT_DATA__["'][^>]*>\s*\{[\s\S]{80,}/i.test(html);
+  const anchorCount = (html.match(/<a\b[^>]*href=/gi) || []).length;
+  if (hasTurnstileBoot && anchorCount <= 3) return true;
+  if (hasEmptyMount && !hasNextDataPayload && anchorCount <= 3) return true;
+  return false;
+}
+
+export function detectExtensionWebCompatibilityIssue(params: {
+  status: number;
+  html: string;
+  sourceLabel: string;
+  host: string;
+  parsedCandidatesCount?: number;
+}): string | null {
+  const { status, html, sourceLabel, host, parsedCandidatesCount = 0 } = params;
+
+  if (
+    ((status === 403 || status === 429 || status === 503) &&
+      /just a moment|cf-challenge|cloudflare|attention required|enable javascript/i.test(html)) ||
+    /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(html)
+  ) {
+    return `${sourceLabel} (${host}) is protected by an anti-bot challenge (HTTP ${status}) and cannot be searched directly by the web adapter.`;
+  }
+
+  if (parsedCandidatesCount === 0 && looksLikeClientSpaHtml(html)) {
+    const usesTurnstile = /turnstile_site_key|challenges\.cloudflare\.com\/turnstile/i.test(html);
+    return usesTurnstile
+      ? `${sourceLabel} (${host}) uses a JavaScript app with Turnstile protection and cannot be searched or played through this web HTML adapter.`
+      : `${sourceLabel} (${host}) is a client-rendered JavaScript app without server-rendered search results, so this web HTML adapter cannot search it.`;
+  }
+
+  return null;
+}
+
+/**
+ * Checks whether a parsed HTML search candidate actually relates to the user's search query
+ * (filtering out unrelated sidebar/nav links returned on generic HTML pages).
+ */
+export function matchesExtensionSearchQuery(
+  candidate: GogoSearchCandidate,
+  query: string,
+): boolean {
+  const cleanQuery = normalizeTitleForMatch(query);
+  if (!cleanQuery) return false;
+  const slug = extractSlugFromGogoHref(candidate.href).toLowerCase();
+  const candNorm = normalizeTitleForMatch(candidate.title || slug.replace(/-/g, ' '));
+  const slugNorm = normalizeTitleForMatch(slug.replace(/-/g, ' '));
+  if (!candNorm && !slugNorm) return false;
+
+  if (
+    candNorm.includes(cleanQuery) ||
+    slugNorm.includes(cleanQuery) ||
+    cleanQuery.includes(candNorm)
+  ) {
+    return true;
+  }
+
+  const queryTokens = meaningfulTokens(cleanQuery);
+  if (queryTokens.length === 0) return false;
+  const candTokenSet = new Set([
+    ...tokenizeNormalized(candNorm),
+    ...tokenizeNormalized(slugNorm),
+  ]);
+  const hits = queryTokens.filter((tok) =>
+    Array.from(candTokenSet).some((ct) => ct === tok || (tok.length >= 4 && ct.startsWith(tok))),
+  ).length;
+  const minNeeded =
+    queryTokens.length === 1 ? 1 : Math.max(1, Math.ceil(queryTokens.length * 0.5));
+  return hits >= minNeeded;
+}
+
+export function rankExtensionSearchCandidates<T extends GogoSearchCandidate>(
+  candidates: T[],
+  query: string,
+  format?: string | null,
+): Array<T & { score: number }> {
+  return candidates
+    .filter((c) => matchesExtensionSearchQuery(c, query))
+    .map((c) => ({
+      ...c,
+      score: scoreGogoSearchCandidate(c, {
+        titles: [query],
+        category: 'sub',
+        format,
+        audioLanguage: 'ja',
+      }),
+    }))
+    .sort((a, b) => b.score - a.score);
+}
+
+export interface ParsedSourceEpisode {
+  sourceEpisodeId: string;
+  number: number;
+  title: string;
+  episodeUrl: string;
+  isFiller?: boolean;
+}
+
+/**
+ * Determines whether episode list fetching should use the selected external anime entry
+ * directly instead of global AniList/Jikan/AniZip/Kitsu metadata.
+ */
+export function shouldUseExtensionEpisodesForSelection<
+  T extends { sourceId?: string | null; href?: string | null },
+>(params: {
+  sourceId?: string | null;
+  isReadingMedia?: boolean;
+  selectedSourceEntry?: T | null;
+}): boolean {
+  if (params.isReadingMedia) return false;
+  return isMatchedSourceEntryValidForSource(params.selectedSourceEntry, params.sourceId);
+}
+
+/**
+ * Validates that a source-specific episode payload matches the active sourceId.
+ */
+export function isMatchedEpisodeValidForSource<
+  T extends { sourceId?: string | null; sourceEpisodeId?: string | null; episodeUrl?: string | null },
+>(episode: T | null | undefined, activeSourceId?: string | null): episode is T {
+  if (!episode) return false;
+  const targetSource = typeof activeSourceId === 'string' ? activeSourceId.trim() : '';
+  if (!targetSource || targetSource === 'shonenx-hls-inbuilt') return false;
+  if (!episode.sourceEpisodeId && !episode.episodeUrl) return false;
+  const epSource = typeof episode.sourceId === 'string' ? episode.sourceId.trim() : '';
+  return !epSource || epSource === targetSource;
+}
+
+function parseEpisodeNumberFromSignals(signals: Array<string | undefined | null>): number | null {
+  for (const raw of signals) {
+    if (!raw) continue;
+    const text = decodeHtmlEntities(String(raw)).trim();
+    if (!text) continue;
+
+    // Plain numeric or "Season - Ep" (e.g. "13", "12.5", "1 - 14")
+    const numerandoMatch = text.match(/^\d+\s*[-–x]\s*(\d+(?:\.\d+)?)$/i);
+    if (numerandoMatch) {
+      const n = Number.parseFloat(numerandoMatch[1]);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+
+    if (/^\d+(?:\.\d+)?$/.test(text)) {
+      const n = Number.parseFloat(text);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+
+    const epPatternMatch =
+      text.match(/(?:^|[^a-z0-9])(?:ep(?:isode)?|e|chap(?:ter)?)[.\s_-]*0*(\d+(?:\.\d+)?)(?:$|[^0-9])/i) ||
+      text.match(/(?:^|[-_/])s\d+e0*(\d+(?:\.\d+)?)(?:$|[^0-9])/i) ||
+      text.match(/[?&](?:ep|episode)=0*(\d+(?:\.\d+)?)(?:$|&)/i);
+    if (epPatternMatch) {
+      const n = Number.parseFloat(epPatternMatch[1]);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+  }
+  return null;
+}
+
+/**
+ * Extracts actual episode items from a source anime page or AJAX episode list HTML,
+ * preserving exact source episode IDs, episode numbers, titles, URLs, and ordering.
+ */
+export function parseSourceEpisodeListHtml(
+  html: string,
+  baseUrl: string,
+  options?: { animeHref?: string | null; animeSlug?: string | null },
+): ParsedSourceEpisode[] {
+  if (!html) return [];
+
+  const results: ParsedSourceEpisode[] = [];
+  const seenUrls = new Set<string>();
+  const slugTokens = normalizeTitleForMatch(
+    String(options?.animeSlug || extractSlugFromGogoHref(options?.animeHref || '')).replace(/-/g, ' '),
+  )
+    .split(/\s+/)
+    .filter((t) => t.length >= 3);
+
+  const pushEpisode = (candidate: {
+    rawUrl: string;
+    explicitId?: string | null;
+    explicitNumber?: string | null;
+    title?: string | null;
+    innerText?: string | null;
+    isFiller?: boolean;
+  }) => {
+    const cleanHref = decodeHtmlEntities(candidate.rawUrl);
+    if (!cleanHref || cleanHref.startsWith('#') || cleanHref.startsWith('javascript:')) return;
+
+    let normalizedUrl: string;
+    let pathAndQuery: string;
+    try {
+      const parsed = new URL(cleanHref, baseUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+      const baseHost = new URL(baseUrl).hostname.replace(/^www\./, '');
+      const candHost = parsed.hostname.replace(/^www\./, '');
+      if (candHost !== baseHost) return;
+      pathAndQuery = `${parsed.pathname}${parsed.search}`;
+      normalizedUrl = pathAndQuery;
+    } catch {
+      return;
+    }
+
+    if (seenUrls.has(normalizedUrl)) return;
+
+    const cleanTitleAttr = candidate.title
+      ? decodeHtmlEntities(candidate.title.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '))
+      : '';
+    const cleanInner = candidate.innerText
+      ? decodeHtmlEntities(candidate.innerText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '))
+      : '';
+
+    const parsedNum = parseEpisodeNumberFromSignals([
+      candidate.explicitNumber,
+      cleanTitleAttr,
+      cleanInner,
+      pathAndQuery,
+    ]);
+    if (parsedNum === null) return;
+
+    const sourceEpisodeId =
+      (candidate.explicitId && candidate.explicitId.trim()) ||
+      pathAndQuery.match(/[?&](?:ep|episode)=([^&]+)/i)?.[1] ||
+      extractSlugFromGogoHref(pathAndQuery) ||
+      pathAndQuery;
+
+    // Avoid pure generic placeholder titles if the site supplied an actual episode name
+    const fallbackTitle = `Episode ${parsedNum}`;
+    const chosenTitle =
+      cleanTitleAttr && !/^\d+(?:\.\d+)?$/.test(cleanTitleAttr)
+        ? cleanTitleAttr
+        : cleanInner && !/^(?:ep(?:isode)?\s*)?\d+(?:\.\d+)?(?:\s*(?:sub|dub|raw))?$/i.test(cleanInner)
+          ? cleanInner
+          : fallbackTitle;
+
+    seenUrls.add(normalizedUrl);
+    results.push({
+      sourceEpisodeId,
+      number: parsedNum,
+      title: chosenTitle,
+      episodeUrl: normalizedUrl,
+      isFiller: candidate.isFiller,
+    });
+  };
+
+  // 1. HiAnime / AniWatch AJAX episode items (<a class="...ep-item..." data-number="13" data-id="9876" href="...">)
+  const hiItemRe = /<a\b([^>]*\bclass=["'][^"']*\bep-item\b[^"']*["'][^>]*)>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hiItemRe.exec(html)) !== null) {
+    const attrs = m[1] || '';
+    const inner = m[2] || '';
+    const href = attrs.match(/\bhref=["']([^"']+)["']/i)?.[1];
+    if (!href) continue;
+    const dataId = attrs.match(/\bdata-id=["']([^"']+)["']/i)?.[1] || null;
+    const dataNum = attrs.match(/\bdata-number=["']([^"']+)["']/i)?.[1] || null;
+    const epName =
+      inner.match(/class=["'][^"']*\bep-name\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ||
+      attrs.match(/\btitle=["']([^"']+)["']/i)?.[1] ||
+      '';
+    const isFiller = /\bssl-item-filler\b/i.test(attrs);
+    pushEpisode({
+      rawUrl: href,
+      explicitId: dataId,
+      explicitNumber: dataNum,
+      title: epName,
+      innerText: inner,
+      isFiller,
+    });
+  }
+  if (results.length > 0) return results;
+
+  // 2. AnimeStream / WordPress / DooPlay / Gogo episode list containers
+  const containerAnchorPatterns = [
+    // AnimeStream .eplister <li><a href="..."><div class="epl-num">14</div><div class="epl-title">...</div></a></li>
+    /<div[^>]*class=["'][^"']*\beplister\b[^"']*["'][^>]*>[\s\S]*?<\/ul>/gi,
+    // GogoAnime #episode_related / AJAX episode list
+    /<ul[^>]*(?:id=["']episode_related["']|class=["'][^"']*\b(?:episodios|episodes-list|episode-list)\b[^"']*["'])[^>]*>[\s\S]*?<\/ul>/gi,
+  ];
+
+  for (const containerRe of containerAnchorPatterns) {
+    let cm: RegExpExecArray | null;
+    while ((cm = containerRe.exec(html)) !== null) {
+      const block = cm[0];
+      const liOrAnchorRe = /<li\b([^>]*)>([\s\S]*?)<\/li>|<a\b([^>]*href=["'][^"']+["'][^>]*)>([\s\S]*?)<\/a>/gi;
+      let im: RegExpExecArray | null;
+      while ((im = liOrAnchorRe.exec(block)) !== null) {
+        const chunk = im[0];
+        const aMatch = chunk.match(/<a\b([^>]*href=["']([^"']+)["'][^>]*)>([\s\S]*?)<\/a>/i);
+        if (!aMatch) continue;
+        const attrs = aMatch[1] || '';
+        const href = aMatch[2];
+        const inner = aMatch[3] || '';
+        const explicitId = attrs.match(/\bdata-id=["']([^"']+)["']/i)?.[1] || null;
+        const explicitNum =
+          attrs.match(/\bdata-(?:number|ep|episode)=["']([^"']+)["']/i)?.[1] ||
+          chunk.match(/<div[^>]*class=["'][^"']*\b(?:epl-num|numerando)\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ||
+          chunk.match(/<div[^>]*class=["'][^"']*\bname\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ||
+          null;
+        const epTitle =
+          chunk.match(/<div[^>]*class=["'][^"']*\bepl-title\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ||
+          attrs.match(/\btitle=["']([^"']+)["']/i)?.[1] ||
+          null;
+        pushEpisode({
+          rawUrl: href,
+          explicitId,
+          explicitNumber: explicitNum,
+          title: epTitle,
+          innerText: inner,
+        });
+      }
+    }
+    if (results.length > 0) return results;
+  }
+
+  // 3. Direct anchors or <option> lists on a series page that reference episodes of this anime
+  const directAnchorRe = /<a\s+[^>]*href=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi;
+  while ((m = directAnchorRe.exec(html)) !== null) {
+    const rawHref = m[1];
+    const attrs = m[2] || '';
+    const inner = m[3] || '';
+    const explicitNum = attrs.match(/\bdata-(?:number|ep|episode)=["']([^"']+)["']/i)?.[1] || null;
+    const explicitId = attrs.match(/\bdata-id=["']([^"']+)["']/i)?.[1] || null;
+    const lowerHref = rawHref.toLowerCase();
+    const isExplicitEpisodeLink =
+      Boolean(explicitNum) ||
+      /-episode-\d+(?:\.\d+)?/i.test(lowerHref) ||
+      /\/watch\//i.test(lowerHref) ||
+      /[?&](?:ep|episode)=\d+/i.test(lowerHref) ||
+      /s\d+e\d+/i.test(lowerHref);
+    if (!isExplicitEpisodeLink) continue;
+
+    // When matching generic page anchors (outside episode containers), ensure unrelated sidebar
+    // shows from other slugs do not pollute this series' episode list
+    if (!explicitNum && slugTokens.length > 0) {
+      const hrefNorm = normalizeTitleForMatch(rawHref.replace(/-/g, ' '));
+      const overlapsSeries = slugTokens.some((tok) => hrefNorm.includes(tok));
+      if (!overlapsSeries) continue;
+    }
+
+    pushEpisode({
+      rawUrl: rawHref,
+      explicitId,
+      explicitNumber: explicitNum,
+      title: attrs.match(/\btitle=["']([^"']+)["']/i)?.[1] || null,
+      innerText: inner,
+    });
+  }
+
+  if (results.length === 0) {
+    const optionRe = /<option\b([^>]*value=["']([^"']+)["'][^>]*)>([\s\S]*?)<\/option>/gi;
+    while ((m = optionRe.exec(html)) !== null) {
+      const attrs = m[1] || '';
+      const rawVal = m[2];
+      const label = m[3] || '';
+      if (!/^https?:\/\/|^\//i.test(rawVal)) continue;
+      if (!/(?:ep(?:isode)?|watch|s\d+e\d+)/i.test(`${rawVal} ${label}`)) continue;
+      pushEpisode({
+        rawUrl: rawVal,
+        explicitId: attrs.match(/\bdata-id=["']([^"']+)["']/i)?.[1] || null,
+        explicitNumber: attrs.match(/\bdata-(?:number|ep|episode)=["']([^"']+)["']/i)?.[1] || null,
+        title: label,
+        innerText: label,
+      });
+    }
+  }
+
+  return results;
+}
+
+export function isGotakuHost(hostOrUrl?: string | null): boolean {
+  if (!hostOrUrl) return false;
+  try {
+    const hostname = new URL(hostOrUrl.trim()).hostname.toLowerCase().replace(/^www\./, '');
+    return hostname === 'gotaku.to' || hostname.endsWith('.gotaku.to');
+  } catch {
+    return /\bgotaku\.to\b/i.test(hostOrUrl);
+  }
+}
+
+export function extractGotakuTitleId(hrefOrSlug?: string | null): string | null {
+  if (!hrefOrSlug) return null;
+  const cleaned = String(hrefOrSlug).trim();
+  const titleMatch = cleaned.match(/\/?title\/([a-z0-9]{4,16})(?:[/?#]|$)/i);
+  if (titleMatch?.[1]) return titleMatch[1];
+  if (/^[a-z0-9]{4,16}$/i.test(cleaned)) return cleaned;
+  return null;
+}
+
+export function parseGotakuTitleSearchJson(
+  payload: unknown,
+  baseUrl = 'https://gotaku.to',
+): GogoSearchCandidate[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const rawList = Array.isArray((payload as { data?: unknown }).data)
+    ? ((payload as { data: unknown[] }).data)
+    : [];
+  const results: GogoSearchCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const row of rawList) {
+    if (!row || typeof row !== 'object') continue;
+    const item = row as Record<string, unknown>;
+    const id = typeof item.id === 'string' ? item.id.trim() : '';
+    const title = typeof item.name === 'string' ? item.name.trim() : '';
+    const rawUrl = typeof item.url === 'string' ? item.url.trim() : id ? `/title/${id}` : '';
+    if (!title || !rawUrl) continue;
+
+    let href = rawUrl;
+    try {
+      const parsed = new URL(rawUrl, baseUrl);
+      href = `${parsed.pathname}${parsed.search}`;
+    } catch {
+      if (!href.startsWith('/')) href = `/${href}`;
+    }
+
+    if (seen.has(href)) continue;
+    seen.add(href);
+
+    const rawCover =
+      typeof item.poster_url === 'string' && /^https?:\/\//i.test(item.poster_url.trim())
+        ? item.poster_url.trim()
+        : null;
+
+    results.push({
+      href,
+      title,
+      cover: rawCover,
+    });
+  }
+
+  return results;
+}
+
+
 

@@ -53,6 +53,7 @@ import {
   DownloadTask,
   getPreferredTitle,
   getStatusLabel,
+  MatchedSourceEntry,
   MediaType,
   TrackedStatus,
   UnifiedChapter,
@@ -71,6 +72,7 @@ import {
   resolveMangaChaptersAsync,
   resolveVideoServers,
   resolveVideoStreamAsync,
+  searchExtensionTitlesAsync,
 } from '../services/sourceEngine';
 import {
   buildSelectableAudioOptions,
@@ -86,6 +88,11 @@ import {
   getSourceManagerBadge,
   resolveActiveSourceId,
 } from '../utils/sourcePicker';
+import {
+  isMatchedSourceEntryValidForSource,
+  shouldUseExtensionEpisodesForSelection,
+  shouldUseExtensionWrongTitleSearch,
+} from '../utils/streamResolverUtils';
 import { SmartImage } from '../components/SmartImage';
 import { MediaCard } from '../components/MediaCard';
 import { EpisodeChapterList } from '../components/EpisodeChapterList';
@@ -234,6 +241,7 @@ export const DetailsPage: React.FC = () => {
   const [episodes, setEpisodes] = useState<UnifiedEpisode[]>([]);
   const [chapters, setChapters] = useState<UnifiedChapter[]>([]);
   const [resolvingEpisodes, setResolvingEpisodes] = useState(false);
+  const [episodesError, setEpisodesError] = useState<string | null>(null);
   const [resolvingChapters, setResolvingChapters] = useState(false);
   const [chaptersError, setChaptersError] = useState<string | null>(null);
   const [episodeRefreshNonce, setEpisodeRefreshNonce] = useState(0);
@@ -286,12 +294,21 @@ export const DetailsPage: React.FC = () => {
   const [resolvedWatchStream, setResolvedWatchStream] = useState<VideoStream | null>(null);
   const [matchedTitleOverride, setMatchedTitleOverride] = useState<string>('');
   const [matchedOverrideMedia, setMatchedOverrideMedia] = useState<UnifiedMedia | null>(null);
+  const [matchedSourceEntry, setMatchedSourceEntry] = useState<MatchedSourceEntry | null>(null);
   const [wrongTitleOpen, setWrongTitleOpen] = useState(false);
   const [wrongTitleDraft, setWrongTitleDraft] = useState('');
   const [wrongTitleViewMode, setWrongTitleViewMode] = useState<'list' | 'grid'>('list');
   const [wrongTitleResults, setWrongTitleResults] = useState<UnifiedMedia[]>([]);
+  const [wrongTitleSourceResults, setWrongTitleSourceResults] = useState<MatchedSourceEntry[]>([]);
   const [wrongTitleSearching, setWrongTitleSearching] = useState(false);
   const [wrongTitleSearchError, setWrongTitleSearchError] = useState<string | null>(null);
+  const prevSelectedSourceRef = React.useRef<string>(selectedSourceId);
+  const activeMatchedSourceEntry = isMatchedSourceEntryValidForSource(
+    matchedSourceEntry,
+    selectedSourceId,
+  )
+    ? matchedSourceEntry
+    : null;
 
   const [synopsisExpanded, setSynopsisExpanded] = useState(false);
   const [trackerOpen, setTrackerOpen] = useState(false);
@@ -387,11 +404,13 @@ export const DetailsPage: React.FC = () => {
     setEpFilter('');
     setMatchedTitleOverride('');
     setMatchedOverrideMedia(null);
+    setEpisodesError(null);
     setChaptersError(null);
     if (isRouteChanged) {
       setHasPickedInlineEpisode(false);
       setInlineEpisodeIndex(0);
       setInlinePlaySignal(0);
+      setEpisodes([]);
       setChapters([]);
     }
     fetchMediaDetails(id, resolvedType, initialMedia?.providerId)
@@ -416,17 +435,29 @@ export const DetailsPage: React.FC = () => {
   useEffect(() => {
     if (!id || isReadingMedia || loadingDetails || !media.id) return;
     let cancelled = false;
-    setResolvingEpisodes(true);
     const sourceMeta = availableSources.find((s) => s.id === selectedSourceId);
+    const usingExtensionEntry = shouldUseExtensionEpisodesForSelection({
+      sourceId: selectedSourceId,
+      isReadingMedia,
+      selectedSourceEntry: activeMatchedSourceEntry,
+    });
+    setResolvingEpisodes(true);
+    setEpisodesError(null);
     resolveEpisodesForMedia(media, {
       sourceId: selectedSourceId,
       sourceName: sourceMeta?.name,
+      sourceBaseUrl: sourceMeta?.baseUrl,
+      sourceLang: sourceMeta?.lang,
+      sourcePkg: sourceMeta?.pkg,
+      selectedSourceEntry: activeMatchedSourceEntry,
       overrideTitle: matchedTitleOverride.trim() || undefined,
-      overrideMedia: matchedOverrideMedia,
+      overrideMedia: selectedSourceId === 'shonenx-hls-inbuilt' ? matchedOverrideMedia : null,
+      bypassCache: episodeRefreshNonce > 0,
     })
       .then((eps) => {
         if (cancelled) return;
         setEpisodes(eps);
+        setEpisodesError(null);
         setSelectedRangeId('all');
         if (typeof navMediaState?.episodeNumber === 'number') {
           const idx = eps.findIndex((e) => e.number === navMediaState.episodeNumber);
@@ -436,8 +467,17 @@ export const DetailsPage: React.FC = () => {
           }
         }
       })
-      .catch(() => {
-        // Keep previously loaded episodes on transient failure
+      .catch((err) => {
+        if (cancelled) return;
+        if (usingExtensionEntry) {
+          setEpisodes([]);
+          setEpisodesError(
+            err instanceof Error
+              ? err.message
+              : 'Unable to load episodes for this selected source entry.',
+          );
+        }
+        // Keep previously loaded episodes on inbuilt transient failure
       })
       .finally(() => {
         if (!cancelled) setResolvingEpisodes(false);
@@ -456,6 +496,9 @@ export const DetailsPage: React.FC = () => {
     selectedSourceId,
     matchedTitleOverride,
     matchedOverrideMedia?.id,
+    activeMatchedSourceEntry?.sourceId,
+    activeMatchedSourceEntry?.href,
+    activeMatchedSourceEntry?.slug,
     episodeRefreshNonce,
   ]);
 
@@ -512,23 +555,79 @@ export const DetailsPage: React.FC = () => {
     episodeRefreshNonce,
   ]);
 
+  // Clear incompatible source-match overrides when switching sources or opening another media entry
+  useEffect(() => {
+    if (prevSelectedSourceRef.current !== selectedSourceId) {
+      prevSelectedSourceRef.current = selectedSourceId;
+      setMatchedSourceEntry(null);
+      setMatchedOverrideMedia(null);
+      setMatchedTitleOverride('');
+      setEpisodesError(null);
+      setWrongTitleResults([]);
+      setWrongTitleSourceResults([]);
+      setWrongTitleSearchError(null);
+    }
+  }, [selectedSourceId]);
+
+  useEffect(() => {
+    setMatchedSourceEntry(null);
+    setMatchedOverrideMedia(null);
+    setMatchedTitleOverride('');
+    setEpisodesError(null);
+    setWrongTitleResults([]);
+    setWrongTitleSourceResults([]);
+    setWrongTitleSearchError(null);
+  }, [id, resolvedType]);
+
   // Live title search inside "Wrong Title?" modal
+  const activeSource =
+    availableSources.find((s) => s.id === selectedSourceId) ?? availableSources[0];
+  const useExtensionWrongTitleSearch = shouldUseExtensionWrongTitleSearch({
+    sourceId: selectedSourceId,
+    isReadingMedia,
+  });
+
   useEffect(() => {
     if (!wrongTitleOpen) return;
     const query = wrongTitleDraft.trim();
     if (!query) {
       setWrongTitleResults([]);
+      setWrongTitleSourceResults([]);
       setWrongTitleSearching(false);
       setWrongTitleSearchError(null);
       return;
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     setWrongTitleSearching(true);
     setWrongTitleSearchError(null);
 
     const timer = window.setTimeout(async () => {
       try {
+        if (useExtensionWrongTitleSearch && activeSource) {
+          setWrongTitleResults([]);
+          const extSearch = await searchExtensionTitlesAsync({
+            source: activeSource,
+            query,
+            signal: controller.signal,
+          });
+          if (!cancelled) {
+            if (!extSearch.compatible) {
+              setWrongTitleSourceResults([]);
+              setWrongTitleSearchError(
+                extSearch.reason ||
+                  `${activeSource.name} cannot be searched by this web adapter.`,
+              );
+            } else {
+              setWrongTitleSourceResults(extSearch.items);
+              setWrongTitleSearchError(null);
+            }
+          }
+          return;
+        }
+
+        setWrongTitleSourceResults([]);
         const targetSearchType: MediaType = isNovel
           ? 'NOVEL'
           : isMangaOnly
@@ -551,8 +650,9 @@ export const DetailsPage: React.FC = () => {
           setWrongTitleResults(items);
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           setWrongTitleResults([]);
+          setWrongTitleSourceResults([]);
           setWrongTitleSearchError(
             err instanceof Error ? err.message : 'Unable to search titles right now.',
           );
@@ -564,9 +664,19 @@ export const DetailsPage: React.FC = () => {
 
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
-  }, [wrongTitleOpen, wrongTitleDraft, isNovel, isMangaOnly]);
+  }, [
+    wrongTitleOpen,
+    wrongTitleDraft,
+    isNovel,
+    isMangaOnly,
+    useExtensionWrongTitleSearch,
+    activeSource?.id,
+    activeSource?.name,
+    activeSource?.baseUrl,
+  ]);
 
   useEffect(() => {
     if (!sourcePickerOpen && !wrongTitleOpen && !trailerOpen && !audioPickerOpen) return;
@@ -587,9 +697,8 @@ export const DetailsPage: React.FC = () => {
       ? 'ShizuTv — Loading...'
       : formatMediaDocumentTitle({ mediaTitle: title }),
   );
-  const effectiveSourceTitle = matchedTitleOverride.trim() || title;
-  const activeSource =
-    availableSources.find((s) => s.id === selectedSourceId) ?? availableSources[0];
+  const effectiveSourceTitle =
+    activeMatchedSourceEntry?.title || matchedTitleOverride.trim() || title;
   const selectableAudioOptions = useMemo(
     () => buildSelectableAudioOptions(resolvedWatchStream?.availableAudios, activeSource?.lang),
     [resolvedWatchStream?.availableAudios, activeSource?.lang],
@@ -634,9 +743,11 @@ export const DetailsPage: React.FC = () => {
     resolvedCount: isMangaOnly ? chapters.length : isNovel ? 0 : episodes.length,
     expectedCount: isReadingMedia
       ? media.chapters
-      : matchedOverrideMedia?.episodes ?? media.episodes,
+      : activeMatchedSourceEntry || episodesError
+        ? null
+        : matchedOverrideMedia?.episodes ?? media.episodes,
     status: matchedOverrideMedia?.status ?? media.status,
-    hasOverride: Boolean(matchedTitleOverride.trim()),
+    hasOverride: Boolean(matchedTitleOverride.trim() || activeMatchedSourceEntry),
   });
   const comments = state.comments[media.id] || [];
   const totalCount = isMangaOnly
@@ -818,7 +929,7 @@ export const DetailsPage: React.FC = () => {
       return;
     }
 
-    const ep = episodes.find((e) => e.number === item.number) ?? {
+    const ep = episodes.find((e) => e.id === item.id || e.number === item.number) ?? {
       id: item.id,
       number: item.number,
       title: item.title,
@@ -843,6 +954,7 @@ export const DetailsPage: React.FC = () => {
           sourceLang: activeSource?.lang,
           audioLanguage: state.playerPrefs.audioLanguage,
           overrideTitle: matchedTitleOverride.trim() || undefined,
+          selectedSourceEntry: activeMatchedSourceEntry,
         });
 
         const isDirectVideo =
@@ -1057,14 +1169,23 @@ export const DetailsPage: React.FC = () => {
         <div ref={heroRef}>
           {activeTab === 'watch' && !isReadingMedia ? (
             <InlineAnimePlayer
-              media={media}
+              media={
+                selectedSourceId === 'shonenx-hls-inbuilt'
+                  ? (matchedOverrideMedia ?? media)
+                  : media
+              }
               episodes={episodes}
               episodeIndex={activeInlineEpisodeIndex}
               sourceId={selectedSourceId}
               sourceName={activeSource?.name}
               sourceBaseUrl={activeSource?.baseUrl}
               sourceLang={activeSource?.lang}
-              overrideTitle={matchedTitleOverride.trim() || undefined}
+              overrideTitle={
+                matchedTitleOverride.trim() || activeMatchedSourceEntry?.title || undefined
+              }
+              selectedSourceEntry={activeMatchedSourceEntry}
+              episodesLoading={resolvingEpisodes}
+              episodesError={episodesError}
               playSignal={inlinePlaySignal}
               initialTime={navMediaState?.startTime ?? null}
               initialResumePlaying={Boolean(navMediaState?.resumePlaying)}
@@ -2100,7 +2221,9 @@ export const DetailsPage: React.FC = () => {
                 : filteredEpisodes.map((ep) => {
                     const isCurrent =
                       activeTab === 'watch' && activeInlineEpisode
-                        ? ep.number === activeInlineEpisode.number
+                        ? activeInlineEpisode.id
+                          ? ep.id === activeInlineEpisode.id
+                          : ep.number === activeInlineEpisode.number
                         : currentProgress + 1 === ep.number;
                     return {
                       id: ep.id,
@@ -2323,6 +2446,39 @@ export const DetailsPage: React.FC = () => {
                         <p className="text-sm font-extrabold">Chapters Unavailable</p>
                         <p className="text-xs text-[var(--sx-on-surface-muted)] max-w-md mx-auto">
                           {chaptersError}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEpisodeRefreshNonce((n) => n + 1)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[var(--sx-primary)] text-[var(--sx-on-primary)] text-xs font-extrabold"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Retry</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSourcePickerQuery('');
+                            setSourcePickerOpen(true);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[var(--sx-on-surface)]/10 dark:bg-white/10 text-xs font-bold"
+                        >
+                          <span>Change Source</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : !isMangaOnly && episodesError && rawItemsCount === 0 ? (
+                    <div
+                      data-testid="anime-episodes-error"
+                      className={`${frostedCardClass} p-7 text-center space-y-3`}
+                    >
+                      <AlertCircle className="w-7 h-7 text-amber-400 mx-auto" />
+                      <div className="space-y-1">
+                        <p className="text-sm font-extrabold">Episodes Unavailable</p>
+                        <p className="text-xs text-[var(--sx-on-surface-muted)] max-w-md mx-auto">
+                          {episodesError}
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center justify-center gap-2">
@@ -3057,6 +3213,15 @@ export const DetailsPage: React.FC = () => {
                               setPreferredSource('ANIME', src.id);
                             }
                             setResolvedWatchStream(null);
+                            if (isSwitching) {
+                              setMatchedSourceEntry(null);
+                              setMatchedOverrideMedia(null);
+                              setMatchedTitleOverride('');
+                              setEpisodesError(null);
+                              setWrongTitleResults([]);
+                              setWrongTitleSourceResults([]);
+                              setWrongTitleSearchError(null);
+                            }
                             if (!isReadingMedia && isSwitching) {
                               const nextAudio = resolvePreferredAudioForSource({
                                 currentAudioLang: state.playerPrefs.audioLanguage,
@@ -3256,15 +3421,102 @@ export const DetailsPage: React.FC = () => {
                   data-testid="wrong-title-results"
                   className="flex-1 overflow-y-auto rounded-2xl bg-[var(--sx-surface-high)]/38 border border-white/30 dark:border-white/10"
                 >
-                  {wrongTitleSearching && wrongTitleResults.length === 0 ? (
+                  {wrongTitleSearching &&
+                  (useExtensionWrongTitleSearch
+                    ? wrongTitleSourceResults.length === 0
+                    : wrongTitleResults.length === 0) ? (
                     <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-[var(--sx-on-surface-muted)]">
                       <Loader2 className="w-5 h-5 animate-spin text-[var(--sx-primary)]" />
-                      <span>Searching "{wrongTitleDraft}"...</span>
+                      <span>
+                        {useExtensionWrongTitleSearch
+                          ? `Searching "${wrongTitleDraft}" on ${activeSource?.name || 'source'}...`
+                          : `Searching "${wrongTitleDraft}"...`}
+                      </span>
                     </div>
                   ) : wrongTitleSearchError ? (
-                    <div className="p-6 text-center text-xs text-red-700 dark:text-red-300">
+                    <div
+                      data-testid="wrong-title-error-message"
+                      className="p-6 text-center text-xs text-red-700 dark:text-red-300"
+                    >
                       {wrongTitleSearchError}
                     </div>
+                  ) : useExtensionWrongTitleSearch ? (
+                    wrongTitleSourceResults.length === 0 ? (
+                      <div className="p-8 text-center text-xs text-[var(--sx-on-surface-muted)]">
+                        {wrongTitleDraft.trim()
+                          ? `No titles matched "${wrongTitleDraft.trim()}" on ${activeSource?.name || 'this source'}. Try Romaji or Japanese title.`
+                          : `Type an anime title to search ${activeSource?.name || 'this source'}.`}
+                      </div>
+                    ) : wrongTitleViewMode === 'list' ? (
+                      <div className="divide-y divide-[var(--sx-outline)]">
+                        {wrongTitleSourceResults.map((item, idx) => (
+                          <button
+                            key={item.href}
+                            type="button"
+                            data-testid={`wrong-title-result-${item.slug || idx}`}
+                            onClick={() => {
+                              setMatchedSourceEntry(item);
+                              setMatchedOverrideMedia(null);
+                              setMatchedTitleOverride(item.title);
+                              setEpisodes([]);
+                              setEpisodesError(null);
+                              setHasPickedInlineEpisode(false);
+                              setInlineEpisodeIndex(0);
+                              setWrongTitleOpen(false);
+                            }}
+                            className="w-full p-3 flex items-center gap-3 text-left hover:bg-[var(--sx-primary)]/8 transition-colors"
+                          >
+                            <SmartImage
+                              src={item.cover}
+                              alt={item.title}
+                              fallbackTitle={item.title}
+                              className="w-12 h-16 rounded-xl shrink-0"
+                            />
+                            <div className="min-w-0 flex-1 space-y-0.5">
+                              <p className="text-xs sm:text-sm font-extrabold line-clamp-2">
+                                {item.title}
+                              </p>
+                              <p className="text-[11px] text-[var(--sx-on-surface-muted)] truncate">
+                                {[activeSource?.name, item.slug].filter(Boolean).join(' · ')}
+                              </p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-2.5">
+                        {wrongTitleSourceResults.map((item, idx) => (
+                          <button
+                            key={item.href}
+                            type="button"
+                            data-testid={`wrong-title-result-${item.slug || idx}`}
+                            onClick={() => {
+                              setMatchedSourceEntry(item);
+                              setMatchedOverrideMedia(null);
+                              setMatchedTitleOverride(item.title);
+                              setEpisodes([]);
+                              setEpisodesError(null);
+                              setHasPickedInlineEpisode(false);
+                              setInlineEpisodeIndex(0);
+                              setWrongTitleOpen(false);
+                            }}
+                            className="text-left group space-y-1.5 p-1.5 rounded-xl hover:bg-[var(--sx-primary)]/10 transition-colors"
+                          >
+                            <div className="relative aspect-[2/3] rounded-xl overflow-hidden border border-[var(--sx-outline)] bg-[var(--sx-surface-container)]">
+                              <SmartImage
+                                src={item.cover}
+                                alt={item.title}
+                                fallbackTitle={item.title}
+                                className="w-full h-full group-hover:scale-105 transition-transform duration-200"
+                              />
+                            </div>
+                            <p className="text-xs font-bold line-clamp-2 leading-snug">
+                              {item.title}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    )
                   ) : wrongTitleResults.length === 0 ? (
                     <div className="p-8 text-center text-xs text-[var(--sx-on-surface-muted)]">
                       {wrongTitleDraft.trim()
@@ -3293,6 +3545,7 @@ export const DetailsPage: React.FC = () => {
                             type="button"
                             data-testid={`wrong-title-result-${item.id}`}
                             onClick={() => {
+                              setMatchedSourceEntry(null);
                               setMatchedOverrideMedia(item);
                               setMatchedTitleOverride(itemTitle);
                               setWrongTitleOpen(false);
@@ -3332,6 +3585,7 @@ export const DetailsPage: React.FC = () => {
                             type="button"
                             data-testid={`wrong-title-result-${item.id}`}
                             onClick={() => {
+                              setMatchedSourceEntry(null);
                               setMatchedOverrideMedia(item);
                               setMatchedTitleOverride(itemTitle);
                               setWrongTitleOpen(false);
@@ -3365,6 +3619,7 @@ export const DetailsPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
+                      setMatchedSourceEntry(null);
                       setMatchedTitleOverride('');
                       setMatchedOverrideMedia(null);
                       setWrongTitleOpen(false);
@@ -3384,6 +3639,7 @@ export const DetailsPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => {
+                        setMatchedSourceEntry(null);
                         setMatchedOverrideMedia(null);
                         setMatchedTitleOverride(wrongTitleDraft.trim());
                         setWrongTitleOpen(false);

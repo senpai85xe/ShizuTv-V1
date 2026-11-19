@@ -1,4 +1,7 @@
 import {
+  ExtensionEpisodesResponse,
+  ExtensionTitleSearchResponse,
+  MatchedSourceEntry,
   MediaType,
   SourceInfo,
   UnifiedChapter,
@@ -7,6 +10,7 @@ import {
   VideoServer,
   VideoStream,
 } from '../types/media';
+import { shouldUseExtensionEpisodesForSelection } from '../utils/streamResolverUtils';
 import { fetchJikanEpisodes, searchJikan } from './jikan';
 import { fetchKitsuEpisodes } from './kitsu';
 import { searchAniList } from './anilist';
@@ -176,10 +180,62 @@ export function resolveFallbackEpisodesCount(media: Pick<UnifiedMedia, 'episodes
 export interface ResolveEpisodesOptions {
   sourceId?: string;
   sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  sourcePkg?: string;
+  selectedSourceEntry?: MatchedSourceEntry | null;
   overrideTitle?: string;
   overrideMedia?: UnifiedMedia | null;
   bypassCache?: boolean;
   recordTrace?: boolean;
+}
+
+export async function resolveExtensionEpisodesAsync(params: {
+  sourceId: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  sourcePkg?: string;
+  selectedSourceEntry: MatchedSourceEntry;
+  bypassCache?: boolean;
+  signal?: AbortSignal;
+}): Promise<ExtensionEpisodesResponse> {
+  const response = await fetch('/api/extensions/episodes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: params.signal,
+    body: JSON.stringify({
+      sourceId: params.sourceId,
+      sourceName: params.sourceName,
+      sourceBaseUrl: params.sourceBaseUrl,
+      sourceLang: params.sourceLang,
+      sourcePkg: params.sourcePkg,
+      selectedSourceEntry: {
+        sourceId: params.selectedSourceEntry.sourceId,
+        title: params.selectedSourceEntry.title,
+        href: params.selectedSourceEntry.href,
+        slug: params.selectedSourceEntry.slug,
+      },
+      bypassCache: Boolean(params.bypassCache),
+    }),
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | (ExtensionEpisodesResponse & { message?: string })
+    | null;
+
+  if (!response.ok && !payload) {
+    throw new Error(
+      `Failed to load episodes from ${params.sourceName || params.sourceId} (HTTP ${response.status}).`,
+    );
+  }
+
+  return {
+    compatible: payload?.compatible !== false,
+    reason: payload?.reason || payload?.message,
+    sourceLabel: payload?.sourceLabel || params.sourceName || params.sourceId,
+    episodes: Array.isArray(payload?.episodes) ? payload.episodes : [],
+  };
 }
 
 export async function resolveEpisodesWithDiagnostics(
@@ -187,6 +243,57 @@ export async function resolveEpisodesWithDiagnostics(
   options?: ResolveEpisodesOptions,
 ): Promise<{ episodes: UnifiedEpisode[]; trace: EpisodeFetchTrace }> {
   const overallStart = performance.now();
+  const initialSourceId = options?.sourceId || 'shonenx-hls-inbuilt';
+  const initialSourceName =
+    options?.sourceName ||
+    INBUILT_SOURCES.find((s) => s.id === initialSourceId)?.name ||
+    initialSourceId;
+
+  if (
+    shouldUseExtensionEpisodesForSelection({
+      sourceId: initialSourceId,
+      isReadingMedia: media.type === 'MANGA' || media.type === 'NOVEL',
+      selectedSourceEntry: options?.selectedSourceEntry,
+    }) &&
+    options?.selectedSourceEntry
+  ) {
+    const extResult = await resolveExtensionEpisodesAsync({
+      sourceId: initialSourceId,
+      sourceName: initialSourceName,
+      sourceBaseUrl: options.sourceBaseUrl,
+      sourceLang: options.sourceLang,
+      sourcePkg: options.sourcePkg,
+      selectedSourceEntry: options.selectedSourceEntry,
+      bypassCache: options.bypassCache,
+    });
+
+    if (!extResult.compatible || extResult.episodes.length === 0) {
+      throw new Error(
+        extResult.reason ||
+          `No episodes found for "${options.selectedSourceEntry.title}" on ${extResult.sourceLabel || initialSourceName}.`,
+      );
+    }
+
+    const trace = analyzeEpisodeResolution({
+      inputMedia: media,
+      resolvedMedia: media,
+      sourceId: initialSourceId,
+      sourceName: extResult.sourceLabel || initialSourceName,
+      overrideTitle: options.selectedSourceEntry.title,
+      overrideMatched: true,
+      resolvedExpectedCount: extResult.episodes.length,
+      providers: [],
+      mergedEpisodes: extResult.episodes,
+      totalDurationMs: Math.round(performance.now() - overallStart),
+    });
+
+    if (options?.recordTrace !== false) {
+      recordEpisodeTrace(trace);
+    }
+
+    return { episodes: extResult.episodes, trace };
+  }
+
   let targetMedia = media;
   const overrideQuery = options?.overrideTitle?.trim();
   let overrideMatched = false;
@@ -462,12 +569,7 @@ export async function resolveEpisodesWithDiagnostics(
 
 export async function resolveEpisodesForMedia(
   media: UnifiedMedia,
-  options?: {
-    sourceId?: string;
-    sourceName?: string;
-    overrideTitle?: string;
-    overrideMedia?: UnifiedMedia | null;
-  },
+  options?: ResolveEpisodesOptions,
 ): Promise<UnifiedEpisode[]> {
   const { episodes } = await resolveEpisodesWithDiagnostics(media, options);
   return episodes;
@@ -520,8 +622,44 @@ export interface ResolveVideoStreamParams {
   sourceLang?: string;
   audioLanguage?: 'ja' | 'en' | 'hi' | 'es';
   overrideTitle?: string;
+  selectedSourceEntry?: MatchedSourceEntry | null;
   bypassCache?: boolean;
   signal?: AbortSignal;
+}
+
+export async function searchExtensionTitlesAsync(params: {
+  source: SourceInfo;
+  query: string;
+  signal?: AbortSignal;
+}): Promise<ExtensionTitleSearchResponse> {
+  const response = await fetch('/api/extensions/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: params.signal,
+    body: JSON.stringify({
+      sourceId: params.source.id,
+      sourceName: params.source.name,
+      sourceBaseUrl: params.source.baseUrl,
+      sourceLang: params.source.lang,
+      sourcePkg: params.source.pkg,
+      query: params.query.trim(),
+    }),
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | (ExtensionTitleSearchResponse & { message?: string })
+    | null;
+
+  if (!response.ok && !payload) {
+    throw new Error(`Failed to search ${params.source.name} (HTTP ${response.status}).`);
+  }
+
+  return {
+    compatible: payload?.compatible !== false,
+    reason: payload?.reason || payload?.message,
+    sourceLabel: payload?.sourceLabel || params.source.name,
+    items: Array.isArray(payload?.items) ? payload.items : [],
+  };
 }
 
 export async function resolveVideoStreamAsync(
@@ -537,9 +675,39 @@ export async function resolveVideoStreamAsync(
     sourceLang,
     audioLanguage,
     overrideTitle,
+    selectedSourceEntry,
     bypassCache,
     signal,
   } = params;
+
+  const matchingSourceEntry =
+    selectedSourceEntry &&
+    selectedSourceEntry.sourceId === sourceId &&
+    selectedSourceEntry.href
+      ? {
+          sourceId: selectedSourceEntry.sourceId,
+          title: selectedSourceEntry.title,
+          href: selectedSourceEntry.href,
+          slug: selectedSourceEntry.slug,
+        }
+      : null;
+
+  const matchingEpisode =
+    sourceId &&
+    sourceId !== 'shonenx-hls-inbuilt' &&
+    (episode.sourceEpisodeId || episode.episodeUrl) &&
+    (!episode.sourceId || episode.sourceId === sourceId)
+      ? {
+          id: episode.id,
+          number: episode.number,
+          title: episode.title,
+          sourceId: episode.sourceId || sourceId,
+          sourceEpisodeId: episode.sourceEpisodeId,
+          episodeUrl: episode.episodeUrl,
+          sourceAnimeHref: episode.sourceAnimeHref,
+          sourceAnimeSlug: episode.sourceAnimeSlug,
+        }
+      : null;
 
   const response = await fetch('/api/stream/resolve', {
     method: 'POST',
@@ -548,7 +716,7 @@ export async function resolveVideoStreamAsync(
     body: JSON.stringify({
       mediaId: media.id,
       titles: {
-        overrideTitle: overrideTitle?.trim() || null,
+        overrideTitle: overrideTitle?.trim() || matchingSourceEntry?.title || null,
         english: media.title?.english ?? null,
         romaji: media.title?.romaji ?? null,
         native: media.title?.native ?? null,
@@ -564,6 +732,8 @@ export async function resolveVideoStreamAsync(
       sourceName,
       sourceBaseUrl,
       sourceLang,
+      selectedSourceEntry: matchingSourceEntry,
+      selectedEpisode: matchingEpisode,
       bypassCache: Boolean(bypassCache),
     }),
   });

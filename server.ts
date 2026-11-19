@@ -19,6 +19,8 @@ import {
 import {
   diagnoseAnimeExtensionServer,
   resolveAnimeEpisodeStream,
+  resolveAnimeExtensionEpisodesServer,
+  searchAnimeExtensionEntriesServer,
 } from './src/server/animeStreamResolver.ts';
 import {
   diagnoseMangaExtensionServer,
@@ -1303,6 +1305,74 @@ async function startServer() {
         : undefined;
     const sourceLang = typeof body.sourceLang === 'string' ? body.sourceLang.trim() : undefined;
 
+    const rawSelectedEntry =
+      body.selectedSourceEntry && typeof body.selectedSourceEntry === 'object'
+        ? (body.selectedSourceEntry as Record<string, unknown>)
+        : null;
+    const selectedSourceEntry =
+      rawSelectedEntry && typeof rawSelectedEntry.href === 'string' && rawSelectedEntry.href.trim()
+        ? {
+            sourceId:
+              typeof rawSelectedEntry.sourceId === 'string'
+                ? rawSelectedEntry.sourceId.trim()
+                : undefined,
+            title:
+              typeof rawSelectedEntry.title === 'string'
+                ? rawSelectedEntry.title.trim()
+                : undefined,
+            href: rawSelectedEntry.href.trim(),
+            slug:
+              typeof rawSelectedEntry.slug === 'string'
+                ? rawSelectedEntry.slug.trim()
+                : undefined,
+          }
+        : null;
+
+    const rawSelectedEpisode =
+      body.selectedEpisode && typeof body.selectedEpisode === 'object'
+        ? (body.selectedEpisode as Record<string, unknown>)
+        : null;
+    const selectedEpisode =
+      rawSelectedEpisode &&
+      (typeof rawSelectedEpisode.sourceEpisodeId === 'string' ||
+        typeof rawSelectedEpisode.episodeUrl === 'string')
+        ? {
+            id:
+              typeof rawSelectedEpisode.id === 'string'
+                ? rawSelectedEpisode.id.trim()
+                : undefined,
+            number:
+              typeof rawSelectedEpisode.number === 'number' &&
+              Number.isFinite(rawSelectedEpisode.number)
+                ? rawSelectedEpisode.number
+                : undefined,
+            title:
+              typeof rawSelectedEpisode.title === 'string'
+                ? rawSelectedEpisode.title.trim()
+                : undefined,
+            sourceId:
+              typeof rawSelectedEpisode.sourceId === 'string'
+                ? rawSelectedEpisode.sourceId.trim()
+                : undefined,
+            sourceEpisodeId:
+              typeof rawSelectedEpisode.sourceEpisodeId === 'string'
+                ? rawSelectedEpisode.sourceEpisodeId.trim()
+                : undefined,
+            episodeUrl:
+              typeof rawSelectedEpisode.episodeUrl === 'string'
+                ? rawSelectedEpisode.episodeUrl.trim()
+                : undefined,
+            sourceAnimeHref:
+              typeof rawSelectedEpisode.sourceAnimeHref === 'string'
+                ? rawSelectedEpisode.sourceAnimeHref.trim()
+                : undefined,
+            sourceAnimeSlug:
+              typeof rawSelectedEpisode.sourceAnimeSlug === 'string'
+                ? rawSelectedEpisode.sourceAnimeSlug.trim()
+                : undefined,
+          }
+        : null;
+
     try {
       const resolved = await resolveAnimeEpisodeStream({
         mediaId: typeof body.mediaId === 'string' ? body.mediaId : 'unknown',
@@ -1327,6 +1397,8 @@ async function startServer() {
         sourceBaseUrl:
           typeof body.sourceBaseUrl === 'string' ? body.sourceBaseUrl : undefined,
         sourceLang,
+        selectedSourceEntry,
+        selectedEpisode,
         bypassCache: Boolean(body.bypassCache),
       });
 
@@ -1435,6 +1507,107 @@ async function startServer() {
           err instanceof Error
             ? err.message
             : 'Unable to load manga chapter pages from this source.',
+      });
+    }
+  });
+
+  app.post('/api/extensions/search', async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sourceId = typeof body.sourceId === 'string' ? body.sourceId.trim() : '';
+    if (!sourceId) {
+      res.status(400).json({ message: 'sourceId is required.' });
+      return;
+    }
+
+    const sourceName = typeof body.sourceName === 'string' ? body.sourceName.trim() : sourceId;
+    const sourceBaseUrl =
+      typeof body.sourceBaseUrl === 'string' ? body.sourceBaseUrl.trim() : undefined;
+    const sourceLang = typeof body.sourceLang === 'string' ? body.sourceLang.trim() : undefined;
+    const sourcePkg = typeof body.sourcePkg === 'string' ? body.sourcePkg.trim() : undefined;
+    const query = typeof body.query === 'string' ? body.query.trim() : '';
+
+    if (!query) {
+      res.json({ compatible: true, sourceLabel: sourceName, items: [] });
+      return;
+    }
+
+    try {
+      const result = await searchAnimeExtensionEntriesServer({
+        sourceId,
+        sourceName,
+        sourceBaseUrl,
+        sourceLang,
+        sourcePkg,
+        query,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(502).json({
+        compatible: false,
+        reason:
+          err instanceof Error
+            ? err.message
+            : `Failed to search titles on ${sourceName}.`,
+        sourceLabel: sourceName,
+        items: [],
+      });
+    }
+  });
+
+  app.post('/api/extensions/episodes', async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sourceId = typeof body.sourceId === 'string' ? body.sourceId.trim() : '';
+    if (!sourceId) {
+      res.status(400).json({ message: 'sourceId is required.' });
+      return;
+    }
+
+    const rawEntry =
+      body.selectedSourceEntry && typeof body.selectedSourceEntry === 'object'
+        ? (body.selectedSourceEntry as Record<string, unknown>)
+        : null;
+    const href = rawEntry && typeof rawEntry.href === 'string' ? rawEntry.href.trim() : '';
+    if (!href) {
+      res.status(400).json({
+        compatible: false,
+        reason: 'selectedSourceEntry.href is required.',
+        episodes: [],
+      });
+      return;
+    }
+
+    const sourceName = typeof body.sourceName === 'string' ? body.sourceName.trim() : sourceId;
+    const sourceBaseUrl =
+      typeof body.sourceBaseUrl === 'string' ? body.sourceBaseUrl.trim() : undefined;
+    const sourceLang = typeof body.sourceLang === 'string' ? body.sourceLang.trim() : undefined;
+    const sourcePkg = typeof body.sourcePkg === 'string' ? body.sourcePkg.trim() : undefined;
+
+    try {
+      const result = await resolveAnimeExtensionEpisodesServer({
+        sourceId,
+        sourceName,
+        sourceBaseUrl,
+        sourceLang,
+        sourcePkg,
+        selectedSourceEntry: {
+          sourceId:
+            typeof rawEntry?.sourceId === 'string' ? rawEntry.sourceId.trim() : sourceId,
+          title: typeof rawEntry?.title === 'string' ? rawEntry.title.trim() : undefined,
+          href,
+          slug: typeof rawEntry?.slug === 'string' ? rawEntry.slug.trim() : undefined,
+        },
+        bypassCache: Boolean(body.bypassCache),
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(502).json({
+        compatible: false,
+        reason:
+          err instanceof Error
+            ? err.message
+            : `Failed to retrieve episodes from ${sourceName}.`,
+        sourceLabel: sourceName,
+        episodes: [],
       });
     }
   });

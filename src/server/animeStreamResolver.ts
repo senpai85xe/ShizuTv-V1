@@ -5,12 +5,17 @@ import {
   buildStreamProxyUrl,
   buildStreamResolverCacheKey,
   detectAvailableAudiosFromSources,
+  detectExtensionWebCompatibilityIssue,
   extractDirectVideoUrlFromHtmlOrScript,
+  extractGotakuTitleId,
   extractMegaPlayStreamUrl,
   extractSlugFromGogoHref,
   type GenericEmbedCandidate,
   type GogoSearchCandidate,
   HIANIME_BRIDGE_HOSTS,
+  isGotakuHost,
+  isMatchedEpisodeValidForSource,
+  isMatchedSourceEntryValidForSource,
   isMetadataOnlyCatalogHost,
   isSourceInherentLanguage,
   isViableTitleMatch,
@@ -19,12 +24,16 @@ import {
   parseGenericEmbedCandidates,
   parseGenericEpisodeLinks,
   parseGenericSearchHtml,
+  parseGotakuTitleSearchJson,
+  parseSourceEpisodeListHtml,
+  rankExtensionSearchCandidates,
   type ResolvedAvailableAudioOption,
   resolveProviderHostPlan,
   scoreGogoSearchCandidate,
   sortEmbedsForAudioLanguage,
   type StreamAudioLanguage,
 } from '../utils/streamResolverUtils.ts';
+import type { ExtensionEpisodesResponse, UnifiedEpisode } from '../types/media.ts';
 import {
   buildCapabilitiesBreakdown,
   type ExtensionDiagnoseMode,
@@ -37,6 +46,24 @@ const BROWSER_UA =
 
 const MEGAPLAY_ENC_KEY = 'i?LMTAx0Q6,:}50U';
 const MEGAPLAY_ENC_IV = "W0;27ToaUpl_P%'c";
+
+export interface SelectedSourceEntryInput {
+  sourceId?: string;
+  title?: string;
+  href?: string;
+  slug?: string;
+}
+
+export interface SelectedEpisodeInput {
+  id?: string;
+  number?: number;
+  title?: string;
+  sourceId?: string;
+  sourceEpisodeId?: string;
+  episodeUrl?: string;
+  sourceAnimeHref?: string;
+  sourceAnimeSlug?: string;
+}
 
 export interface ResolveAnimeStreamParams {
   mediaId: string;
@@ -57,6 +84,8 @@ export interface ResolveAnimeStreamParams {
   sourceName?: string;
   sourceBaseUrl?: string;
   sourceLang?: string;
+  selectedSourceEntry?: SelectedSourceEntryInput | null;
+  selectedEpisode?: SelectedEpisodeInput | null;
   bypassCache?: boolean;
 }
 
@@ -141,6 +170,105 @@ function normalizeHttpUrl(rawUrl: string, baseUrl: string): string | null {
     return isSafeExternalHttpUrl(resolved) ? resolved : null;
   } catch {
     return null;
+  }
+}
+
+async function searchGotakuPublicCatalog(
+  host: string,
+  query: string,
+): Promise<{
+  ok: boolean;
+  candidates: GogoSearchCandidate[];
+  status?: number;
+  rawText?: string;
+}> {
+  const endpoint = `${host}/api/v1/titles?q=${encodeURIComponent(query)}&limit=24`;
+  const res = await fetchText(
+    endpoint,
+    {
+      Referer: `${host}/`,
+      Accept: 'application/json, text/plain, */*',
+    },
+    7000,
+  );
+  if (!res.ok) {
+    return { ok: false, candidates: [], status: res.status, rawText: res.text };
+  }
+  try {
+    const parsed = JSON.parse(res.text) as { data?: unknown };
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.data)) {
+      return { ok: false, candidates: [], status: res.status, rawText: res.text };
+    }
+    return {
+      ok: true,
+      candidates: parseGotakuTitleSearchJson(parsed, res.url || host),
+      status: res.status,
+    };
+  } catch {
+    return { ok: false, candidates: [], status: res.status, rawText: res.text };
+  }
+}
+
+async function probeGotakuEpisodesSupport(
+  host: string,
+  sourceLabel: string,
+  hrefOrSlug: string,
+): Promise<{
+  supported: boolean;
+  reason: string;
+  episodes: Array<{ sourceEpisodeId: string; number: number; title: string; episodeUrl: string }>;
+}> {
+  const unsupportedReason = `${sourceLabel} (${host}) supports title search via its public catalog API, but episode lists and video playback are protected by encrypted binary payloads and Turnstile, which are unsupported by this web adapter.`;
+  const titleId = extractGotakuTitleId(hrefOrSlug);
+  if (!titleId) {
+    return { supported: false, reason: unsupportedReason, episodes: [] };
+  }
+
+  try {
+    const res = await fetchText(
+      `${host}/api/v1/titles/${encodeURIComponent(titleId)}/episodes`,
+      {
+        Referer: `${host}/title/${encodeURIComponent(titleId)}`,
+        Accept: 'application/json, text/plain, */*',
+      },
+      6500,
+    );
+    if (!res.ok) {
+      return { supported: false, reason: unsupportedReason, episodes: [] };
+    }
+    const parsed = JSON.parse(res.text) as { data?: unknown; episodes?: unknown };
+    const rawList = Array.isArray(parsed?.data)
+      ? parsed.data
+      : Array.isArray(parsed?.episodes)
+        ? parsed.episodes
+        : null;
+    if (!rawList) {
+      return { supported: false, reason: unsupportedReason, episodes: [] };
+    }
+
+    const mapped = rawList
+      .map((row) => {
+        if (!row || typeof row !== 'object') return null;
+        const ep = row as Record<string, unknown>;
+        const epId = typeof ep.id === 'string' || typeof ep.id === 'number' ? String(ep.id).trim() : '';
+        const num = Number(ep.number ?? ep.episode_number ?? ep.ep);
+        if (!epId || !Number.isFinite(num) || num < 0) return null;
+        const rawTitle = typeof ep.name === 'string' ? ep.name.trim() : typeof ep.title === 'string' ? ep.title.trim() : '';
+        return {
+          sourceEpisodeId: epId,
+          number: num,
+          title: rawTitle || `Episode ${num}`,
+          episodeUrl: `/title/${titleId}?ep=${num}`,
+        };
+      })
+      .filter((item): item is { sourceEpisodeId: string; number: number; title: string; episodeUrl: string } => Boolean(item));
+
+    if (mapped.length === 0) {
+      return { supported: false, reason: unsupportedReason, episodes: [] };
+    }
+    return { supported: true, reason: '', episodes: mapped };
+  } catch {
+    return { supported: false, reason: unsupportedReason, episodes: [] };
   }
 }
 
@@ -920,6 +1048,8 @@ async function resolveViaHiAnimeHost(input: {
   sourceId?: string;
   sourceLang?: string;
   sourceBaseUrl?: string;
+  directCandidate?: GogoSearchCandidate | null;
+  directEpisode?: SelectedEpisodeInput | null;
 }): Promise<ResolvedAnimeStreamPayload | null> {
   if (input.requestedAudioLang === 'hi' || input.requestedAudioLang === 'es') {
     const inherent = isSourceInherentLanguage(
@@ -935,77 +1065,98 @@ async function resolveViaHiAnimeHost(input: {
     }
   }
 
-  const allCandidates = new Map<string, GogoSearchCandidate>();
-  for (const query of input.queries.slice(0, 4)) {
-    try {
-      const res = await fetchText(
-        `${input.host}/search?keyword=${encodeURIComponent(query)}`,
-        { Referer: `${input.host}/` },
-        7500,
-      );
-      if (!res.ok) continue;
-      const parsed = parseGenericSearchHtml(res.text, input.host);
-      for (const item of parsed) {
-        if (!allCandidates.has(item.href)) {
-          allCandidates.set(item.href, item);
+  let ranked: Array<GogoSearchCandidate & { score?: number }>;
+
+  if (input.directCandidate?.href) {
+    ranked = [input.directCandidate];
+  } else {
+    const allCandidates = new Map<string, GogoSearchCandidate>();
+    for (const query of input.queries.slice(0, 4)) {
+      try {
+        const res = await fetchText(
+          `${input.host}/search?keyword=${encodeURIComponent(query)}`,
+          { Referer: `${input.host}/` },
+          7500,
+        );
+        if (!res.ok) continue;
+        const parsed = parseGenericSearchHtml(res.text, input.host);
+        for (const item of parsed) {
+          if (!allCandidates.has(item.href)) {
+            allCandidates.set(item.href, item);
+          }
         }
+        const viableCount = Array.from(allCandidates.values()).filter((c) =>
+          isViableTitleMatch(c, input.targetTitles, input.format),
+        ).length;
+        if (viableCount > 0) break;
+      } catch {
+        // Try next query
       }
-      if (allCandidates.size > 0) break;
-    } catch {
-      // Try next query
     }
+
+    if (allCandidates.size === 0) return null;
+
+    ranked = Array.from(allCandidates.values())
+      .filter((c) => isViableTitleMatch(c, input.targetTitles, input.format))
+      .map((c) => ({
+        ...c,
+        score: scoreGogoSearchCandidate(c, {
+          titles: input.targetTitles,
+          category: input.effectiveCategory,
+          format: input.format,
+          audioLanguage: input.requestedAudioLang,
+        }),
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    if (ranked.length === 0) return null;
   }
 
-  if (allCandidates.size === 0) return null;
-
-  const ranked = Array.from(allCandidates.values())
-    .filter((c) => isViableTitleMatch(c, input.targetTitles, input.format))
-    .map((c) => ({
-      ...c,
-      score: scoreGogoSearchCandidate(c, {
-        titles: input.targetTitles,
-        category: input.effectiveCategory,
-        format: input.format,
-        audioLanguage: input.requestedAudioLang,
-      }),
-    }))
-    .sort((a, b) => b.score - a.score);
-
-  if (ranked.length === 0) return null;
-
   for (const candidate of ranked.slice(0, 3)) {
-    const idMatch = candidate.href.match(/-(\d+)(?:\?|$|\/)/);
-    const animeNumericId = idMatch?.[1];
-    if (!animeNumericId) continue;
+    const directEpDataId =
+      (input.directEpisode?.sourceEpisodeId && /^\d+$/.test(input.directEpisode.sourceEpisodeId.trim())
+        ? input.directEpisode.sourceEpisodeId.trim()
+        : null) ||
+      input.directEpisode?.episodeUrl?.match(/[?&]ep=(\d+)/i)?.[1] ||
+      null;
 
     try {
-      const epListRes = await fetchText(
-        `${input.host}/ajax/v2/episode/list/${animeNumericId}`,
-        {
-          Referer: `${input.host}${candidate.href}`,
-          'X-Requested-With': 'XMLHttpRequest',
-        },
-        7500,
-      );
-      if (!epListRes.ok) continue;
-      const epListJson = JSON.parse(epListRes.text) as { html?: string };
-      const epListHtml = epListJson?.html || '';
-      if (!epListHtml) continue;
+      let epDataId = directEpDataId;
 
-      const epMatch =
-        epListHtml.match(
-          new RegExp(
-            `data-number=["']${input.episodeNumber}["'][^>]*data-id=["'](\\d+)["']`,
-            'i',
-          ),
-        ) ||
-        epListHtml.match(
-          new RegExp(
-            `data-id=["'](\\d+)["'][^>]*data-number=["']${input.episodeNumber}["']`,
-            'i',
-          ),
+      if (!epDataId) {
+        const idMatch = candidate.href.match(/-(\d+)(?:\?|$|\/)/);
+        const animeNumericId = idMatch?.[1];
+        if (!animeNumericId) continue;
+
+        const epListRes = await fetchText(
+          `${input.host}/ajax/v2/episode/list/${animeNumericId}`,
+          {
+            Referer: `${input.host}${candidate.href}`,
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          7500,
         );
-      const epDataId = epMatch?.[1];
+        if (!epListRes.ok) continue;
+        const epListJson = JSON.parse(epListRes.text) as { html?: string };
+        const epListHtml = epListJson?.html || '';
+        if (!epListHtml) continue;
+
+        const epMatch =
+          epListHtml.match(
+            new RegExp(
+              `data-number=["']${input.episodeNumber}["'][^>]*data-id=["'](\\d+)["']`,
+              'i',
+            ),
+          ) ||
+          epListHtml.match(
+            new RegExp(
+              `data-id=["'](\\d+)["'][^>]*data-number=["']${input.episodeNumber}["']`,
+              'i',
+            ),
+          );
+        epDataId = epMatch?.[1] || null;
+      }
+
       if (!epDataId) continue;
 
       const serversRes = await fetchText(
@@ -1154,18 +1305,43 @@ export async function resolveAnimeEpisodeStream(
     );
   }
 
+  const validSelectedEntry = isMatchedSourceEntryValidForSource(
+    params.selectedSourceEntry,
+    params.sourceId,
+  )
+    ? params.selectedSourceEntry
+    : null;
+
+  const validSelectedEpisode = isMatchedEpisodeValidForSource(
+    params.selectedEpisode,
+    params.sourceId,
+  )
+    ? params.selectedEpisode
+    : null;
+
+  const effectiveEpisodeNum =
+    typeof validSelectedEpisode?.number === 'number' &&
+    Number.isFinite(validSelectedEpisode.number) &&
+    validSelectedEpisode.number >= 0
+      ? validSelectedEpisode.number
+      : safeEpisodeNum;
+
   const cacheKey = buildStreamResolverCacheKey({
     mediaId: params.mediaId,
     overrideTitle: params.titles.overrideTitle,
     english: params.titles.english,
     romaji: params.titles.romaji,
-    episodeNumber: safeEpisodeNum,
+    episodeNumber: effectiveEpisodeNum,
     category: effectiveCategory,
     audioLanguage: requestedAudioLang,
     serverId: params.serverId,
     sourceId: params.sourceId,
     sourceBaseUrl: params.sourceBaseUrl,
     sourceLang: params.sourceLang,
+    selectedHref: validSelectedEntry?.href || validSelectedEpisode?.sourceAnimeHref || null,
+    selectedSlug: validSelectedEntry?.slug || validSelectedEpisode?.sourceAnimeSlug || null,
+    selectedEpisodeId: validSelectedEpisode?.sourceEpisodeId || null,
+    selectedEpisodeUrl: validSelectedEpisode?.episodeUrl || null,
   });
 
   if (!params.bypassCache) {
@@ -1175,12 +1351,20 @@ export async function resolveAnimeEpisodeStream(
     }
   }
 
-  const queries = buildSearchQueriesForMedia(params.titles, requestedAudioLang);
-  if (queries.length === 0) {
+  const effectiveTitlesInput = validSelectedEntry?.title
+    ? {
+        ...params.titles,
+        overrideTitle: validSelectedEntry.title,
+      }
+    : params.titles;
+
+  const queries = buildSearchQueriesForMedia(effectiveTitlesInput, requestedAudioLang);
+  if (queries.length === 0 && !validSelectedEntry?.href && !validSelectedEpisode?.episodeUrl) {
     throw new Error('No searchable anime title available to resolve episode stream.');
   }
 
   const targetTitles = [
+    validSelectedEntry?.title,
     params.titles.overrideTitle,
     params.titles.english,
     params.titles.romaji,
@@ -1188,6 +1372,14 @@ export async function resolveAnimeEpisodeStream(
   ]
     .map((t) => (typeof t === 'string' ? t.trim() : ''))
     .filter(Boolean);
+
+  const effectiveEntryHref = validSelectedEntry?.href || validSelectedEpisode?.sourceAnimeHref || '';
+  const directSelectedCandidate: GogoSearchCandidate | null = effectiveEntryHref
+    ? {
+        href: effectiveEntryHref,
+        title: validSelectedEntry?.title?.trim() || targetTitles[0] || queries[0] || 'Selected Entry',
+      }
+    : null;
 
   let lastError = `No working episode stream mirror responded on ${hostPlan.sourceLabel}.`;
   let sawCandidatesWithoutRequestedLanguage = false;
@@ -1200,7 +1392,7 @@ export async function resolveAnimeEpisodeStream(
           queries,
           targetTitles,
           format: params.format,
-          episodeNumber: safeEpisodeNum,
+          episodeNumber: effectiveEpisodeNum,
           effectiveCategory,
           requestedAudioLang,
           serverId: params.serverId,
@@ -1209,6 +1401,8 @@ export async function resolveAnimeEpisodeStream(
           sourceId: params.sourceId,
           sourceLang: params.sourceLang,
           sourceBaseUrl: params.sourceBaseUrl,
+          directCandidate: directSelectedCandidate,
+          directEpisode: validSelectedEpisode,
         });
         if (hiPayload) {
           resolvedStreamCache.set(cacheKey, {
@@ -1226,28 +1420,66 @@ export async function resolveAnimeEpisodeStream(
       continue;
     }
 
-    const candidates =
-      hostPlan.mode === 'inbuilt'
-        ? await searchGogoAcrossQueries(
-            host,
-            queries,
-            targetTitles,
-            effectiveCategory,
-            params.format,
-            requestedAudioLang,
-          )
-        : await searchGenericSiteAcrossQueries(
-            host,
-            queries,
-            targetTitles,
-            effectiveCategory,
-            params.format,
-            requestedAudioLang,
-          );
+    let candidates: Array<GogoSearchCandidate & { score?: number }>;
+    if (directSelectedCandidate) {
+      candidates = [directSelectedCandidate];
+    } else if (hostPlan.mode === 'inbuilt') {
+      candidates = await searchGogoAcrossQueries(
+        host,
+        queries,
+        targetTitles,
+        effectiveCategory,
+        params.format,
+        requestedAudioLang,
+      );
+    } else if (isGotakuHost(host)) {
+      const gotakuAll = new Map<string, GogoSearchCandidate>();
+      for (const q of queries.slice(0, 4)) {
+        const gRes = await searchGotakuPublicCatalog(host, q).catch(() => null);
+        if (!gRes?.ok) continue;
+        for (const item of gRes.candidates) {
+          if (!gotakuAll.has(item.href)) gotakuAll.set(item.href, item);
+        }
+        const rankedNow = Array.from(gotakuAll.values()).filter((c) =>
+          isViableTitleMatch(c, targetTitles, params.format),
+        );
+        if (rankedNow.length > 0) break;
+      }
+      candidates = Array.from(gotakuAll.values())
+        .filter((c) => isViableTitleMatch(c, targetTitles, params.format))
+        .map((c) => ({
+          ...c,
+          score: scoreGogoSearchCandidate(c, {
+            titles: targetTitles,
+            category: effectiveCategory,
+            format: params.format,
+            audioLanguage: requestedAudioLang,
+          }),
+        }))
+        .sort((a, b) => b.score - a.score);
+    } else {
+      candidates = await searchGenericSiteAcrossQueries(
+        host,
+        queries,
+        targetTitles,
+        effectiveCategory,
+        params.format,
+        requestedAudioLang,
+      );
+    }
 
     if (candidates.length === 0) {
       lastError = `No matching anime entries found on ${hostPlan.sourceLabel} for "${queries[0]}".`;
       continue;
+    }
+
+    if (isGotakuHost(host)) {
+      const epProbe = await probeGotakuEpisodesSupport(
+        host,
+        hostPlan.sourceLabel,
+        candidates[0].href,
+      );
+      throw new Error(epProbe.reason);
     }
 
     const requiresStrictAudioMatch =
@@ -1269,15 +1501,21 @@ export async function resolveAnimeEpisodeStream(
         )
       : candidates;
 
-    const slugsToTry =
-      requiresStrictAudioMatch && !sourceInherentlyMatchesRequested
+    const slugsToTry = directSelectedCandidate
+      ? candidates
+      : requiresStrictAudioMatch && !sourceInherentlyMatchesRequested
         ? matchingAudioCandidates.length > 0
           ? matchingAudioCandidates.slice(0, 2)
           : candidates.slice(0, 1)
         : candidates.slice(0, 4);
 
     for (const candidate of slugsToTry) {
-      const slug = extractSlugFromGogoHref(candidate.href);
+      const slug =
+        (validSelectedEntry?.slug && candidate.href === validSelectedEntry.href
+          ? validSelectedEntry.slug
+          : '') ||
+        validSelectedEpisode?.sourceAnimeSlug ||
+        extractSlugFromGogoHref(candidate.href);
       if (!slug) continue;
 
       // Support HiAnime-style hosts if a custom extension happens to be a HiAnime clone
@@ -1287,7 +1525,7 @@ export async function resolveAnimeEpisodeStream(
           queries,
           targetTitles,
           format: params.format,
-          episodeNumber: safeEpisodeNum,
+          episodeNumber: effectiveEpisodeNum,
           effectiveCategory,
           requestedAudioLang,
           serverId: params.serverId,
@@ -1296,6 +1534,8 @@ export async function resolveAnimeEpisodeStream(
           sourceId: params.sourceId,
           sourceLang: params.sourceLang,
           sourceBaseUrl: params.sourceBaseUrl,
+          directCandidate: directSelectedCandidate,
+          directEpisode: validSelectedEpisode,
         }).catch(() => null);
         if (hiCustom) {
           resolvedStreamCache.set(cacheKey, {
@@ -1306,12 +1546,17 @@ export async function resolveAnimeEpisodeStream(
         }
       }
 
-      const episodeUrls = await resolveEpisodePageUrls(
-        host,
-        slug,
-        safeEpisodeNum,
-        candidate.href,
-      );
+      const directEpisodePageUrl = validSelectedEpisode?.episodeUrl
+        ? normalizeHttpUrl(validSelectedEpisode.episodeUrl, host)
+        : null;
+      const episodeUrls = directEpisodePageUrl
+        ? [directEpisodePageUrl]
+        : await resolveEpisodePageUrls(
+            host,
+            slug,
+            effectiveEpisodeNum,
+            candidate.href,
+          );
 
       for (const epUrl of episodeUrls) {
         let epHtml = '';
@@ -1727,6 +1972,17 @@ export async function diagnoseAnimeExtensionServer(params: {
             }))
             .sort((a, b) => b.score - a.score);
         }
+      } else if (isGotakuHost(host)) {
+        const gRes = await searchGotakuPublicCatalog(host, query).catch(() => null);
+        if (gRes?.ok) {
+          matchedCandidates = rankExtensionSearchCandidates(gRes.candidates, query, 'TV');
+        } else if (
+          gRes?.rawText &&
+          looksBlockedChallengeHtml(gRes.status || 200, gRes.rawText)
+        ) {
+          blockedReason = `${sourceLabel} (${host}) is protected by an anti-bot challenge (HTTP ${gRes.status || 403}).`;
+          break;
+        }
       } else {
         // Check first for anti-bot block on custom host homepage/search
         const probeRes = await fetchText(
@@ -1807,6 +2063,35 @@ export async function diagnoseAnimeExtensionServer(params: {
         playbackOrPagesVerified: false,
       }),
     };
+  }
+
+  if (isGotakuHost(searchHostUsed)) {
+    const epProbe = await probeGotakuEpisodesSupport(
+      searchHostUsed,
+      sourceLabel,
+      topCandidate?.href || '',
+    );
+    if (!epProbe.supported) {
+      const searchOk = Boolean(topCandidate);
+      return {
+        sourceId: params.sourceId,
+        sourceName: sourceLabel,
+        status: 'unsupported',
+        durationMs: Date.now() - startedAt,
+        summary: searchOk
+          ? `Search matched "${topCandidate.title}", but episodes & playback are unsupported`
+          : `No matching anime entries found on ${sourceLabel}; episodes & playback are unsupported`,
+        detail: epProbe.reason,
+        matchedTitle: topCandidate?.title,
+        sampleItems: matchedCandidates.slice(0, 3).map((c) => c.title),
+        capabilities: {
+          metadataSearch: searchOk ? 'verified' : 'unavailable',
+          episodeOrChapterListing: 'unsupported',
+          playbackOrReader: 'unsupported',
+          overallCompatibility: 'unsupported',
+        },
+      };
+    }
   }
 
   // Full capability test: Search -> Episode Listing -> Episode 1 Playable Stream
@@ -1910,3 +2195,579 @@ export async function diagnoseAnimeExtensionServer(params: {
     }),
   };
 }
+
+export interface SearchAnimeExtensionResultItem {
+  sourceId: string;
+  title: string;
+  href: string;
+  slug: string;
+  cover?: string | null;
+}
+
+export interface SearchAnimeExtensionResponse {
+  compatible: boolean;
+  reason?: string;
+  sourceLabel: string;
+  items: SearchAnimeExtensionResultItem[];
+}
+
+/**
+ * Searches ONLY the selected source/extension directly (never falling back to global AniList/Jikan)
+ * and surfaces explicit compatibility failures for SPA/Turnstile/anti-bot/metadata-only hosts.
+ */
+export async function searchAnimeExtensionEntriesServer(params: {
+  sourceId: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  sourcePkg?: string;
+  query: string;
+}): Promise<SearchAnimeExtensionResponse> {
+  const sourceLabel = params.sourceName?.trim() || params.sourceId || 'Extension';
+  const query = params.query.trim();
+
+  if (
+    isMetadataOnlyCatalogHost(
+      params.sourceBaseUrl,
+      params.sourceName,
+      params.sourcePkg,
+      params.sourceId,
+    )
+  ) {
+    return {
+      compatible: false,
+      reason: `${sourceLabel} is a metadata/tracking catalog and does not host searchable video streams.`,
+      sourceLabel,
+      items: [],
+    };
+  }
+
+  const hostPlan = resolveProviderHostPlan({
+    sourceId: params.sourceId,
+    sourceName: params.sourceName,
+    sourceBaseUrl: params.sourceBaseUrl,
+  });
+
+  if (hostPlan.mode === 'missing-host' || hostPlan.hosts.length === 0) {
+    return {
+      compatible: false,
+      reason: `Extension "${hostPlan.sourceLabel}" does not have a valid HTTP base URL configured.`,
+      sourceLabel: hostPlan.sourceLabel,
+      items: [],
+    };
+  }
+
+  if (!query) {
+    return {
+      compatible: true,
+      sourceLabel: hostPlan.sourceLabel,
+      items: [],
+    };
+  }
+
+  let compatibilityIssue: string | null = null;
+  let lastNetworkError: string | null = null;
+  let sawValidHtmlSearchPage = false;
+  const collected = new Map<string, GogoSearchCandidate>();
+
+  for (const host of hostPlan.hosts) {
+    if (hostPlan.mode === 'inbuilt') {
+      try {
+        const res = await fetchText(
+          `${host}/search.html?keyword=${encodeURIComponent(query)}`,
+          { Referer: `${host}/` },
+          7000,
+        );
+        const issue = detectExtensionWebCompatibilityIssue({
+          status: res.status,
+          html: res.text,
+          sourceLabel: hostPlan.sourceLabel,
+          host,
+        });
+        if (issue) {
+          compatibilityIssue = issue;
+          continue;
+        }
+        if (res.ok) {
+          sawValidHtmlSearchPage = true;
+          for (const item of parseGogoSearchHtml(res.text)) {
+            if (!collected.has(item.href)) collected.set(item.href, item);
+          }
+          if (collected.size > 0) break;
+        }
+      } catch (err) {
+        lastNetworkError = err instanceof Error ? err.message : String(err);
+      }
+      continue;
+    }
+
+    if (hostPlan.mode === 'hianime') {
+      try {
+        const res = await fetchText(
+          `${host}/search?keyword=${encodeURIComponent(query)}`,
+          { Referer: `${host}/` },
+          7000,
+        );
+        const parsed = res.ok ? parseGenericSearchHtml(res.text, res.url || host) : [];
+        const issue = detectExtensionWebCompatibilityIssue({
+          status: res.status,
+          html: res.text,
+          sourceLabel: hostPlan.sourceLabel,
+          host,
+          parsedCandidatesCount: parsed.length,
+        });
+        if (issue) {
+          compatibilityIssue = issue;
+          continue;
+        }
+        if (res.ok) {
+          sawValidHtmlSearchPage = true;
+          for (const item of parsed) {
+            if (!collected.has(item.href)) collected.set(item.href, item);
+          }
+          if (collected.size > 0) break;
+        } else {
+          lastNetworkError = `HTTP ${res.status}`;
+        }
+      } catch (err) {
+        lastNetworkError = err instanceof Error ? err.message : String(err);
+      }
+      continue;
+    }
+
+    if (isGotakuHost(host)) {
+      try {
+        const gotakuRes = await searchGotakuPublicCatalog(host, query);
+        if (gotakuRes.ok) {
+          sawValidHtmlSearchPage = true;
+          for (const item of gotakuRes.candidates) {
+            if (!collected.has(item.href)) collected.set(item.href, item);
+          }
+          break;
+        }
+        if (gotakuRes.rawText) {
+          const issue = detectExtensionWebCompatibilityIssue({
+            status: gotakuRes.status || 200,
+            html: gotakuRes.rawText,
+            sourceLabel: hostPlan.sourceLabel,
+            host,
+            parsedCandidatesCount: 0,
+          });
+          if (issue) {
+            compatibilityIssue = compatibilityIssue || issue;
+            continue;
+          }
+        }
+      } catch (err) {
+        lastNetworkError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    // custom-extension mode
+    const searchEndpoints = [
+      `${host}/?s=${encodeURIComponent(query)}`,
+      `${host}/search.html?keyword=${encodeURIComponent(query)}`,
+      `${host}/search?keyword=${encodeURIComponent(query)}`,
+      `${host}/search?q=${encodeURIComponent(query)}`,
+      `${host}/search/${encodeURIComponent(query)}/`,
+    ];
+
+    for (const endpoint of searchEndpoints) {
+      try {
+        const res = await fetchText(endpoint, { Referer: `${host}/` }, 6500);
+        const gogoItems = res.ok ? parseGogoSearchHtml(res.text) : [];
+        const genericItems = res.ok ? parseGenericSearchHtml(res.text, res.url || host) : [];
+        const merged = [...gogoItems, ...genericItems];
+
+        const issue = detectExtensionWebCompatibilityIssue({
+          status: res.status,
+          html: res.text,
+          sourceLabel: hostPlan.sourceLabel,
+          host,
+          parsedCandidatesCount: merged.length,
+        });
+        if (issue) {
+          compatibilityIssue = compatibilityIssue || issue;
+          // If the host returned an SPA/anti-bot shell, still let WP REST be checked below,
+          // but do not mark sawValidHtmlSearchPage as true.
+          break;
+        }
+
+        if (res.ok) {
+          sawValidHtmlSearchPage = true;
+          for (const item of merged) {
+            if (!collected.has(item.href)) collected.set(item.href, item);
+          }
+          if (merged.length > 0) break;
+        } else {
+          lastNetworkError = `HTTP ${res.status}`;
+        }
+      } catch (err) {
+        lastNetworkError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (collected.size === 0) {
+      try {
+        const wpRes = await fetchText(
+          `${host}/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=12`,
+          { Referer: `${host}/`, Accept: 'application/json' },
+          5500,
+        );
+        if (wpRes.ok) {
+          const wpJson = JSON.parse(wpRes.text) as Array<{ url?: string; title?: string }>;
+          if (Array.isArray(wpJson)) {
+            sawValidHtmlSearchPage = true;
+            for (const row of wpJson) {
+              if (!row?.url || !row?.title) continue;
+              try {
+                const u = new URL(row.url);
+                const href = `${u.pathname}${u.search}`;
+                if (!collected.has(href)) {
+                  collected.set(href, { href, title: row.title });
+                }
+              } catch {
+                // Skip invalid URL
+              }
+            }
+          }
+        }
+      } catch {
+        // WP REST unavailable on this host
+      }
+    }
+
+    if (collected.size > 0) break;
+  }
+
+  const rankedMatches = rankExtensionSearchCandidates(
+    Array.from(collected.values()),
+    query,
+  );
+
+  if (rankedMatches.length === 0 && !sawValidHtmlSearchPage) {
+    return {
+      compatible: false,
+      reason:
+        compatibilityIssue ||
+        `Unable to search ${hostPlan.sourceLabel}${lastNetworkError ? ` (${lastNetworkError})` : ''}. This source may require an external native/JS runtime not supported by the web adapter.`,
+      sourceLabel: hostPlan.sourceLabel,
+      items: [],
+    };
+  }
+
+  return {
+    compatible: true,
+    sourceLabel: hostPlan.sourceLabel,
+    items: rankedMatches.slice(0, 15).map((cand) => ({
+      sourceId: params.sourceId,
+      title: cand.title,
+      href: cand.href,
+      slug: extractSlugFromGogoHref(cand.href),
+      cover: cand.cover ?? null,
+    })),
+  };
+}
+
+const resolvedExtensionEpisodesCache = new Map<
+  string,
+  { expiresAt: number; payload: ExtensionEpisodesResponse }
+>();
+
+/**
+ * Fetches the episode list belonging directly to the selected external anime entry
+ * on the selected source without falling back to global AniList/Jikan/AniZip/Kitsu metadata
+ * or generating fake episode placeholders.
+ */
+export async function resolveAnimeExtensionEpisodesServer(params: {
+  sourceId: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  sourcePkg?: string;
+  selectedSourceEntry: SelectedSourceEntryInput;
+  bypassCache?: boolean;
+}): Promise<ExtensionEpisodesResponse> {
+  const sourceLabel = params.sourceName?.trim() || params.sourceId || 'Extension';
+  const entry = params.selectedSourceEntry;
+
+  if (
+    !entry?.href ||
+    (entry.sourceId && entry.sourceId.trim() !== params.sourceId.trim())
+  ) {
+    return {
+      compatible: false,
+      reason: `No valid ${sourceLabel} anime entry is selected for episode loading.`,
+      sourceLabel,
+      episodes: [],
+    };
+  }
+
+  if (
+    isMetadataOnlyCatalogHost(
+      params.sourceBaseUrl,
+      params.sourceName,
+      params.sourcePkg,
+      params.sourceId,
+    )
+  ) {
+    return {
+      compatible: false,
+      reason: `${sourceLabel} is a metadata/tracking catalog and does not provide playable source episodes.`,
+      sourceLabel,
+      episodes: [],
+    };
+  }
+
+  const hostPlan = resolveProviderHostPlan({
+    sourceId: params.sourceId,
+    sourceName: params.sourceName,
+    sourceBaseUrl: params.sourceBaseUrl,
+  });
+
+  if (hostPlan.mode === 'missing-host' || hostPlan.hosts.length === 0) {
+    return {
+      compatible: false,
+      reason: `Extension "${hostPlan.sourceLabel}" does not have a valid HTTP base URL configured.`,
+      sourceLabel: hostPlan.sourceLabel,
+      episodes: [],
+    };
+  }
+
+  const slug = entry.slug?.trim() || extractSlugFromGogoHref(entry.href);
+  const cacheKey = JSON.stringify({
+    sourceId: params.sourceId,
+    sourceBaseUrl: (params.sourceBaseUrl || '').replace(/\/+$/, ''),
+    href: entry.href,
+    slug,
+  });
+
+  if (!params.bypassCache) {
+    const cached = resolvedExtensionEpisodesCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.payload;
+    }
+  }
+
+  let compatibilityIssue: string | null = null;
+  let lastNetworkError: string | null = null;
+
+  for (const host of hostPlan.hosts) {
+    if (isGotakuHost(host)) {
+      const epProbe = await probeGotakuEpisodesSupport(host, hostPlan.sourceLabel, entry.href);
+      if (!epProbe.supported) {
+        return {
+          compatible: false,
+          reason: epProbe.reason,
+          sourceLabel: hostPlan.sourceLabel,
+          episodes: [],
+        };
+      }
+      const mapped: UnifiedEpisode[] = epProbe.episodes.map((ep, idx) => ({
+        id: `${params.sourceId}:${ep.sourceEpisodeId}:${idx}`,
+        number: ep.number,
+        title: ep.title,
+        externalUrl: normalizeHttpUrl(ep.episodeUrl, host) || ep.episodeUrl,
+        sourceId: params.sourceId,
+        sourceEpisodeId: ep.sourceEpisodeId,
+        episodeUrl: ep.episodeUrl,
+        sourceAnimeHref: entry.href,
+        sourceAnimeSlug: slug,
+      }));
+      const payload: ExtensionEpisodesResponse = {
+        compatible: true,
+        sourceLabel: hostPlan.sourceLabel,
+        episodes: mapped,
+      };
+      resolvedExtensionEpisodesCache.set(cacheKey, {
+        expiresAt: Date.now() + CACHE_TTL_MS,
+        payload,
+      });
+      return payload;
+    }
+
+    const animeNumericId = entry.href.match(/-(\d+)(?:\?|$|\/)/)?.[1] || null;
+
+    if ((hostPlan.mode === 'hianime' || animeNumericId) && animeNumericId) {
+      try {
+        const seriesPageUrl = normalizeHttpUrl(entry.href, host) || `${host}${entry.href}`;
+        const epListRes = await fetchText(
+          `${host}/ajax/v2/episode/list/${animeNumericId}`,
+          {
+            Referer: seriesPageUrl,
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          7500,
+        );
+        const issue = detectExtensionWebCompatibilityIssue({
+          status: epListRes.status,
+          html: epListRes.text,
+          sourceLabel: hostPlan.sourceLabel,
+          host,
+        });
+        if (issue) {
+          compatibilityIssue = issue;
+          if (hostPlan.mode === 'hianime') continue;
+        } else if (epListRes.ok) {
+          let epListHtml = epListRes.text;
+          try {
+            const parsedJson = JSON.parse(epListRes.text) as { html?: string };
+            if (typeof parsedJson?.html === 'string') epListHtml = parsedJson.html;
+          } catch {
+            // HTML response directly
+          }
+          const parsedEpisodes = parseSourceEpisodeListHtml(epListHtml, host, {
+            animeHref: entry.href,
+            animeSlug: slug,
+          });
+          if (parsedEpisodes.length > 0) {
+            const seenIds = new Set<string>();
+            const mapped: UnifiedEpisode[] = parsedEpisodes.map((ep, idx) => {
+              let id = `${params.sourceId}:${ep.sourceEpisodeId}`;
+              if (seenIds.has(id)) id = `${id}:${idx}`;
+              seenIds.add(id);
+              return {
+                id,
+                number: ep.number,
+                title: ep.title,
+                isFiller: ep.isFiller,
+                externalUrl: normalizeHttpUrl(ep.episodeUrl, host) || ep.episodeUrl,
+                sourceId: params.sourceId,
+                sourceEpisodeId: ep.sourceEpisodeId,
+                episodeUrl: ep.episodeUrl,
+                sourceAnimeHref: entry.href,
+                sourceAnimeSlug: slug,
+              };
+            });
+            const payload: ExtensionEpisodesResponse = {
+              compatible: true,
+              sourceLabel: hostPlan.sourceLabel,
+              episodes: mapped,
+            };
+            resolvedExtensionEpisodesCache.set(cacheKey, {
+              expiresAt: Date.now() + CACHE_TTL_MS,
+              payload,
+            });
+            return payload;
+          }
+        } else {
+          lastNetworkError = `HTTP ${epListRes.status}`;
+        }
+      } catch (err) {
+        lastNetworkError = err instanceof Error ? err.message : String(err);
+      }
+
+      if (hostPlan.mode === 'hianime') {
+        continue;
+      }
+    }
+
+    // Standard HTML series page inspection
+    const seriesUrls = Array.from(
+      new Set(
+        [
+          normalizeHttpUrl(entry.href, host),
+          slug ? `${host}/category/${slug}` : null,
+          slug ? `${host}/${slug}` : null,
+        ].filter((u): u is string => Boolean(u)),
+      ),
+    );
+
+    for (const seriesUrl of seriesUrls) {
+      try {
+        const res = await fetchText(seriesUrl, { Referer: `${host}/` }, 7500);
+        const resolvedUrl = res.url || seriesUrl;
+        let parsedEpisodes = res.ok
+          ? parseSourceEpisodeListHtml(res.text, resolvedUrl, {
+              animeHref: entry.href,
+              animeSlug: slug,
+            })
+          : [];
+
+        const issue = detectExtensionWebCompatibilityIssue({
+          status: res.status,
+          html: res.text,
+          sourceLabel: hostPlan.sourceLabel,
+          host,
+          parsedCandidatesCount: parsedEpisodes.length,
+        });
+        if (issue) {
+          compatibilityIssue = issue;
+          break;
+        }
+
+        if (!res.ok) {
+          lastNetworkError = `HTTP ${res.status}`;
+          continue;
+        }
+
+        // Support GogoAnime AJAX episode list container if inline anchors are absent
+        if (parsedEpisodes.length === 0) {
+          const movieId =
+            res.text.match(/id=["']movie_id["'][^>]*value=["']([^"']+)["']/i)?.[1] ||
+            res.text.match(/value=["']([^"']+)["'][^>]*id=["']movie_id["']/i)?.[1];
+          if (movieId) {
+            const ajaxRes = await fetchText(
+              `${host}/ajax/load-list-episode?ep_start=0&ep_end=10000&id=${encodeURIComponent(movieId)}`,
+              { Referer: resolvedUrl },
+              6500,
+            ).catch(() => null);
+            if (ajaxRes?.ok) {
+              parsedEpisodes = parseSourceEpisodeListHtml(ajaxRes.text, host, {
+                animeHref: entry.href,
+                animeSlug: slug,
+              });
+            }
+          }
+        }
+
+        if (parsedEpisodes.length > 0) {
+          const seenIds = new Set<string>();
+          const mapped: UnifiedEpisode[] = parsedEpisodes.map((ep, idx) => {
+            let id = `${params.sourceId}:${ep.sourceEpisodeId}`;
+            if (seenIds.has(id)) id = `${id}:${idx}`;
+            seenIds.add(id);
+            return {
+              id,
+              number: ep.number,
+              title: ep.title,
+              isFiller: ep.isFiller,
+              externalUrl: normalizeHttpUrl(ep.episodeUrl, host) || ep.episodeUrl,
+              sourceId: params.sourceId,
+              sourceEpisodeId: ep.sourceEpisodeId,
+              episodeUrl: ep.episodeUrl,
+              sourceAnimeHref: entry.href,
+              sourceAnimeSlug: slug,
+            };
+          });
+          const payload: ExtensionEpisodesResponse = {
+            compatible: true,
+            sourceLabel: hostPlan.sourceLabel,
+            episodes: mapped,
+          };
+          resolvedExtensionEpisodesCache.set(cacheKey, {
+            expiresAt: Date.now() + CACHE_TTL_MS,
+            payload,
+          });
+          return payload;
+        }
+      } catch (err) {
+        lastNetworkError = err instanceof Error ? err.message : String(err);
+      }
+    }
+  }
+
+  const displayTitle = entry.title?.trim() || slug || entry.href;
+  return {
+    compatible: false,
+    reason:
+      compatibilityIssue ||
+      (lastNetworkError
+        ? `Unable to load episodes for "${displayTitle}" from ${hostPlan.sourceLabel} (${lastNetworkError}).`
+        : `No episode list could be retrieved for "${displayTitle}" on ${hostPlan.sourceLabel}. This entry may be unavailable or require an unsupported player format.`),
+    sourceLabel: hostPlan.sourceLabel,
+    episodes: [],
+  };
+}
+
+

@@ -35,6 +35,7 @@ import { useApp, VideoQualityPref } from '../store/AppContext';
 import { usePip } from '../store/PipContext';
 import {
   getPreferredTitle,
+  MatchedSourceEntry,
   UnifiedEpisode,
   UnifiedMedia,
   VideoServer,
@@ -110,6 +111,7 @@ import {
   getEpisodeBadgeTransitionClass,
   getEpisodeChangeDirection,
 } from '../utils/detailsMotion';
+import { shouldUseExtensionEpisodesForSelection } from '../utils/streamResolverUtils';
 
 const ScreenRotateIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
@@ -156,6 +158,9 @@ interface InlineAnimePlayerProps {
   sourceBaseUrl?: string;
   sourceLang?: string;
   overrideTitle?: string;
+  selectedSourceEntry?: MatchedSourceEntry | null;
+  episodesLoading?: boolean;
+  episodesError?: string | null;
   playSignal?: number;
   initialTime?: number | null;
   initialResumePlaying?: boolean;
@@ -176,6 +181,9 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   sourceBaseUrl,
   sourceLang,
   overrideTitle,
+  selectedSourceEntry,
+  episodesLoading = false,
+  episodesError = null,
   playSignal = 0,
   initialTime = null,
   initialResumePlaying = false,
@@ -266,6 +274,33 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
   onStreamResolvedRef.current = onStreamResolved;
 
   useEffect(() => {
+    const waitingForMatchedExtensionEpisodes =
+      shouldUseExtensionEpisodesForSelection({
+        sourceId,
+        selectedSourceEntry,
+      }) && episodes.length === 0;
+
+    if (waitingForMatchedExtensionEpisodes) {
+      setStream(null);
+      onStreamResolvedRef.current?.(null);
+      setIsBuffering(false);
+      setAutoplayBlocked(false);
+      setMirrorIndex(0);
+      setHasVideoFrame(false);
+      setPlaying(false);
+      if (episodesLoading) {
+        setStreamLoading(true);
+        setStreamError(null);
+      } else {
+        setStreamLoading(false);
+        setStreamError(
+          episodesError ||
+            `No episodes are available for "${selectedSourceEntry?.title || 'this title'}" on ${sourceName || sourceId || 'this source'}.`,
+        );
+      }
+      return;
+    }
+
     const controller = new AbortController();
     const matchedServerForAudio =
       rawServers.find(
@@ -297,6 +332,7 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
       sourceLang,
       audioLanguage: state.playerPrefs.audioLanguage,
       overrideTitle,
+      selectedSourceEntry,
       bypassCache: streamRetryNonce > 0,
       signal: controller.signal,
     })
@@ -320,8 +356,16 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     media.id,
+    episodes.length,
+    episodesLoading,
+    episodesError,
     currentEpisode.id,
     currentEpisode.number,
+    currentEpisode.sourceId,
+    currentEpisode.sourceEpisodeId,
+    currentEpisode.episodeUrl,
+    currentEpisode.sourceAnimeHref,
+    currentEpisode.sourceAnimeSlug,
     selectedServer?.id,
     sourceId,
     sourceName,
@@ -329,6 +373,10 @@ export const InlineAnimePlayer: React.FC<InlineAnimePlayerProps> = ({
     sourceLang,
     state.playerPrefs.audioLanguage,
     overrideTitle,
+    selectedSourceEntry?.sourceId,
+    selectedSourceEntry?.href,
+    selectedSourceEntry?.slug,
+    selectedSourceEntry?.title,
     streamRetryNonce,
   ]);
 
