@@ -1666,6 +1666,8 @@ export function resolveChapterPages(media: UnifiedMedia, chapter: UnifiedChapter
   });
 }
 
+const inFlightClientDiagnostics = new Map<string, Promise<ExtensionDiagnosticReport>>();
+
 export async function diagnoseExtensionAsync(params: {
   source: SourceInfo;
   mediaType: 'ANIME' | 'MANGA' | 'NOVEL';
@@ -1673,31 +1675,58 @@ export async function diagnoseExtensionAsync(params: {
   query: string;
   signal?: AbortSignal;
 }): Promise<ExtensionDiagnosticReport> {
-  const response = await fetch('/api/extensions/diagnose', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: params.signal,
-    body: JSON.stringify({
-      sourceId: params.source.id,
-      sourceName: params.source.name,
-      sourceType: params.source.type,
-      sourceBaseUrl: params.source.baseUrl,
-      sourceLang: params.source.lang,
-      sourcePkg: params.source.pkg,
-      sourceMediaTypes: params.source.mediaTypes,
-      mediaType: params.mediaType,
-      mode: params.mode,
-      query: params.query.trim() || 'Naruto',
-    }),
-  });
+  const cleanQuery = params.query.trim() || 'Naruto';
+  const dedupeKey = JSON.stringify([
+    params.source.id,
+    (params.source.baseUrl || '').trim().replace(/\/+$/, ''),
+    params.mediaType,
+    params.mode,
+    cleanQuery.toLowerCase(),
+  ]);
 
-  const payload = (await response.json().catch(() => null)) as
-    | (ExtensionDiagnosticReport & { message?: string })
-    | null;
-  if (!response.ok || !payload?.capabilities) {
-    throw new Error(payload?.message || `Diagnostics failed (HTTP ${response.status}).`);
+  if (!params.signal) {
+    const existing = inFlightClientDiagnostics.get(dedupeKey);
+    if (existing) {
+      return existing;
+    }
   }
-  return payload;
+
+  const exec = (async () => {
+    const response = await fetch('/api/extensions/diagnose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: params.signal,
+      body: JSON.stringify({
+        sourceId: params.source.id,
+        sourceName: params.source.name,
+        sourceType: params.source.type,
+        sourceBaseUrl: params.source.baseUrl,
+        sourceLang: params.source.lang,
+        sourcePkg: params.source.pkg,
+        sourceMediaTypes: params.source.mediaTypes,
+        mediaType: params.mediaType,
+        mode: params.mode,
+        query: cleanQuery,
+      }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | (ExtensionDiagnosticReport & { message?: string })
+      | null;
+    if (!response.ok || !payload?.capabilities) {
+      throw new Error(payload?.message || `Diagnostics failed (HTTP ${response.status}).`);
+    }
+    return payload;
+  })();
+
+  if (params.signal) {
+    return exec;
+  }
+
+  inFlightClientDiagnostics.set(dedupeKey, exec);
+  return exec.finally(() => {
+    inFlightClientDiagnostics.delete(dedupeKey);
+  });
 }
 
 export function getMediaTypeCategory(type: MediaType): 'watching' | 'reading' {

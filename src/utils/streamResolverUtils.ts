@@ -543,11 +543,14 @@ export function mapSubtitleTracksFromSources(
   return mapped;
 }
 
+export type AudioTrackEvidenceLevel = 'confirmed' | 'inferred';
+
 export interface ResolvedAvailableAudioOption {
   code: 'ja' | 'en' | 'hi' | 'es';
   shortLabel: string;
   label: string;
   serverCategory: 'sub' | 'dub';
+  evidence?: AudioTrackEvidenceLevel;
 }
 
 export function detectAvailableAudiosFromSources(input: {
@@ -557,11 +560,18 @@ export function detectAvailableAudiosFromSources(input: {
   currentAudioLanguage?: string | null;
   hasDubProbe?: boolean;
   embedLangHints?: Array<string | undefined>;
+  explicitServerTypes?: Array<string | undefined>;
+  sourceLang?: string | null;
+  sourceName?: string | null;
+  sourceBaseUrl?: string | null;
 }): ResolvedAvailableAudioOption[] {
   const audios: ResolvedAvailableAudioOption[] = [];
   const pushAudio = (opt: ResolvedAvailableAudioOption) => {
-    if (!audios.some((a) => a.code === opt.code)) {
+    const existing = audios.find((a) => a.code === opt.code);
+    if (!existing) {
       audios.push(opt);
+    } else if (opt.evidence === 'confirmed' && existing.evidence !== 'confirmed') {
+      existing.evidence = 'confirmed';
     }
   };
 
@@ -586,77 +596,154 @@ export function detectAvailableAudiosFromSources(input: {
     });
   };
 
-  let hasSubCandidate = input.currentCategory === 'sub' || input.currentAudioLanguage === 'ja';
-  let hasDubCandidate =
-    Boolean(input.hasDubProbe) ||
-    (input.currentCategory === 'dub' &&
-      (!input.currentAudioLanguage || input.currentAudioLanguage === 'en'));
-  let hasHindiCandidate = input.currentAudioLanguage === 'hi';
-  let hasSpanishCandidate = input.currentAudioLanguage === 'es';
+  let confirmedJa = false;
+  let confirmedEn = Boolean(input.hasDubProbe);
+  let confirmedHi = isSourceInherentLanguage(
+    input.sourceLang,
+    input.sourceName,
+    input.sourceBaseUrl,
+    'hi',
+  );
+  let confirmedEs = isSourceInherentLanguage(
+    input.sourceLang,
+    input.sourceName,
+    input.sourceBaseUrl,
+    'es',
+  );
 
-  if (Array.isArray(input.embedLangHints)) {
-    for (const hint of input.embedLangHints) {
-      if (hint === 'hi') hasHindiCandidate = true;
-      else if (hint === 'es') hasSpanishCandidate = true;
-      else if (hint === 'en') hasDubCandidate = true;
-      else if (hint === 'ja') hasSubCandidate = true;
+  if (Array.isArray(input.explicitServerTypes)) {
+    for (const rawType of input.explicitServerTypes) {
+      const serverType = String(rawType || '').trim().toLowerCase();
+      if (serverType === 'sub' || serverType === 'raw') confirmedJa = true;
+      else if (serverType === 'dub') confirmedEn = true;
     }
   }
 
+  if (Array.isArray(input.embedLangHints)) {
+    for (const hint of input.embedLangHints) {
+      if (hint === 'hi') confirmedHi = true;
+      else if (hint === 'es') confirmedEs = true;
+      else if (hint === 'en') confirmedEn = true;
+      else if (hint === 'ja') confirmedJa = true;
+    }
+  }
+
+  let sawNeutralSubCandidate = false;
   for (const cand of input.candidates) {
     const slug = extractSlugFromGogoHref(cand.href).toLowerCase();
     const rawTitle = String(cand.title || '').toLowerCase();
-    const isDub = /-dub(?:$|-)/i.test(slug) || /\(dub\)|\[dub\]/i.test(rawTitle);
+    const isDub = /-dub(?:$|-)/i.test(slug) || /\(dub\)|\[dub\]|\benglish\s+dub\b/i.test(rawTitle);
     const isHindi = /\bhindi\b/i.test(slug) || /\bhindi\b/i.test(rawTitle);
     const isSpanish = /\bspanish\b|\bespanol\b|\bcastellano\b|\blatino\b/i.test(`${slug} ${rawTitle}`);
+    const isExplicitSub =
+      /-sub(?:$|-)/i.test(slug) || /\(sub\)|\[sub\]|\bsubbed\b|\bjapanese\b/i.test(rawTitle);
 
     if (!isTitleCloseMatch(cand.title, slug)) continue;
 
     if (isHindi) {
-      hasHindiCandidate = true;
+      confirmedHi = true;
     } else if (isSpanish) {
-      hasSpanishCandidate = true;
+      confirmedEs = true;
     } else if (isDub) {
-      hasDubCandidate = true;
+      confirmedEn = true;
+    } else if (isExplicitSub) {
+      confirmedJa = true;
     } else {
-      hasSubCandidate = true;
+      sawNeutralSubCandidate = true;
     }
   }
 
-  if (hasSubCandidate || (!hasDubCandidate && !hasHindiCandidate && !hasSpanishCandidate)) {
+  if (confirmedJa) {
     pushAudio({
       code: 'ja',
       shortLabel: 'JP',
       label: 'Japanese (Original)',
       serverCategory: 'sub',
+      evidence: 'confirmed',
+    });
+  } else if (
+    sawNeutralSubCandidate &&
+    input.currentAudioLanguage !== 'hi' &&
+    input.currentAudioLanguage !== 'es'
+  ) {
+    pushAudio({
+      code: 'ja',
+      shortLabel: 'JP',
+      label: 'Japanese (Original)',
+      serverCategory: 'sub',
+      evidence: 'inferred',
     });
   }
 
-  if (hasDubCandidate) {
+  if (confirmedEn) {
     pushAudio({
       code: 'en',
       shortLabel: 'EN',
       label: 'English (Dub)',
       serverCategory: 'dub',
+      evidence: 'confirmed',
     });
   }
 
-  if (hasHindiCandidate) {
+  if (confirmedHi) {
     pushAudio({
       code: 'hi',
       shortLabel: 'HI',
       label: 'Hindi (Dub)',
       serverCategory: 'dub',
+      evidence: 'confirmed',
     });
   }
 
-  if (hasSpanishCandidate) {
+  if (confirmedEs) {
     pushAudio({
       code: 'es',
       shortLabel: 'ES',
       label: 'Spanish (Dub)',
       serverCategory: 'dub',
+      evidence: 'confirmed',
     });
+  }
+
+  // Runtime fallback options when no candidate/explicit audio track matched:
+  // marked strictly as 'inferred' so diagnostics never confuse assumptions for confirmed evidence.
+  if (audios.length === 0) {
+    if (
+      input.currentCategory === 'dub' &&
+      (!input.currentAudioLanguage || input.currentAudioLanguage === 'en')
+    ) {
+      pushAudio({
+        code: 'en',
+        shortLabel: 'EN',
+        label: 'English (Dub)',
+        serverCategory: 'dub',
+        evidence: 'inferred',
+      });
+    } else if (input.currentAudioLanguage === 'hi') {
+      pushAudio({
+        code: 'hi',
+        shortLabel: 'HI',
+        label: 'Hindi (Dub)',
+        serverCategory: 'dub',
+        evidence: 'inferred',
+      });
+    } else if (input.currentAudioLanguage === 'es') {
+      pushAudio({
+        code: 'es',
+        shortLabel: 'ES',
+        label: 'Spanish (Dub)',
+        serverCategory: 'dub',
+        evidence: 'inferred',
+      });
+    } else if (input.currentCategory === 'sub') {
+      pushAudio({
+        code: 'ja',
+        shortLabel: 'JP',
+        label: 'Japanese (Original)',
+        serverCategory: 'sub',
+        evidence: 'inferred',
+      });
+    }
   }
 
   return audios;

@@ -940,20 +940,26 @@ async function runHtmlSearchAcrossHosts<TPayload>(params: {
           5500,
         );
         if (wpRes.ok) {
-          const wpJson = JSON.parse(wpRes.text) as Array<{ url?: string; title?: string }>;
-          if (Array.isArray(wpJson)) {
-            sawValidHtmlSearchPage = true;
-            for (const row of wpJson) {
-              if (!row?.url || !row?.title) continue;
-              try {
-                const u = new URL(row.url);
-                const href = `${u.pathname}${u.search}`;
-                if (!collected.has(href)) {
-                  collected.set(href, { href, title: row.title });
+          try {
+            const wpJson = JSON.parse(wpRes.text) as Array<{ url?: string; title?: string }>;
+            if (Array.isArray(wpJson)) {
+              sawValidHtmlSearchPage = true;
+              for (const row of wpJson) {
+                if (!row?.url || !row?.title) continue;
+                try {
+                  const u = new URL(row.url);
+                  const href = `${u.pathname}${u.search}`;
+                  if (!collected.has(href)) {
+                    collected.set(href, { href, title: row.title });
+                  }
+                } catch {
+                  // Skip invalid URL
                 }
-              } catch {
-                // Skip invalid URL
               }
+            }
+          } catch {
+            if (!lastNetworkError) {
+              lastNetworkError = 'Malformed JSON from search endpoint';
             }
           }
         }
@@ -1027,16 +1033,23 @@ async function loadHtmlSeriesEpisodesAcrossHosts<TPayload>(params: {
           if (strictHiAnimeOnly) continue;
         } else if (epListRes.ok) {
           let epListHtml = epListRes.text;
-          try {
-            const parsedJson = JSON.parse(epListRes.text) as { html?: string };
-            if (typeof parsedJson?.html === 'string') epListHtml = parsedJson.html;
-          } catch {
-            // HTML directly
+          const trimmedBody = epListRes.text.trim();
+          let malformedJson = false;
+          if (trimmedBody.startsWith('{') || trimmedBody.startsWith('[')) {
+            try {
+              const parsedJson = JSON.parse(epListRes.text) as { html?: string };
+              if (typeof parsedJson?.html === 'string') epListHtml = parsedJson.html;
+            } catch {
+              malformedJson = true;
+              lastNetworkError = 'Malformed JSON response from episode list endpoint';
+            }
           }
-          const parsedEpisodes = parseSourceEpisodeListHtml(epListHtml, host, {
-            animeHref: href,
-            animeSlug: slug,
-          });
+          const parsedEpisodes = malformedJson
+            ? []
+            : parseSourceEpisodeListHtml(epListHtml, host, {
+                animeHref: href,
+                animeSlug: slug,
+              });
           if (parsedEpisodes.length > 0) {
             return {
               compatible: true,

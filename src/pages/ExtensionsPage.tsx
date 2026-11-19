@@ -49,11 +49,22 @@ import {
 } from '../utils/extensionsManager';
 import { diagnoseExtensionAsync } from '../services/sourceEngine';
 import {
+  buildExtensionCompatibilitySnapshot,
+  classifyDiagnosticFailure,
+  DEFAULT_DIAGNOSTIC_PROBE_SCOPE,
   ExtensionDiagnosticReport,
   formatCapabilityBadgeText,
+  formatDiagnosticTimestamp,
+  loadPersistedExtensionDiagnostics,
+  savePersistedExtensionDiagnostic,
+  summarizeCompatibilityCounts,
 } from '../utils/extensionDiagnostics';
 import { getSourcePlayabilityStatus } from '../utils/sourcePicker';
 import { getBoundedStaggerDelay } from '../utils/appMotion';
+import {
+  ExtensionCompatibilityCardPanel,
+  ExtensionCompatibilitySummaryBar,
+} from '../components/extensions/ExtensionCompatibilityDashboard';
 import {
   EXT_FROSTED_ACTIVE_BUBBLE,
   EXT_FROSTED_ICON_BTN,
@@ -197,13 +208,18 @@ export const ExtensionsPage: React.FC = () => {
   const [repoError, setRepoError] = useState<string | null>(null);
   const [repoNotice, setRepoNotice] = useState<string | null>(null);
 
-  // Extension Testing State
+  // Extension Testing & Compatibility Dashboard State
   const [testMediaType, setTestMediaType] = useState<ExtensionMediaTab>('ANIME');
   const [testKind, setTestKind] = useState<TestKind>('basic');
   const [testQuery, setTestQuery] = useState('Chainsaw Man');
   const [selectedTestIds, setSelectedTestIds] = useState<string[]>([]);
   const [runningTests, setRunningTests] = useState(false);
   const [testResults, setTestResults] = useState<ExtensionTestResult[]>([]);
+  const [diagnosticsBySourceId, setDiagnosticsBySourceId] = useState<
+    Record<string, ExtensionDiagnosticReport>
+  >(() => loadPersistedExtensionDiagnostics());
+  const [runningFullSourceIds, setRunningFullSourceIds] = useState<Record<string, boolean>>({});
+  const [runningBatchDiagnostics, setRunningBatchDiagnostics] = useState(false);
 
   // Escape closes any open modal
   useEffect(() => {
@@ -256,6 +272,34 @@ export const ExtensionsPage: React.FC = () => {
   const testingCandidateSources = useMemo(
     () => allSources.filter((s) => matchesExtensionMediaTab(s, testMediaType)),
     [allSources, testMediaType],
+  );
+
+  const installedCompatibilityEntries = useMemo(
+    () =>
+      filteredInstalled.map((source) => ({
+        source,
+        snapshot: buildExtensionCompatibilitySnapshot(
+          source,
+          diagnosticsBySourceId[source.id],
+          mediaTab,
+        ),
+      })),
+    [filteredInstalled, diagnosticsBySourceId, mediaTab],
+  );
+
+  const playableInstalledEntries = useMemo(
+    () => installedCompatibilityEntries.filter((e) => !e.snapshot.isMetadataOnly),
+    [installedCompatibilityEntries],
+  );
+
+  const metadataOnlyInstalledEntries = useMemo(
+    () => installedCompatibilityEntries.filter((e) => e.snapshot.isMetadataOnly),
+    [installedCompatibilityEntries],
+  );
+
+  const compatibilityCounts = useMemo(
+    () => summarizeCompatibilityCounts(installedCompatibilityEntries.map((e) => e.snapshot)),
+    [installedCompatibilityEntries],
   );
 
   const visibleRepos = useMemo(
@@ -349,6 +393,70 @@ export const ExtensionsPage: React.FC = () => {
     }
   };
 
+  const runSingleFullDiagnostic = async (
+    source: SourceInfo,
+    overrideMediaTab?: ExtensionMediaTab,
+  ) => {
+    if (runningFullSourceIds[source.id]) return;
+    const targetMedia = overrideMediaTab ?? mediaTab;
+    setRunningFullSourceIds((prev) => ({ ...prev, [source.id]: true }));
+    const startedAt = performance.now();
+    try {
+      const report = await diagnoseExtensionAsync({
+        source,
+        mediaType: targetMedia,
+        mode: 'full',
+        query: 'Naruto',
+      });
+      const enriched: ExtensionDiagnosticReport = {
+        ...report,
+        mode: report.mode || 'full',
+        testedAt: report.testedAt || new Date().toISOString(),
+      };
+      setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(enriched));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Full diagnostic execution failed.';
+      const failReport: ExtensionDiagnosticReport = {
+        sourceId: source.id,
+        sourceName: source.name,
+        status: 'fail',
+        durationMs: Math.round(performance.now() - startedAt),
+        testedAt: new Date().toISOString(),
+        mode: 'full',
+        probeScope: targetMedia === 'ANIME' ? DEFAULT_DIAGNOSTIC_PROBE_SCOPE : undefined,
+        failureKind: classifyDiagnosticFailure(msg),
+        summary: msg,
+        detail: msg,
+        capabilities: {
+          metadataSearch: 'unavailable',
+          episodeOrChapterListing: 'unavailable',
+          audioLanguage: targetMedia === 'ANIME' ? 'untested' : 'unsupported',
+          playbackOrReader: 'unavailable',
+          overallCompatibility: 'incompatible',
+        },
+      };
+      setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(failReport));
+    } finally {
+      setRunningFullSourceIds((prev) => {
+        const next = { ...prev };
+        delete next[source.id];
+        return next;
+      });
+    }
+  };
+
+  const runBatchFullDiagnostics = async () => {
+    if (runningBatchDiagnostics || playableInstalledEntries.length === 0) return;
+    setRunningBatchDiagnostics(true);
+    try {
+      for (const { source } of playableInstalledEntries) {
+        await runSingleFullDiagnostic(source, mediaTab);
+      }
+    } finally {
+      setRunningBatchDiagnostics(false);
+    }
+  };
+
   const runExtensionTests = async () => {
     if (runningTests || selectedTestIds.length === 0) return;
     setRunningTests(true);
@@ -369,22 +477,36 @@ export const ExtensionsPage: React.FC = () => {
           mode: testKind,
           query,
         });
-        nextResults.push(report);
+        const enriched: ExtensionDiagnosticReport = {
+          ...report,
+          mode: report.mode || testKind,
+          testedAt: report.testedAt || new Date().toISOString(),
+        };
+        nextResults.push(enriched);
+        setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(enriched));
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Test execution failed';
-        nextResults.push({
+        const failReport: ExtensionDiagnosticReport = {
           sourceId: source.id,
           sourceName: source.name,
           status: 'fail',
           durationMs: Math.round(performance.now() - startedAt),
+          testedAt: new Date().toISOString(),
+          mode: testKind,
+          probeScope: testMediaType === 'ANIME' && testKind === 'full' ? DEFAULT_DIAGNOSTIC_PROBE_SCOPE : undefined,
+          failureKind: classifyDiagnosticFailure(msg),
           summary: msg,
+          detail: msg,
           capabilities: {
             metadataSearch: testKind === 'ping' ? 'untested' : 'unavailable',
             episodeOrChapterListing: testKind === 'full' ? 'unavailable' : 'untested',
+            audioLanguage: testMediaType === 'ANIME' ? 'untested' : 'unsupported',
             playbackOrReader: testKind === 'full' ? 'unavailable' : 'untested',
             overallCompatibility: 'incompatible',
           },
-        });
+        };
+        nextResults.push(failReport);
+        setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(failReport));
       }
 
       setTestResults([...nextResults]);
@@ -678,6 +800,19 @@ export const ExtensionsPage: React.FC = () => {
                           testMediaType,
                         )}
                       </span>
+                      {testMediaType === 'ANIME' && (
+                        <span
+                          className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${capBadgeClass(
+                            res.capabilities.audioLanguage ?? 'untested',
+                          )}`}
+                        >
+                          {formatCapabilityBadgeText(
+                            'audio',
+                            res.capabilities.audioLanguage ?? 'untested',
+                            testMediaType,
+                          )}
+                        </span>
+                      )}
                       <span
                         className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${capBadgeClass(
                           res.capabilities.playbackOrReader,
@@ -690,6 +825,11 @@ export const ExtensionsPage: React.FC = () => {
                         )}
                       </span>
                     </div>
+                    {res.testedAt && (
+                      <div className="text-[10px] text-[var(--sx-on-surface-muted)]">
+                        Tested: {formatDiagnosticTimestamp(res.testedAt)}
+                      </div>
+                    )}
                     {res.sampleItems && res.sampleItems.length > 0 && (
                       <div className="pt-1 space-y-0.5 text-[11px] font-mono-tabular text-[var(--sx-on-surface-muted)]">
                         {res.sampleItems.map((line, i) => (
@@ -1282,9 +1422,18 @@ export const ExtensionsPage: React.FC = () => {
       {subTab === 'installed' ? (
         <section
           key={`tab-installed-${mediaTab}`}
-          className="sx-mode-enter space-y-2.5"
+          className="sx-mode-enter space-y-3"
           data-testid="extensions-installed-list"
         >
+          {filteredInstalled.length > 0 && (
+            <ExtensionCompatibilitySummaryBar
+              counts={compatibilityCounts}
+              runningBatch={runningBatchDiagnostics}
+              hasPlayableSources={playableInstalledEntries.length > 0}
+              onRunAllDiagnostics={() => void runBatchFullDiagnostics()}
+            />
+          )}
+
           <p className="text-[11px] italic text-[var(--sx-on-surface-muted)] px-1">
             Hold and drag any item to reorder
           </p>
@@ -1299,131 +1448,219 @@ export const ExtensionsPage: React.FC = () => {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
-              {filteredInstalled.map((src, idx) => {
-                const isActive = state.discoveryPrefs.activeSources.includes(src.id);
-                const isDragging = draggingId === src.id;
-                const isDragTarget = dragOverId === src.id && draggingId !== src.id;
-                const delay = getBoundedStaggerDelay(idx, 22, 10);
+            <div className="space-y-4">
+              {playableInstalledEntries.length > 0 && (
+                <div
+                  data-testid="extensions-playable-section"
+                  className="grid grid-cols-1 lg:grid-cols-2 gap-2.5"
+                >
+                  {playableInstalledEntries.map(({ source: src, snapshot }, idx) => {
+                    const isActive = state.discoveryPrefs.activeSources.includes(src.id);
+                    const isDragging = draggingId === src.id;
+                    const isDragTarget = dragOverId === src.id && draggingId !== src.id;
+                    const delay = getBoundedStaggerDelay(idx, 22, 10);
 
-                return (
-                  <div
-                    key={src.id}
-                    draggable
-                    data-testid={`extension-source-${src.id}`}
-                    style={delay > 0 ? { animationDelay: `${delay}ms` } : undefined}
-                    onDragStart={(e) => {
-                      setDraggingId(src.id);
-                      e.dataTransfer.effectAllowed = 'move';
-                      e.dataTransfer.setData('text/plain', src.id);
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      if (dragOverId !== src.id) setDragOverId(src.id);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      handleReorderDrop(src.id);
-                    }}
-                    onDragEnd={() => {
-                      setDraggingId(null);
-                      setDragOverId(null);
-                    }}
-                    className={`sx-card-animate p-3 rounded-2xl ${EXT_FROSTED_SURFACE} flex items-center justify-between gap-2.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--sx-primary)]/40 cursor-grab active:cursor-grabbing ${
-                      isDragTarget ? 'border-[var(--sx-primary)] ring-2 ring-[var(--sx-primary)]/30' : ''
-                    } ${isDragging ? 'opacity-50 scale-[0.985]' : ''} ${
-                      !isActive ? 'opacity-65' : ''
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <ExtensionAvatar source={src} mediaTab={mediaTab} />
+                    return (
+                      <div
+                        key={src.id}
+                        draggable
+                        data-testid={`extension-source-${src.id}`}
+                        style={delay > 0 ? { animationDelay: `${delay}ms` } : undefined}
+                        onDragStart={(e) => {
+                          setDraggingId(src.id);
+                          e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('text/plain', src.id);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          if (dragOverId !== src.id) setDragOverId(src.id);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          handleReorderDrop(src.id);
+                        }}
+                        onDragEnd={() => {
+                          setDraggingId(null);
+                          setDragOverId(null);
+                        }}
+                        className={`sx-card-animate p-3 rounded-2xl ${EXT_FROSTED_SURFACE} flex flex-col transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--sx-primary)]/40 cursor-grab active:cursor-grabbing ${
+                          isDragTarget ? 'border-[var(--sx-primary)] ring-2 ring-[var(--sx-primary)]/30' : ''
+                        } ${isDragging ? 'opacity-50 scale-[0.985]' : ''} ${
+                          !isActive ? 'opacity-65' : ''
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2.5">
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <ExtensionAvatar source={src} mediaTab={mediaTab} />
 
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="text-sm font-extrabold truncate">{src.name}</div>
-                        <div className="flex flex-wrap items-center gap-1">
-                          <span className="px-2 py-0.5 rounded-md bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-sm border border-white/30 dark:border-white/10 text-[var(--sx-on-surface)] text-[10px] font-extrabold uppercase tracking-wide">
-                            {formatExtensionLangChip(src.lang)}
-                          </span>
-                          <span className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/12 backdrop-blur-sm border border-[var(--sx-primary)]/20 text-[var(--sx-primary)] text-[10px] font-extrabold uppercase">
-                            {formatExtensionVersion(src.version)}
-                          </span>
-                          {src.isNsfw && (
-                            <span className="px-2 py-0.5 rounded-md bg-red-500/16 border border-red-500/30 text-red-600 dark:text-red-300 text-[10px] font-extrabold uppercase">
-                              18+
-                            </span>
-                          )}
-                          {(() => {
-                            const playability = getSourcePlayabilityStatus(src, mediaTab);
-                            if (playability === 'metadata-only') {
-                              return (
-                                <span
-                                  data-testid={`badge-metadata-only-${src.id}`}
-                                  className="px-2 py-0.5 rounded-md bg-orange-500/16 border border-orange-500/30 text-orange-700 dark:text-orange-300 text-[10px] font-extrabold uppercase"
-                                >
-                                  Metadata Only · Not Playable
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="text-sm font-extrabold truncate">{src.name}</div>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="px-2 py-0.5 rounded-md bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-sm border border-white/30 dark:border-white/10 text-[var(--sx-on-surface)] text-[10px] font-extrabold uppercase tracking-wide">
+                                  {formatExtensionLangChip(src.lang)}
                                 </span>
-                              );
-                            }
-                            if (playability === 'missing-host') {
-                              return (
-                                <span className="px-2 py-0.5 rounded-md bg-amber-500/16 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[10px] font-extrabold uppercase">
-                                  No Host URL
+                                <span className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/12 backdrop-blur-sm border border-[var(--sx-primary)]/20 text-[var(--sx-primary)] text-[10px] font-extrabold uppercase">
+                                  {formatExtensionVersion(src.version)}
                                 </span>
-                              );
-                            }
-                            if (playability === 'novel-unsupported') {
-                              return (
-                                <span className="px-2 py-0.5 rounded-md bg-slate-500/16 border border-slate-500/30 text-slate-600 dark:text-slate-300 text-[10px] font-extrabold uppercase">
-                                  Text Novel Unsupported
-                                </span>
-                              );
-                            }
-                            return null;
-                          })()}
-                          {!isActive && (
-                            <span className="px-2 py-0.5 rounded-md bg-amber-500/16 border border-amber-500/25 text-amber-700 dark:text-amber-300 text-[10px] font-extrabold uppercase">
-                              Disabled
-                            </span>
-                          )}
+                                {src.isNsfw && (
+                                  <span className="px-2 py-0.5 rounded-md bg-red-500/16 border border-red-500/30 text-red-600 dark:text-red-300 text-[10px] font-extrabold uppercase">
+                                    18+
+                                  </span>
+                                )}
+                                {(() => {
+                                  const playability = getSourcePlayabilityStatus(src, mediaTab);
+                                  if (playability === 'missing-host') {
+                                    return (
+                                      <span className="px-2 py-0.5 rounded-md bg-amber-500/16 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[10px] font-extrabold uppercase">
+                                        No Host URL
+                                      </span>
+                                    );
+                                  }
+                                  if (playability === 'novel-unsupported') {
+                                    return (
+                                      <span className="px-2 py-0.5 rounded-md bg-slate-500/16 border border-slate-500/30 text-slate-600 dark:text-slate-300 text-[10px] font-extrabold uppercase">
+                                        Text Novel Unsupported
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                                {!isActive && (
+                                  <span className="px-2 py-0.5 rounded-md bg-amber-500/16 border border-amber-500/25 text-amber-700 dark:text-amber-300 text-[10px] font-extrabold uppercase">
+                                    Disabled
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Right Action Buttons: Translucent Frosted Trash + Settings */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              data-testid={`uninstall-source-${src.id}`}
+                              onClick={() => uninstallExtension(src.id)}
+                              aria-label={
+                                src.type === 'inbuilt'
+                                  ? `Disable ${src.name}`
+                                  : `Uninstall ${src.name}`
+                              }
+                              title={
+                                src.type === 'inbuilt'
+                                  ? 'Disable inbuilt source'
+                                  : 'Uninstall extension'
+                              }
+                              className="w-9 h-9 rounded-xl bg-red-500/14 dark:bg-red-500/18 backdrop-blur-md border border-red-500/28 text-red-600 dark:text-red-400 hover:bg-red-500/24 flex items-center justify-center transition-all duration-200"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              type="button"
+                              data-testid={`toggle-source-${src.id}`}
+                              onClick={() => setInspectSource(src)}
+                              aria-label={`Configure ${src.name}`}
+                              title="Configure & Reorder"
+                              className={`w-9 h-9 rounded-xl ${EXT_FROSTED_ICON_BTN} text-[var(--sx-on-surface)] flex items-center justify-center`}
+                            >
+                              <Settings className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
+
+                        <ExtensionCompatibilityCardPanel
+                          snapshot={snapshot}
+                          isRunning={Boolean(runningFullSourceIds[src.id])}
+                          onRunFullDiagnostic={() => void runSingleFullDiagnostic(src)}
+                        />
                       </div>
-                    </div>
+                    );
+                  })}
+                </div>
+              )}
 
-                    {/* Right Action Buttons: Translucent Frosted Trash + Settings */}
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        type="button"
-                        data-testid={`uninstall-source-${src.id}`}
-                        onClick={() => uninstallExtension(src.id)}
-                        aria-label={
-                          src.type === 'inbuilt'
-                            ? `Disable ${src.name}`
-                            : `Uninstall ${src.name}`
-                        }
-                        title={
-                          src.type === 'inbuilt'
-                            ? 'Disable inbuilt source'
-                            : 'Uninstall extension'
-                        }
-                        className="w-9 h-9 rounded-xl bg-red-500/14 dark:bg-red-500/18 backdrop-blur-md border border-red-500/28 text-red-600 dark:text-red-400 hover:bg-red-500/24 flex items-center justify-center transition-all duration-200"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-
-                      <button
-                        type="button"
-                        data-testid={`toggle-source-${src.id}`}
-                        onClick={() => setInspectSource(src)}
-                        aria-label={`Configure ${src.name}`}
-                        title="Configure & Reorder"
-                        className={`w-9 h-9 rounded-xl ${EXT_FROSTED_ICON_BTN} text-[var(--sx-on-surface)] flex items-center justify-center`}
-                      >
-                        <Settings className="w-4 h-4" />
-                      </button>
-                    </div>
+              {metadataOnlyInstalledEntries.length > 0 && (
+                <div
+                  data-testid="extensions-metadata-only-section"
+                  className="space-y-2 pt-1"
+                >
+                  <div className="flex items-center justify-between gap-2 px-1">
+                    <h3 className="text-xs font-extrabold uppercase tracking-wider text-orange-700 dark:text-orange-300">
+                      Metadata-Only Catalog Sources (Not Playable)
+                    </h3>
+                    <span className="text-[10px] font-bold text-[var(--sx-on-surface-muted)]">
+                      Excluded from player pickers
+                    </span>
                   </div>
-                );
-              })}
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
+                    {metadataOnlyInstalledEntries.map(({ source: src, snapshot }, idx) => {
+                      const delay = getBoundedStaggerDelay(idx, 20, 8);
+                      return (
+                        <div
+                          key={src.id}
+                          data-testid={`extension-source-${src.id}`}
+                          style={delay > 0 ? { animationDelay: `${delay}ms` } : undefined}
+                          className={`sx-card-animate p-3 rounded-2xl ${EXT_FROSTED_SURFACE} flex flex-col border-orange-500/30`}
+                        >
+                          <div className="flex items-center justify-between gap-2.5">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <ExtensionAvatar source={src} mediaTab={mediaTab} />
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="text-sm font-extrabold truncate">{src.name}</div>
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <span className="px-2 py-0.5 rounded-md bg-[var(--sx-on-surface)]/8 dark:bg-white/10 backdrop-blur-sm border border-white/30 dark:border-white/10 text-[var(--sx-on-surface)] text-[10px] font-extrabold uppercase tracking-wide">
+                                    {formatExtensionLangChip(src.lang)}
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded-md bg-[var(--sx-primary)]/12 backdrop-blur-sm border border-[var(--sx-primary)]/20 text-[var(--sx-primary)] text-[10px] font-extrabold uppercase">
+                                    {formatExtensionVersion(src.version)}
+                                  </span>
+                                  <span
+                                    data-testid={`badge-metadata-only-${src.id}`}
+                                    className="px-2 py-0.5 rounded-md bg-orange-500/16 border border-orange-500/30 text-orange-700 dark:text-orange-300 text-[10px] font-extrabold uppercase"
+                                  >
+                                    Metadata Only · Not Playable
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                data-testid={`uninstall-source-${src.id}`}
+                                onClick={() => uninstallExtension(src.id)}
+                                aria-label={`Uninstall ${src.name}`}
+                                title="Uninstall extension"
+                                className="w-9 h-9 rounded-xl bg-red-500/14 dark:bg-red-500/18 backdrop-blur-md border border-red-500/28 text-red-600 dark:text-red-400 hover:bg-red-500/24 flex items-center justify-center transition-all duration-200"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                type="button"
+                                data-testid={`toggle-source-${src.id}`}
+                                onClick={() => setInspectSource(src)}
+                                aria-label={`Configure ${src.name}`}
+                                title="Configure & Reorder"
+                                className={`w-9 h-9 rounded-xl ${EXT_FROSTED_ICON_BTN} text-[var(--sx-on-surface)] flex items-center justify-center`}
+                              >
+                                <Settings className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <ExtensionCompatibilityCardPanel
+                            snapshot={snapshot}
+                            isRunning={Boolean(runningFullSourceIds[src.id])}
+                            onRunFullDiagnostic={() => void runSingleFullDiagnostic(src)}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </section>

@@ -1651,6 +1651,8 @@ async function startServer() {
         sourceName,
         status: 'unsupported',
         durationMs: 1,
+        testedAt: new Date().toISOString(),
+        mode,
         summary: 'Unsupported: Text Novel runtime not supported yet',
         detail: unsupportedReason,
         capabilities: buildCapabilitiesBreakdown({
@@ -1692,7 +1694,11 @@ async function startServer() {
               mode,
               query,
             });
-      res.json(report);
+      res.json({
+        ...report,
+        testedAt: report.testedAt || new Date().toISOString(),
+        mode: report.mode || mode,
+      });
     } catch (err) {
       res.status(500).json({
         message: err instanceof Error ? err.message : 'Extension diagnostics execution failed.',

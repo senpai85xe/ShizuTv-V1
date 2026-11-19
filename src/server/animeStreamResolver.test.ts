@@ -1134,10 +1134,358 @@ test('WordPressAnimeServerAdapter migrates AnimeStream and DooPlay Hindi extensi
       query: 'Naruto',
     });
     assert.equal(tsDiag.status, 'pass');
+    assert.equal(tsDiag.mode, 'full');
+    assert.ok(tsDiag.testedAt);
+    assert.equal(tsDiag.capabilities.audioLanguage, 'verified');
+    assert.ok((tsDiag.detectedAudioLanguages || []).includes('hi'));
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('diagnoseAnimeExtensionServer reports partial, fail, and unsupported honestly without false-positive Supported playback', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+    // 1. Authorized fixture with broken stream embed (search & episodes ok, playback fails)
+    if (url.startsWith('https://broken-stream.example/search.html?keyword=')) {
+      return new Response(
+        `<ul class="items"><li><p class="name"><a href="/category/bleach" title="Bleach">Bleach</a></p></li></ul>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://broken-stream.example/category/bleach') {
+      return new Response(`<input type="hidden" id="movie_id" value="77" />`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+    if (url.startsWith('https://broken-stream.example/ajax/load-list-episode')) {
+      return new Response(
+        `<ul id="episode_related"><li><a href="/bleach-episode-1"><div class="name">EP 1</div></a></li></ul>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://broken-stream.example/bleach-episode-1') {
+      return new Response(`<html><body>No embed mirrors here</body></html>`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+    if (url === 'https://broken-stream.example/') {
+      return new Response(`<html><body>OK</body></html>`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+
+    if (url.startsWith('https://down-host.example')) {
+      throw new Error('connect ECONNREFUSED');
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    // Ping-only returns partial and playback untested
+    const pingDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-broken',
+      sourceName: 'BrokenStream',
+      sourceBaseUrl: 'https://broken-stream.example',
+      mode: 'ping',
+      query: 'Bleach',
+    });
+    assert.equal(pingDiag.status, 'partial');
+    assert.equal(pingDiag.mode, 'ping');
+    assert.ok(pingDiag.testedAt);
+    assert.equal(pingDiag.capabilities.playbackOrReader, 'untested');
+    assert.equal(pingDiag.capabilities.audioLanguage, 'untested');
+
+    // Search + episodes ok, playback fails -> partial (never pass!)
+    const partialDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-broken',
+      sourceName: 'BrokenStream',
+      sourceBaseUrl: 'https://broken-stream.example',
+      mode: 'full',
+      query: 'Bleach',
+    });
+    assert.equal(partialDiag.status, 'partial');
+    assert.equal(partialDiag.capabilities.metadataSearch, 'verified');
+    assert.equal(partialDiag.capabilities.episodeOrChapterListing, 'verified');
+    assert.equal(partialDiag.capabilities.playbackOrReader, 'unavailable');
+    assert.equal(partialDiag.capabilities.audioLanguage, 'untested');
+
+    // Unreachable host -> fail
+    const unreachableDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-down',
+      sourceName: 'DownHost',
+      sourceBaseUrl: 'https://down-host.example',
+      mode: 'full',
+      query: 'Bleach',
+    });
+    assert.equal(unreachableDiag.status, 'fail');
+    assert.equal(unreachableDiag.capabilities.playbackOrReader, 'unavailable');
+
+    // Metadata-only catalog -> unsupported
+    const metaDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-anilist',
+      sourceName: 'AniList Catalog',
+      sourceBaseUrl: 'https://anilist.co',
+      mode: 'full',
+      query: 'Bleach',
+    });
+    assert.equal(metaDiag.status, 'unsupported');
+    assert.equal(metaDiag.capabilities.playbackOrReader, 'unsupported');
+    assert.equal(metaDiag.capabilities.audioLanguage, 'unsupported');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Batch 4: safe bounded retry recovers transient 502, skips retry on 401/429, deduplicates concurrent runs, and refuses unconfirmed audio claims', async () => {
+  const originalFetch = globalThis.fetch;
+  let transientAttempts = 0;
+  let persistent502Attempts = 0;
+  let authAttempts = 0;
+  let blockedAttempts = 0;
+  let dedupeSearchCalls = 0;
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+    // 1. Transient 502 on 1st attempt -> recovers on 2nd retry for untagged Gogo fixture
+    if (url.startsWith('https://transient-gogo.example/search.html?keyword=')) {
+      transientAttempts += 1;
+      if (transientAttempts === 1) {
+        return new Response('Bad Gateway', { status: 502 });
+      }
+      return new Response(
+        `<ul class="items"><li><p class="name"><a href="/category/bleach" title="Bleach">Bleach</a></p></li></ul>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://persistent-502.example/') {
+      persistent502Attempts += 1;
+      return new Response('Bad Gateway', { status: 502 });
+    }
+    if (url === 'https://transient-gogo.example/category/bleach') {
+      return new Response(`<input type="hidden" id="movie_id" value="88" />`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+    if (url.startsWith('https://transient-gogo.example/ajax/load-list-episode')) {
+      return new Response(
+        `<ul id="episode_related"><li><a href="/bleach-episode-1"><div class="name">EP 1</div></a></li></ul>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://transient-gogo.example/bleach-episode-1') {
+      return new Response(
+        `<div class="anime_muti_link"><ul><li><a data-video="https://transient-gogo.example/embed/ep1">Vidstreaming</a></li></ul></div>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://transient-gogo.example/embed/ep1') {
+      return new Response(`<video src="https://transient-gogo.example/cdn/ep1.m3u8"></video>`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+
+    // 2. Auth failure 401 -> MUST NOT retry
+    if (url === 'https://auth-locked.example/') {
+      authAttempts += 1;
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    // 3. Rate-limited / anti-bot 429 -> MUST NOT retry
+    if (url === 'https://ratelimited.example/') {
+      blockedAttempts += 1;
+      return new Response('Too Many Requests', { status: 429 });
+    }
+
+    // 4. Persistent Timeout -> classifies timeout
+    if (url.startsWith('https://slow-timeout.example')) {
+      const err = new Error('The operation was aborted due to timeout');
+      err.name = 'TimeoutError';
+      throw err;
+    }
+
+    // 5. Malformed JSON on HiAnime AJAX episode list
+    if (url.startsWith('https://malformed-hi.example/search?keyword=')) {
+      return new Response(
+        `<div class="film_list-wrap"><div class="flw-item"><div class="film-detail"><h3 class="film-name"><a href="/watch/naruto-123" title="Naruto">Naruto</a></h3></div></div></div>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://malformed-hi.example/watch/naruto-123') {
+      return new Response(`<div data-id="123"></div>`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+    if (url.startsWith('https://malformed-hi.example/ajax/v2/episode/list/123')) {
+      return new Response(`{"status": true, "html": "<corrupted`, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 6. Concurrent deduplication fixture
+    if (url.startsWith('https://dedupe-hi.example/search?keyword=')) {
+      dedupeSearchCalls += 1;
+      await new Promise((r) => setTimeout(r, 25));
+      return new Response(
+        `<div class="film_list-wrap"><div class="flw-item"><div class="film-detail"><h3 class="film-name"><a href="/watch/naruto-55" title="Naruto">Naruto</a></h3></div></div></div>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }
+    if (url === 'https://dedupe-hi.example/watch/naruto-55') {
+      return new Response(`<div data-id="55"></div>`, { status: 200, headers: { 'Content-Type': 'text/html' } });
+    }
+    if (url.startsWith('https://dedupe-hi.example/ajax/v2/episode/list/55')) {
+      return new Response(
+        JSON.stringify({ status: true, html: `<a class="ep-item" data-number="1" data-id="5501">1</a>` }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    if (url.startsWith('https://dedupe-hi.example/ajax/v2/episode/servers?episodeId=5501')) {
+      return new Response(
+        JSON.stringify({ status: true, html: `<div class="server-item" data-type="sub" data-id="901">HD-1</div>` }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    if (url.startsWith('https://dedupe-hi.example/ajax/v2/episode/sources?id=901')) {
+      return new Response(
+        JSON.stringify({ link: 'https://dedupe-hi.example/embed/901' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    if (url === 'https://dedupe-hi.example/embed/901') {
+      return new Response(`<video src="https://dedupe-hi.example/hls/master.m3u8"></video>`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    // 1. Transient 502 recovered (2 search calls: 1 retry in searchTitles + 1 in stream resolver = 3)
+    // and untagged Gogo leaves audio partial & unconfirmed
+    const recoveredDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-transient',
+      sourceName: 'TransientGogo',
+      sourceBaseUrl: 'https://transient-gogo.example',
+      mode: 'full',
+      query: 'Bleach',
+    });
+    assert.equal(transientAttempts, 3);
+    assert.equal(recoveredDiag.status, 'pass');
+    assert.equal(recoveredDiag.probeScope, 'Episode 1 default probe');
+    assert.deepEqual(recoveredDiag.confirmedAudioLanguages, []);
+    assert.deepEqual(recoveredDiag.inferredAudioLanguages, ['ja']);
+    assert.equal(recoveredDiag.capabilities.audioLanguage, 'partial');
+
+    // Persistent 502 stops strictly after 1 retry (2 attempts total)
+    const persistent502Diag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-p502',
+      sourceName: 'Persistent502',
+      sourceBaseUrl: 'https://persistent-502.example',
+      mode: 'ping',
+      query: 'Bleach',
+    });
+    assert.equal(persistent502Attempts, 2);
+    assert.equal(persistent502Diag.status, 'fail');
+    assert.equal(persistent502Diag.failureKind, 'provider_error');
+
+    // 2. Auth 401 never retries
+    const authDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-auth',
+      sourceName: 'AuthLocked',
+      sourceBaseUrl: 'https://auth-locked.example',
+      mode: 'ping',
+      query: 'Bleach',
+    });
+    assert.equal(authAttempts, 1);
+    assert.equal(authDiag.status, 'fail');
+    assert.equal(authDiag.failureKind, 'auth_required');
+
+    // 3. Anti-bot 429 never retries
+    const blockedDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-blocked',
+      sourceName: 'RateLimited',
+      sourceBaseUrl: 'https://ratelimited.example',
+      mode: 'ping',
+      query: 'Bleach',
+    });
+    assert.equal(blockedAttempts, 1);
+    assert.equal(blockedDiag.status, 'fail');
+    assert.equal(blockedDiag.failureKind, 'blocked_request');
+
+    // 4. Timeout classifies failureKind === 'timeout'
+    const timeoutDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-timeout',
+      sourceName: 'SlowTimeout',
+      sourceBaseUrl: 'https://slow-timeout.example',
+      mode: 'ping',
+      query: 'Bleach',
+    });
+    assert.equal(timeoutDiag.status, 'fail');
+    assert.equal(timeoutDiag.failureKind, 'timeout');
+
+    // 5. Malformed JSON surfaces malformed_response
+    const malformedDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-malformed',
+      sourceName: 'MalformedHi',
+      sourceBaseUrl: 'https://malformed-hi.example',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    assert.equal(malformedDiag.status, 'partial');
+    assert.equal(malformedDiag.failureKind, 'malformed_response');
+
+    // 6. Concurrent identical requests are deduplicated into 1 in-flight execution (exact shared result)
+    const [b1, b2] = await Promise.all([
+      diagnoseAnimeExtensionServer({
+        sourceId: 'ext-ay-dedupe',
+        sourceName: 'Kaido-Dedupe',
+        sourceBaseUrl: 'https://dedupe-hi.example',
+        mode: 'basic',
+        query: 'Naruto',
+      }),
+      diagnoseAnimeExtensionServer({
+        sourceId: 'ext-ay-dedupe',
+        sourceName: 'Kaido-Dedupe',
+        sourceBaseUrl: 'https://dedupe-hi.example',
+        mode: 'basic',
+        query: 'Naruto',
+      }),
+    ]);
+    assert.strictEqual(b1, b2);
+    assert.equal(dedupeSearchCalls, 1);
+
+    // 7. Full HiAnime fixture with explicit data-type="sub" confirms ['ja'] and verified audio
+    const fullHi = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-dedupe',
+      sourceName: 'Kaido-Dedupe',
+      sourceBaseUrl: 'https://dedupe-hi.example',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    assert.equal(fullHi.status, 'pass');
+    assert.deepEqual(fullHi.confirmedAudioLanguages, ['ja']);
+    assert.equal(fullHi.capabilities.audioLanguage, 'verified');
+    assert.equal(fullHi.probeScope, 'Episode 1 default probe');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 
 
 

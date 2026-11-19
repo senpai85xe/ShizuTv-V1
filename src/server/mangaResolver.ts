@@ -20,10 +20,18 @@ import {
 } from '../utils/streamResolverUtils.ts';
 import {
   buildCapabilitiesBreakdown,
+  classifyDiagnosticFailure,
+  type DiagnosticFailureKind,
   type ExtensionDiagnoseMode,
   type ExtensionDiagnosticReport,
   resolveDiagnosticOverallStatus,
 } from '../utils/extensionDiagnostics.ts';
+import {
+  classifyFetchException,
+  reliableFetchText,
+  safeJsonParse,
+  UpstreamFetchError,
+} from './networkReliability.ts';
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -102,38 +110,72 @@ const pagesCache = new Map<
 const CACHE_TTL_MS = 5 * 60_000;
 
 async function fetchJson<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
-  const res = await fetch(url, {
+  const res = await reliableFetchText(url, {
     headers: {
       'User-Agent': BROWSER_UA,
       Accept: 'application/json',
       ...headers,
     },
-    signal: AbortSignal.timeout(9000),
+    timeoutMs: 9000,
+    maxRetries: 1,
+    retryDelayMs: 60,
   });
   if (!res.ok) {
-    throw new Error(`Upstream returned HTTP ${res.status}`);
+    throw new UpstreamFetchError({
+      message: `Upstream returned HTTP ${res.status}`,
+      failureKind: res.failureKind || 'provider_error',
+      status: res.status,
+      url,
+      retryable: false,
+      attempts: res.attempts,
+    });
   }
-  return (await res.json()) as T;
+  const parsed = safeJsonParse<T>(res.text);
+  if (parsed.ok) {
+    return parsed.data;
+  }
+  const errDetail = 'error' in parsed ? parsed.error : 'Invalid JSON payload';
+  throw new UpstreamFetchError({
+    message: `Malformed JSON response from upstream (${errDetail})`,
+    failureKind: 'malformed_response',
+    status: res.status,
+    url,
+    retryable: false,
+    attempts: res.attempts,
+  });
 }
 
 async function fetchHtml(
   url: string,
   headers: Record<string, string> = {},
   init?: RequestInit,
-): Promise<{ ok: boolean; status: number; url: string; text: string }> {
-  const res = await fetch(url, {
-    ...init,
+): Promise<{
+  ok: boolean;
+  status: number;
+  url: string;
+  text: string;
+  failureKind?: DiagnosticFailureKind;
+}> {
+  const res = await reliableFetchText(url, {
+    method: init?.method,
+    body: typeof init?.body === 'string' ? init.body : undefined,
     headers: {
       'User-Agent': BROWSER_UA,
       Accept: 'text/html,application/xhtml+xml,application/json,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
       ...headers,
     },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(9000),
+    timeoutMs: 9000,
+    maxRetries: 1,
+    retryDelayMs: 60,
   });
-  const text = await res.text();
-  return { ok: res.ok, status: res.status, url: res.url || url, text };
+  return {
+    ok: res.ok,
+    status: res.status,
+    url: res.url,
+    text: res.text,
+    ...(res.failureKind ? { failureKind: res.failureKind } : {}),
+  };
 }
 
 async function resolveMangaDexChapters(
@@ -494,7 +536,44 @@ function looksBlockedChallenge(status: number, body: string): boolean {
   return /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(body);
 }
 
+const inFlightMangaDiagnostics = new Map<string, Promise<ExtensionDiagnosticReport>>();
+
 export async function diagnoseMangaExtensionServer(params: {
+  sourceId: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  sourcePkg?: string;
+  mode: ExtensionDiagnoseMode;
+  query: string;
+}): Promise<ExtensionDiagnosticReport> {
+  const query = params.query.trim() || 'Naruto';
+  const normalizedHost = (params.sourceBaseUrl || '').trim().replace(/\/+$/, '');
+  const dedupeKey = JSON.stringify([
+    'MANGA',
+    params.sourceId.trim(),
+    normalizedHost,
+    params.mode,
+    query.toLowerCase(),
+  ]);
+
+  const existing = inFlightMangaDiagnostics.get(dedupeKey);
+  if (existing) {
+    return existing;
+  }
+
+  const runPromise = runDiagnoseMangaExtensionServer({
+    ...params,
+    query,
+  }).finally(() => {
+    inFlightMangaDiagnostics.delete(dedupeKey);
+  });
+
+  inFlightMangaDiagnostics.set(dedupeKey, runPromise);
+  return runPromise;
+}
+
+async function runDiagnoseMangaExtensionServer(params: {
   sourceId: string;
   sourceName?: string;
   sourceBaseUrl?: string;
@@ -506,6 +585,7 @@ export async function diagnoseMangaExtensionServer(params: {
   const startedAt = Date.now();
   const sourceLabel = params.sourceName || params.sourceId;
   const query = params.query.trim() || 'Naruto';
+  const testedAt = () => new Date().toISOString();
 
   if (
     isMetadataOnlyCatalogHost(
@@ -521,6 +601,9 @@ export async function diagnoseMangaExtensionServer(params: {
       sourceName: sourceLabel,
       status: 'unsupported',
       durationMs: Date.now() - startedAt,
+      testedAt: testedAt(),
+      mode: params.mode,
+      failureKind: 'metadata_only',
       summary: 'Unsupported: Metadata-only catalog source',
       detail: unsupportedReason,
       capabilities: buildCapabilitiesBreakdown({
@@ -543,6 +626,9 @@ export async function diagnoseMangaExtensionServer(params: {
       sourceName: sourceLabel,
       status: 'unsupported',
       durationMs: Date.now() - startedAt,
+      testedAt: testedAt(),
+      mode: params.mode,
+      failureKind: 'missing_host',
       summary: 'Unsupported: Missing host URL',
       detail: unsupportedReason,
       capabilities: buildCapabilitiesBreakdown({
@@ -569,6 +655,9 @@ export async function diagnoseMangaExtensionServer(params: {
           sourceName: sourceLabel,
           status: 'unsupported',
           durationMs: Date.now() - startedAt,
+          testedAt: testedAt(),
+          mode: 'ping',
+          failureKind: 'blocked_request',
           summary: `Blocked by upstream protection (HTTP ${res.status})`,
           detail: unsupportedReason,
           capabilities: buildCapabilitiesBreakdown({
@@ -587,6 +676,9 @@ export async function diagnoseMangaExtensionServer(params: {
           sourceName: sourceLabel,
           status: 'fail',
           durationMs: Date.now() - startedAt,
+          testedAt: testedAt(),
+          mode: 'ping',
+          failureKind: res.failureKind || classifyDiagnosticFailure(`HTTP ${res.status}`, res.status),
           summary: `Host returned HTTP ${res.status}`,
           detail: `${target} did not return 2xx. Reader capability not tested in Ping mode.`,
           capabilities: buildCapabilitiesBreakdown({
@@ -603,6 +695,8 @@ export async function diagnoseMangaExtensionServer(params: {
         sourceName: sourceLabel,
         status: 'partial',
         durationMs: Date.now() - startedAt,
+        testedAt: testedAt(),
+        mode: 'ping',
         summary: `Host reachable (HTTP ${res.status}) · Reader not verified`,
         detail: `${target} responded cleanly. Run Full test to verify chapters and reader pages.`,
         capabilities: buildCapabilitiesBreakdown({
@@ -614,12 +708,16 @@ export async function diagnoseMangaExtensionServer(params: {
         }),
       };
     } catch (err) {
+      const classified = classifyFetchException(err);
       return {
         sourceId: params.sourceId,
         sourceName: sourceLabel,
         status: 'fail',
         durationMs: Date.now() - startedAt,
-        summary: err instanceof Error ? err.message : 'Host unreachable',
+        testedAt: testedAt(),
+        mode: 'ping',
+        failureKind: classified.failureKind,
+        summary: classified.message || 'Host unreachable',
         detail: `Failed to reach ${probeHost}`,
         capabilities: buildCapabilitiesBreakdown({
           mode: 'ping',
@@ -636,6 +734,8 @@ export async function diagnoseMangaExtensionServer(params: {
   let searchMatchedTitle: string | undefined;
   let searchMatchedCount = 0;
   let blockedReason: string | null = null;
+  let searchFailureKind: DiagnosticFailureKind | undefined;
+  let searchErrorDetail: string | undefined;
 
   if (plan.mode === 'mangadex') {
     try {
@@ -649,12 +749,17 @@ export async function diagnoseMangaExtensionServer(params: {
         searchMatchedCount = (searchJson.data || []).length;
       }
     } catch (err) {
+      const classified = classifyFetchException(err);
       return {
         sourceId: params.sourceId,
         sourceName: sourceLabel,
         status: 'fail',
         durationMs: Date.now() - startedAt,
-        summary: err instanceof Error ? err.message : 'MangaDex search failed',
+        testedAt: testedAt(),
+        mode: params.mode,
+        failureKind: classified.failureKind,
+        summary: classified.message || 'MangaDex search failed',
+        detail: classified.message,
         capabilities: buildCapabilitiesBreakdown({
           mode: params.mode,
           mediaTab: 'MANGA',
@@ -676,9 +781,14 @@ export async function diagnoseMangaExtensionServer(params: {
         const res = await fetchHtml(ep, { Referer: `${probeHost}/` });
         if (looksBlockedChallenge(res.status, res.text)) {
           blockedReason = `${sourceLabel} is protected by an anti-bot challenge (HTTP ${res.status}).`;
+          searchFailureKind = 'blocked_request';
           break;
         }
-        if (!res.ok) continue;
+        if (!res.ok) {
+          searchFailureKind = res.failureKind || classifyDiagnosticFailure(`HTTP ${res.status}`, res.status);
+          searchErrorDetail = `HTTP ${res.status}`;
+          continue;
+        }
         const parsed = parseMangaSearchHtml(res.text, res.url || probeHost);
         const viable = parsed.filter((c) => isViableTitleMatch(c, [query], 'MANGA'));
         if (viable.length > 0) {
@@ -686,8 +796,10 @@ export async function diagnoseMangaExtensionServer(params: {
           searchMatchedCount = viable.length;
           break;
         }
-      } catch {
-        // Try next search URL
+      } catch (err) {
+        const classified = classifyFetchException(err);
+        searchFailureKind = classified.failureKind;
+        searchErrorDetail = classified.message;
       }
     }
   }
@@ -698,6 +810,9 @@ export async function diagnoseMangaExtensionServer(params: {
       sourceName: sourceLabel,
       status: 'unsupported',
       durationMs: Date.now() - startedAt,
+      testedAt: testedAt(),
+      mode: params.mode,
+      failureKind: 'blocked_request',
       summary: 'Unsupported in Web Bridge: Upstream protection',
       detail: blockedReason,
       capabilities: buildCapabilitiesBreakdown({
@@ -724,12 +839,15 @@ export async function diagnoseMangaExtensionServer(params: {
         errorOccurred: !searchOk,
       }),
       durationMs: Date.now() - startedAt,
+      testedAt: testedAt(),
+      mode: 'basic',
+      ...(!searchOk ? { failureKind: searchFailureKind || 'provider_error' } : {}),
       summary: searchOk
         ? `Search matched ${searchMatchedCount} result${searchMatchedCount === 1 ? '' : 's'} · Top: ${searchMatchedTitle} (Pages untested)`
         : `No matching manga found on ${sourceLabel} for "${query}"`,
       detail: searchOk
         ? 'Site search succeeded on this source. Run Full test to verify chapters and reader pages.'
-        : 'Source site returned 0 viable manga matches.',
+        : searchErrorDetail || 'Source site returned 0 viable manga matches.',
       matchedTitle: searchMatchedTitle,
       capabilities: buildCapabilitiesBreakdown({
         mode: 'basic',
@@ -746,6 +864,7 @@ export async function diagnoseMangaExtensionServer(params: {
   let pagesVerified = false;
   let sampleItems: string[] = [];
   let detailMsg = '';
+  let fullFailureKind: DiagnosticFailureKind | undefined;
 
   try {
     const chResult = await resolveMangaChaptersServer({
@@ -787,7 +906,9 @@ export async function diagnoseMangaExtensionServer(params: {
         : `Loaded chapter list (${chResult.chapters.length} chapters) but Chapter ${firstCh.number} returned 0 pages.`;
     }
   } catch (err) {
-    detailMsg = err instanceof Error ? err.message : 'Chapter/page resolution failed.';
+    const classified = classifyFetchException(err);
+    detailMsg = classified.message || 'Chapter/page resolution failed.';
+    fullFailureKind = classified.failureKind;
   }
 
   const overall = resolveDiagnosticOverallStatus({
@@ -803,6 +924,11 @@ export async function diagnoseMangaExtensionServer(params: {
     sourceName: sourceLabel,
     status: overall,
     durationMs: Date.now() - startedAt,
+    testedAt: testedAt(),
+    mode: 'full',
+    ...(overall !== 'pass'
+      ? { failureKind: fullFailureKind || searchFailureKind || 'provider_error' }
+      : {}),
     summary:
       overall === 'pass'
         ? `Verified reader pages (${sampleItems.length > 0 ? sampleItems[0] : query})`
@@ -811,7 +937,7 @@ export async function diagnoseMangaExtensionServer(params: {
           : searchMatchedTitle
             ? `Matched "${searchMatchedTitle}", but chapters unavailable`
             : `No playable manga chapters found on ${sourceLabel}`,
-    detail: detailMsg || undefined,
+    detail: detailMsg || searchErrorDetail || undefined,
     matchedTitle: searchMatchedTitle,
     sampleItems,
     capabilities: buildCapabilitiesBreakdown({

@@ -31,10 +31,18 @@ import {
 import type { ExtensionEpisodesResponse } from '../types/media.ts';
 import {
   buildCapabilitiesBreakdown,
+  classifyDiagnosticFailure,
+  DEFAULT_DIAGNOSTIC_PROBE_SCOPE,
+  type DiagnosticFailureKind,
   type ExtensionDiagnoseMode,
   type ExtensionDiagnosticReport,
   resolveDiagnosticOverallStatus,
 } from '../utils/extensionDiagnostics.ts';
+import {
+  classifyFetchException,
+  reliableFetchText,
+  UpstreamFetchError,
+} from './networkReliability.ts';
 import {
   BaseServerAnimeExtensionAdapter,
   createServerAnimeExtensionAdapter,
@@ -173,19 +181,33 @@ async function fetchText(
   url: string,
   headers: Record<string, string> = {},
   timeoutMs = 8500,
-): Promise<{ status: number; ok: boolean; url: string; text: string }> {
-  const res = await fetch(url, {
+): Promise<{
+  status: number;
+  ok: boolean;
+  url: string;
+  text: string;
+  failureKind?: DiagnosticFailureKind;
+  attempts?: number;
+}> {
+  const res = await reliableFetchText(url, {
     headers: {
       'User-Agent': BROWSER_UA,
       Accept: 'text/html,application/xhtml+xml,application/json,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
       ...headers,
     },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(timeoutMs),
+    timeoutMs,
+    maxRetries: 1,
+    retryDelayMs: 60,
   });
-  const text = await res.text();
-  return { status: res.status, ok: res.ok, url: res.url || url, text };
+  return {
+    status: res.status,
+    ok: res.ok,
+    url: res.url,
+    text: res.text,
+    ...(res.failureKind ? { failureKind: res.failureKind } : {}),
+    attempts: res.attempts,
+  };
 }
 
 function normalizeHttpUrl(rawUrl: string, baseUrl: string): string | null {
@@ -969,6 +991,7 @@ function finalizePayload(input: {
   sourceBaseUrl?: string;
   fallbackQueryTitle: string;
   embedLangHints?: Array<string | undefined>;
+  explicitServerTypes?: Array<string | undefined>;
 }): ResolvedAnimeStreamPayload {
   const primary = input.resolvedMirrors[0];
   const isHls =
@@ -986,41 +1009,47 @@ function finalizePayload(input: {
     currentAudioLanguage: input.requestedAudioLang,
     hasDubProbe: input.hasDubProbe,
     embedLangHints: input.embedLangHints,
+    explicitServerTypes: input.explicitServerTypes,
+    sourceLang: input.sourceLang,
+    sourceName: input.sourceLabel,
+    sourceBaseUrl: input.sourceBaseUrl,
   });
 
   if (
-    (input.requestedAudioLang === 'hi' ||
-      isSourceInherentLanguage(
-        input.sourceLang,
-        input.sourceLabel,
-        input.sourceBaseUrl,
-        'hi',
-      )) &&
+    input.requestedAudioLang === 'hi' &&
     !availableAudios.some((a) => a.code === 'hi')
   ) {
+    const inherentHi = isSourceInherentLanguage(
+      input.sourceLang,
+      input.sourceLabel,
+      input.sourceBaseUrl,
+      'hi',
+    );
     availableAudios.push({
       code: 'hi',
       shortLabel: 'HI',
       label: 'Hindi (Dub)',
       serverCategory: 'dub',
+      evidence: inherentHi ? 'confirmed' : 'inferred',
     });
   }
 
   if (
-    (input.requestedAudioLang === 'es' ||
-      isSourceInherentLanguage(
-        input.sourceLang,
-        input.sourceLabel,
-        input.sourceBaseUrl,
-        'es',
-      )) &&
+    input.requestedAudioLang === 'es' &&
     !availableAudios.some((a) => a.code === 'es')
   ) {
+    const inherentEs = isSourceInherentLanguage(
+      input.sourceLang,
+      input.sourceLabel,
+      input.sourceBaseUrl,
+      'es',
+    );
     availableAudios.push({
       code: 'es',
       shortLabel: 'ES',
       label: 'Spanish (Dub)',
       serverCategory: 'dub',
+      evidence: inherentEs ? 'confirmed' : 'inferred',
     });
   }
 
@@ -1271,9 +1300,22 @@ async function resolveViaHiAnimeHost(input: {
           sourceLang: input.sourceLang,
           sourceBaseUrl: input.sourceBaseUrl,
           fallbackQueryTitle: input.queries[0],
+          explicitServerTypes: serverItems.map((s) => s.type),
         });
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof UpstreamFetchError) {
+        throw err;
+      }
+      if (err instanceof SyntaxError) {
+        throw new UpstreamFetchError({
+          message: `Malformed JSON response from ${input.sourceLabel}`,
+          failureKind: 'malformed_response',
+          url: input.host,
+          retryable: false,
+          attempts: 1,
+        });
+      }
       // Try next candidate or host
     }
   }
@@ -1337,6 +1379,7 @@ async function resolveHostBasedCandidatesStream(
       : candidates.slice(0, 4);
 
   let sawCandidatesWithoutRequestedLanguage = false;
+  let lastHostError: string | undefined;
 
   for (const candidate of slugsToTry) {
     const slug =
@@ -1365,7 +1408,12 @@ async function resolveHostBasedCandidatesStream(
         sourceBaseUrl,
         directCandidate: directSelectedCandidate,
         directEpisode: validSelectedEpisode,
-      }).catch(() => null);
+      }).catch((err) => {
+        if (err instanceof Error && err.message) {
+          lastHostError = err.message;
+        }
+        return null;
+      });
       if (hiCustom) {
         return { payload: hiCustom };
       }
@@ -1383,10 +1431,16 @@ async function resolveHostBasedCandidatesStream(
       let resolvedEpUrl = epUrl;
       try {
         const epRes = await fetchText(epUrl, { Referer: `${host}/` }, 8000);
-        if (!epRes.ok) continue;
+        if (!epRes.ok) {
+          if (epRes.status !== 404) {
+            lastHostError = `HTTP ${epRes.status} from ${epUrl}`;
+          }
+          continue;
+        }
         epHtml = epRes.text;
         resolvedEpUrl = epRes.url || epUrl;
-      } catch {
+      } catch (err) {
+        lastHostError = err instanceof Error ? err.message : String(err);
         continue;
       }
 
@@ -1543,6 +1597,7 @@ async function resolveHostBasedCandidatesStream(
 
   return {
     payload: null,
+    ...(lastHostError ? { lastError: lastHostError } : {}),
     sawCandidatesWithoutRequestedLanguage:
       options.breakOnMissingLanguage && sawCandidatesWithoutRequestedLanguage,
   };
@@ -1738,7 +1793,43 @@ export async function resolveAnimeEpisodeStream(
   );
 }
 
+const inFlightAnimeDiagnostics = new Map<string, Promise<ExtensionDiagnosticReport>>();
+
 export async function diagnoseAnimeExtensionServer(params: {
+  sourceId: string;
+  sourceName?: string;
+  sourceBaseUrl?: string;
+  sourceLang?: string;
+  sourcePkg?: string;
+  mode: ExtensionDiagnoseMode;
+  query: string;
+}): Promise<ExtensionDiagnosticReport> {
+  const query = params.query.trim() || 'Naruto';
+  const normalizedHost = (params.sourceBaseUrl || '').trim().replace(/\/+$/, '');
+  const dedupeKey = JSON.stringify([
+    params.sourceId.trim(),
+    normalizedHost,
+    params.mode,
+    query.toLowerCase(),
+  ]);
+
+  const existing = inFlightAnimeDiagnostics.get(dedupeKey);
+  if (existing) {
+    return existing;
+  }
+
+  const runPromise = runDiagnoseAnimeExtensionServer({
+    ...params,
+    query,
+  }).finally(() => {
+    inFlightAnimeDiagnostics.delete(dedupeKey);
+  });
+
+  inFlightAnimeDiagnostics.set(dedupeKey, runPromise);
+  return runPromise;
+}
+
+async function runDiagnoseAnimeExtensionServer(params: {
   sourceId: string;
   sourceName?: string;
   sourceBaseUrl?: string;
@@ -1750,6 +1841,7 @@ export async function diagnoseAnimeExtensionServer(params: {
   const startedAt = Date.now();
   const sourceLabel = params.sourceName || params.sourceId;
   const query = params.query.trim() || 'Naruto';
+  const finishTimestamp = () => new Date().toISOString();
 
   const adapter = createServerAnimeExtensionAdapter(
     {
@@ -1769,6 +1861,9 @@ export async function diagnoseAnimeExtensionServer(params: {
       sourceName: sourceLabel,
       status: 'unsupported',
       durationMs: Date.now() - startedAt,
+      testedAt: finishTimestamp(),
+      mode: params.mode,
+      failureKind: 'metadata_only',
       summary: 'Unsupported: Metadata-only catalog source',
       detail: unsupportedReason,
       capabilities: buildCapabilitiesBreakdown({
@@ -1790,6 +1885,9 @@ export async function diagnoseAnimeExtensionServer(params: {
       sourceName: sourceLabel,
       status: 'unsupported',
       durationMs: Date.now() - startedAt,
+      testedAt: finishTimestamp(),
+      mode: params.mode,
+      failureKind: 'missing_host',
       summary: 'Unsupported: Missing stream host URL',
       detail: unsupportedReason,
       capabilities: buildCapabilitiesBreakdown({
@@ -1810,12 +1908,14 @@ export async function diagnoseAnimeExtensionServer(params: {
     let reachableStatus = 0;
     let blockedReason: string | null = null;
     let lastErr = '';
+    let lastFailureKind: DiagnosticFailureKind | null = null;
 
     for (const host of adapter.hosts) {
       try {
         const res = await fetchText(`${host}/`, { Referer: `${host}/` }, 5000);
         if (looksLikeBlockedChallengeHtml(res.status, res.text)) {
           blockedReason = `${host} returned an anti-bot challenge (HTTP ${res.status}).`;
+          lastFailureKind = 'blocked_request';
           break;
         }
         if (res.ok) {
@@ -1824,8 +1924,11 @@ export async function diagnoseAnimeExtensionServer(params: {
           break;
         }
         lastErr = `HTTP ${res.status}`;
+        lastFailureKind = res.failureKind || classifyDiagnosticFailure(lastErr, res.status);
       } catch (err) {
-        lastErr = err instanceof Error ? err.message : String(err);
+        const classified = classifyFetchException(err);
+        lastErr = classified.message;
+        lastFailureKind = classified.failureKind;
       }
     }
 
@@ -1835,6 +1938,9 @@ export async function diagnoseAnimeExtensionServer(params: {
         sourceName: sourceLabel,
         status: 'unsupported',
         durationMs: Date.now() - startedAt,
+        testedAt: finishTimestamp(),
+        mode: 'ping',
+        failureKind: lastFailureKind || 'blocked_request',
         summary: 'Blocked by upstream anti-bot challenge',
         detail: blockedReason,
         capabilities: buildCapabilitiesBreakdown({
@@ -1849,13 +1955,17 @@ export async function diagnoseAnimeExtensionServer(params: {
     }
 
     if (!reachableHost) {
+      const resolvedKind = lastFailureKind || classifyDiagnosticFailure(lastErr);
       return {
         sourceId: params.sourceId,
         sourceName: sourceLabel,
         status: 'fail',
         durationMs: Date.now() - startedAt,
+        testedAt: finishTimestamp(),
+        mode: 'ping',
+        failureKind: resolvedKind,
         summary: `Host unreachable (${lastErr || 'No response'})`,
-        detail: `Tried ${primaryHost}. Stream playback was not tested.`,
+        detail: `Tried ${primaryHost}: ${lastErr || 'No response'}. Stream playback was not tested.`,
         capabilities: buildCapabilitiesBreakdown({
           mode: 'ping',
           mediaTab: 'ANIME',
@@ -1871,6 +1981,8 @@ export async function diagnoseAnimeExtensionServer(params: {
       sourceName: sourceLabel,
       status: 'partial',
       durationMs: Date.now() - startedAt,
+      testedAt: finishTimestamp(),
+      mode: 'ping',
       summary: `Host reachable (HTTP ${reachableStatus}) · Playback not verified`,
       detail: `${reachableHost} responded cleanly. Run Full test to verify episodes and video playback.`,
       capabilities: buildCapabilitiesBreakdown({
@@ -1886,6 +1998,8 @@ export async function diagnoseAnimeExtensionServer(params: {
   // Basic or Full: real title search routed through the source's dedicated adapter
   let matchedCandidates: SearchAnimeExtensionResultItem[] = [];
   let blockedReason: string | null = null;
+  let searchErrorReason: string | null = null;
+  let searchFailureKind: DiagnosticFailureKind | undefined;
   const searchHostUsed = primaryHost;
 
   if (adapter.supports('search')) {
@@ -1893,17 +2007,25 @@ export async function diagnoseAnimeExtensionServer(params: {
       const searchRes = await adapter.searchTitles(query);
       if (searchRes.compatible) {
         matchedCandidates = searchRes.items;
-      } else if (
-        searchRes.reason &&
-        /anti-bot challenge|Turnstile|JavaScript app|Cloudflare|HTTP (?:403|429|503)/i.test(
-          searchRes.reason,
-        )
-      ) {
-        blockedReason = searchRes.reason;
+      } else if (searchRes.reason) {
+        searchErrorReason = searchRes.reason;
+        searchFailureKind = classifyDiagnosticFailure(searchRes.reason);
+        if (
+          /anti-bot challenge|Turnstile|JavaScript app|Cloudflare|HTTP (?:403|429|503)/i.test(
+            searchRes.reason,
+          )
+        ) {
+          blockedReason = searchRes.reason;
+        }
       }
     } catch (err) {
       if (err instanceof ExtensionCapabilityError && err.isUnsupported) {
         blockedReason = err.reason;
+        searchFailureKind = classifyDiagnosticFailure(err.reason);
+      } else {
+        const classified = classifyFetchException(err);
+        searchErrorReason = classified.message;
+        searchFailureKind = classified.failureKind;
       }
     }
   }
@@ -1914,6 +2036,9 @@ export async function diagnoseAnimeExtensionServer(params: {
       sourceName: sourceLabel,
       status: 'unsupported',
       durationMs: Date.now() - startedAt,
+      testedAt: finishTimestamp(),
+      mode: params.mode,
+      failureKind: searchFailureKind || classifyDiagnosticFailure(blockedReason),
       summary: 'Unsupported in Web Bridge: Upstream protection',
       detail: blockedReason,
       capabilities: buildCapabilitiesBreakdown({
@@ -1931,6 +2056,9 @@ export async function diagnoseAnimeExtensionServer(params: {
 
   if (params.mode === 'basic') {
     const searchOk = Boolean(topCandidate);
+    const basicFailureKind = searchOk
+      ? undefined
+      : searchFailureKind || 'provider_error';
     return {
       sourceId: params.sourceId,
       sourceName: sourceLabel,
@@ -1942,12 +2070,16 @@ export async function diagnoseAnimeExtensionServer(params: {
         errorOccurred: !searchOk,
       }),
       durationMs: Date.now() - startedAt,
+      testedAt: finishTimestamp(),
+      mode: 'basic',
+      ...(basicFailureKind ? { failureKind: basicFailureKind } : {}),
       summary: searchOk
         ? `Search matched ${matchedCandidates.length} title${matchedCandidates.length === 1 ? '' : 's'} · Top: ${topCandidate.title} (Playback untested)`
         : `No matching anime entries found on ${sourceLabel} for "${query}"`,
       detail: searchOk
         ? `Host: ${searchHostUsed} (adapter: ${adapter.adapterId}). Run Full test to verify episode listing and video stream resolution.`
-        : `Queried ${searchHostUsed} directly without metadata fallback; 0 matching results found.`,
+        : searchErrorReason ||
+          `Queried ${searchHostUsed} directly without metadata fallback; 0 matching results found.`,
       matchedTitle: topCandidate?.title,
       sampleItems: matchedCandidates.slice(0, 3).map((c) => c.title),
       capabilities: buildCapabilitiesBreakdown({
@@ -1977,6 +2109,10 @@ export async function diagnoseAnimeExtensionServer(params: {
         sourceName: sourceLabel,
         status: 'unsupported',
         durationMs: Date.now() - startedAt,
+        testedAt: finishTimestamp(),
+        mode: 'full',
+        probeScope: DEFAULT_DIAGNOSTIC_PROBE_SCOPE,
+        failureKind: 'unsupported_format',
         summary: searchOk
           ? `Search matched "${topCandidate.title}", but episodes & playback are unsupported`
           : `No matching anime entries found on ${sourceLabel}; episodes & playback are unsupported`,
@@ -1986,6 +2122,7 @@ export async function diagnoseAnimeExtensionServer(params: {
         capabilities: {
           metadataSearch: searchOk ? 'verified' : 'unavailable',
           episodeOrChapterListing: 'unsupported',
+          audioLanguage: 'unsupported',
           playbackOrReader: 'unsupported',
           overallCompatibility: 'unsupported',
         },
@@ -1997,12 +2134,24 @@ export async function diagnoseAnimeExtensionServer(params: {
   let listingAvailable = false;
   let playbackVerified = false;
   let streamError: string | null = null;
+  let epErrorReason: string | null = null;
+  let epFailureKind: DiagnosticFailureKind | undefined;
+  let streamFailureKind: DiagnosticFailureKind | undefined;
   let resolvedPayload: ResolvedAnimeStreamPayload | null = null;
 
   if (topCandidate && adapter.supports('episodes')) {
-    const epRes = await adapter.listEpisodes(topCandidate).catch(() => null);
-    if (epRes?.compatible && epRes.episodes.length > 0) {
-      listingAvailable = true;
+    try {
+      const epRes = await adapter.listEpisodes(topCandidate);
+      if (epRes.compatible && epRes.episodes.length > 0) {
+        listingAvailable = true;
+      } else if (!epRes.compatible && epRes.reason) {
+        epErrorReason = epRes.reason;
+        epFailureKind = classifyDiagnosticFailure(epRes.reason);
+      }
+    } catch (err) {
+      const classified = classifyFetchException(err);
+      epErrorReason = classified.message;
+      epFailureKind = classified.failureKind;
     }
   }
 
@@ -2027,9 +2176,56 @@ export async function diagnoseAnimeExtensionServer(params: {
         listingAvailable = true;
       }
     } catch (err) {
-      streamError = err instanceof Error ? err.message : String(err);
+      if (err instanceof UpstreamFetchError) {
+        streamError = err.message;
+        streamFailureKind = err.failureKind;
+      } else {
+        const classified = classifyFetchException(err);
+        streamError = err instanceof Error ? err.message : classified.message;
+        streamFailureKind = classifyDiagnosticFailure(streamError);
+      }
     }
   }
+
+  const probeScope = DEFAULT_DIAGNOSTIC_PROBE_SCOPE;
+  const confirmedAudioLanguages = resolvedPayload?.availableAudios
+    ? Array.from(
+        new Set(
+          resolvedPayload.availableAudios
+            .filter((a) => a.evidence === 'confirmed')
+            .map((a) => a.code)
+            .filter(Boolean),
+        ),
+      )
+    : [];
+  const inferredAudioLanguages = resolvedPayload?.availableAudios
+    ? Array.from(
+        new Set(
+          resolvedPayload.availableAudios
+            .filter((a) => a.evidence !== 'confirmed')
+            .map((a) => a.code)
+            .filter((code) => Boolean(code) && !confirmedAudioLanguages.includes(code)),
+        ),
+      )
+    : [];
+
+  // Never report assumed/inferred audio languages as detected/confirmed without evidence
+  const detectedAudioLanguages = confirmedAudioLanguages;
+
+  const audioLanguageStatus: 'verified' | 'partial' | 'unavailable' | 'untested' =
+    playbackVerified
+      ? confirmedAudioLanguages.length > 0
+        ? 'verified'
+        : 'partial'
+      : streamError && /audio is not available/i.test(streamError)
+        ? 'unavailable'
+        : 'untested';
+
+  const audioVerificationDetail = playbackVerified
+    ? confirmedAudioLanguages.length > 0
+      ? `${probeScope} only · Confirmed: ${confirmedAudioLanguages.map((c) => c.toUpperCase()).join(', ')}`
+      : `${probeScope} only · Audio track language unknown/inferred (no explicit track evidence)`
+    : `${probeScope} · Audio tracks not verified`;
 
   const searchOk = Boolean(topCandidate) || playbackVerified;
   const overall = resolveDiagnosticOverallStatus({
@@ -2040,11 +2236,32 @@ export async function diagnoseAnimeExtensionServer(params: {
     errorOccurred: !playbackVerified && !listingAvailable && !searchOk,
   });
 
+  const resolvedFailureKind: DiagnosticFailureKind | undefined =
+    overall === 'pass'
+      ? undefined
+      : streamFailureKind || epFailureKind || searchFailureKind || 'provider_error';
+
+  const resolvedDetail =
+    overall === 'pass' && resolvedPayload
+      ? `${probeScope} · Resolved Ep 1 via ${resolvedPayload.serverName} (${resolvedPayload.mirrors.length} mirror${resolvedPayload.mirrors.length === 1 ? '' : 's'}${confirmedAudioLanguages.length > 0 ? ` · Confirmed Audio: ${confirmedAudioLanguages.map((c) => c.toUpperCase()).join(', ')}` : ' · Audio language unknown/unconfirmed'}).`
+      : streamError ||
+        epErrorReason ||
+        searchErrorReason ||
+        `Tested host ${searchHostUsed} with query "${query}".`;
+
   return {
     sourceId: params.sourceId,
     sourceName: sourceLabel,
     status: overall,
     durationMs: Date.now() - startedAt,
+    testedAt: finishTimestamp(),
+    mode: 'full',
+    probeScope,
+    detectedAudioLanguages,
+    confirmedAudioLanguages,
+    inferredAudioLanguages,
+    audioVerificationDetail,
+    ...(resolvedFailureKind ? { failureKind: resolvedFailureKind } : {}),
     summary:
       overall === 'pass' && resolvedPayload
         ? `Playable stream verified (${resolvedPayload.quality} · ${resolvedPayload.matchedTitle})`
@@ -2053,10 +2270,7 @@ export async function diagnoseAnimeExtensionServer(params: {
           : searchOk
             ? `Search matched "${topCandidate?.title || query}", but episode/stream extraction failed`
             : `No matching anime or playable stream found on ${sourceLabel}`,
-    detail:
-      overall === 'pass' && resolvedPayload
-        ? `Resolved Ep 1 via ${resolvedPayload.serverName} (${resolvedPayload.mirrors.length} mirror${resolvedPayload.mirrors.length === 1 ? '' : 's'}).`
-        : streamError || `Tested host ${searchHostUsed} with query "${query}".`,
+    detail: resolvedDetail,
     matchedTitle: resolvedPayload?.matchedTitle || topCandidate?.title,
     sampleItems:
       resolvedPayload?.mirrors.map((m, idx) => `Mirror ${idx + 1}: ${m.serverName} (${m.quality})`) ||
@@ -2067,6 +2281,7 @@ export async function diagnoseAnimeExtensionServer(params: {
       searchMatched: searchOk,
       listingAvailable,
       playbackOrPagesVerified: playbackVerified,
+      audioLanguageStatus,
     }),
   };
 }
