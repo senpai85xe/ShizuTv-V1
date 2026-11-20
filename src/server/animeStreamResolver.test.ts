@@ -1486,6 +1486,127 @@ test('Batch 4: safe bounded retry recovers transient 502, skips retry on 401/429
   }
 });
 
+test('diagnoseAnimeExtensionServer distinguishes upstream HTTP 403/429/503 blocks from unsupported formats and preserves verified capabilities', async () => {
+  const originalFetch = globalThis.fetch;
+
+  // Scenario A: ShizuTv Stream (Inbuilt) hits HTTP 403 on all upstream hosts
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith('https://ww5.gogoanimes.fi') || url.startsWith('https://ww12.gogoanimes.fi')) {
+      return new Response('<html><title>Just a moment...</title>Cloudflare</html>', {
+        status: 403,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
+    return new Response('Forbidden', { status: 403 });
+  }) as typeof fetch;
+
+  try {
+    const ping403 = await diagnoseAnimeExtensionServer({
+      sourceId: 'shonenx-hls-inbuilt',
+      sourceName: 'ShizuTv Stream (Inbuilt)',
+      mode: 'ping',
+      query: 'Naruto',
+    });
+    assert.equal(ping403.status, 'fail');
+    assert.equal(ping403.failureKind, 'blocked_request');
+    assert.notEqual(ping403.capabilities.metadataSearch, 'unsupported');
+    assert.notEqual(ping403.capabilities.episodeOrChapterListing, 'unsupported');
+    assert.notEqual(ping403.capabilities.playbackOrReader, 'unsupported');
+    assert.match(ping403.detail || '', /not mean the extension format is unsupported/i);
+
+    const basic403 = await diagnoseAnimeExtensionServer({
+      sourceId: 'shonenx-hls-inbuilt',
+      sourceName: 'ShizuTv Stream (Inbuilt)',
+      mode: 'basic',
+      query: 'Naruto',
+    });
+    assert.equal(basic403.status, 'fail');
+    assert.equal(basic403.failureKind, 'blocked_request');
+    assert.equal(basic403.capabilities.metadataSearch, 'unavailable');
+    assert.equal(basic403.capabilities.episodeOrChapterListing, 'untested');
+    assert.equal(basic403.capabilities.audioLanguage, 'untested');
+    assert.equal(basic403.capabilities.playbackOrReader, 'untested');
+
+    const full403 = await diagnoseAnimeExtensionServer({
+      sourceId: 'shonenx-hls-inbuilt',
+      sourceName: 'ShizuTv Stream (Inbuilt)',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    assert.equal(full403.status, 'fail');
+    assert.equal(full403.failureKind, 'blocked_request');
+    assert.equal(full403.capabilities.metadataSearch, 'unavailable');
+    assert.equal(full403.capabilities.episodeOrChapterListing, 'untested');
+    assert.equal(full403.capabilities.audioLanguage, 'untested');
+    assert.equal(full403.capabilities.playbackOrReader, 'untested');
+    assert.match(full403.detail || '', /HTTP 403/i);
+    assert.match(full403.detail || '', /not mean the extension format is unsupported/i);
+
+    // Scenario B: Search & episode listing succeed, downstream episode page returns HTTP 503 -> partial & preserves search/episodes
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.startsWith('https://partial-blocked.example/search.html?keyword=')) {
+        return new Response(
+          `<ul class="items"><li><p class="name"><a href="/category/naruto" title="Naruto">Naruto</a></p></li></ul>`,
+          { status: 200, headers: { 'Content-Type': 'text/html' } },
+        );
+      }
+      if (url === 'https://partial-blocked.example/category/naruto') {
+        return new Response(`<input type="hidden" id="movie_id" value="12" />`, {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        });
+      }
+      if (url.startsWith('https://partial-blocked.example/ajax/load-list-episode')) {
+        return new Response(
+          `<ul id="episode_related"><li><a href="/naruto-episode-1"><div class="name">EP 1</div></a></li></ul>`,
+          { status: 200, headers: { 'Content-Type': 'text/html' } },
+        );
+      }
+      if (url === 'https://partial-blocked.example/naruto-episode-1') {
+        return new Response('Service Unavailable', { status: 503 });
+      }
+      return new Response('Not Found', { status: 404 });
+    }) as typeof fetch;
+
+    const partial503 = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-partial-blocked',
+      sourceName: 'PartialBlocked',
+      sourceBaseUrl: 'https://partial-blocked.example',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    assert.equal(partial503.status, 'partial');
+    assert.equal(partial503.failureKind, 'blocked_request');
+    assert.equal(partial503.capabilities.metadataSearch, 'verified');
+    assert.equal(partial503.capabilities.episodeOrChapterListing, 'verified');
+    assert.equal(partial503.capabilities.playbackOrReader, 'unavailable');
+    assert.equal(partial503.capabilities.audioLanguage, 'untested');
+
+    // Scenario C: Genuine client-rendered JS SPA incompatibility still reports unsupported
+    globalThis.fetch = (async () => {
+      return new Response(
+        `<html><body><div id="root"></div><script src="/bundle.js"></script></body></html>`,
+        { status: 200, headers: { 'Content-Type': 'text/html' } },
+      );
+    }) as typeof fetch;
+
+    const spaDiag = await diagnoseAnimeExtensionServer({
+      sourceId: 'ext-ay-spa',
+      sourceName: 'ClientSpaAnime',
+      sourceBaseUrl: 'https://spa-only.example',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    assert.equal(spaDiag.status, 'unsupported');
+    assert.equal(spaDiag.capabilities.playbackOrReader, 'unsupported');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
 
 
 

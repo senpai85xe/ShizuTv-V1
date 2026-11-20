@@ -345,6 +345,8 @@ export function buildCapabilitiesBreakdown(params: {
   listingAvailable: boolean;
   playbackOrPagesVerified: boolean;
   audioLanguageStatus?: CapabilityStatus;
+  listingStatus?: CapabilityStatus;
+  playbackStatus?: CapabilityStatus;
 }): ExtensionDiagnosticCapabilities {
   if (params.unsupportedReason || params.mediaTab === 'NOVEL') {
     return {
@@ -364,18 +366,20 @@ export function buildCapabilitiesBreakdown(params: {
         : 'unavailable';
 
   const episodeOrChapterListing: CapabilityStatus =
-    params.mode !== 'full'
+    params.listingStatus ??
+    (params.mode !== 'full'
       ? 'untested'
       : params.listingAvailable
         ? 'verified'
-        : 'unavailable';
+        : 'unavailable');
 
   const playbackOrReader: CapabilityStatus =
-    params.mode !== 'full'
+    params.playbackStatus ??
+    (params.mode !== 'full'
       ? 'untested'
       : params.playbackOrPagesVerified
         ? 'verified'
-        : 'unavailable';
+        : 'unavailable');
 
   const audioLanguage: CapabilityStatus =
     params.audioLanguageStatus ??

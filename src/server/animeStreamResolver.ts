@@ -31,6 +31,7 @@ import {
 import type { ExtensionEpisodesResponse } from '../types/media.ts';
 import {
   buildCapabilitiesBreakdown,
+  type CapabilityStatus,
   classifyDiagnosticFailure,
   DEFAULT_DIAGNOSTIC_PROBE_SCOPE,
   type DiagnosticFailureKind,
@@ -1829,6 +1830,20 @@ export async function diagnoseAnimeExtensionServer(params: {
   return runPromise;
 }
 
+function isGenuineExtensionIncompatibilityReason(reason?: string | null): boolean {
+  if (!reason) return false;
+  return /JavaScript app|client-rendered|encrypted binary|\bdrm\b|text-based light novel|metadata\/tracking catalog/i.test(
+    reason,
+  );
+}
+
+function isUpstreamAccessRestrictionReason(reason?: string | null): boolean {
+  if (!reason || isGenuineExtensionIncompatibilityReason(reason)) return false;
+  return /anti-bot challenge|cloudflare|turnstile|captcha|HTTP\s*(?:403|429|503)|blocked/i.test(
+    reason,
+  );
+}
+
 async function runDiagnoseAnimeExtensionServer(params: {
   sourceId: string;
   sourceName?: string;
@@ -1924,7 +1939,10 @@ async function runDiagnoseAnimeExtensionServer(params: {
           break;
         }
         lastErr = `HTTP ${res.status}`;
-        lastFailureKind = res.failureKind || classifyDiagnosticFailure(lastErr, res.status);
+        lastFailureKind =
+          res.status === 403 || res.status === 429 || res.status === 503
+            ? 'blocked_request'
+            : res.failureKind || classifyDiagnosticFailure(lastErr, res.status);
       } catch (err) {
         const classified = classifyFetchException(err);
         lastErr = classified.message;
@@ -1936,17 +1954,16 @@ async function runDiagnoseAnimeExtensionServer(params: {
       return {
         sourceId: params.sourceId,
         sourceName: sourceLabel,
-        status: 'unsupported',
+        status: 'fail',
         durationMs: Date.now() - startedAt,
         testedAt: finishTimestamp(),
         mode: 'ping',
         failureKind: lastFailureKind || 'blocked_request',
-        summary: 'Blocked by upstream anti-bot challenge',
-        detail: blockedReason,
+        summary: 'Upstream access blocked by provider protection',
+        detail: `${blockedReason} Upstream access could not be verified from this server; this does not mean the extension format is unsupported.`,
         capabilities: buildCapabilitiesBreakdown({
           mode: 'ping',
           mediaTab: 'ANIME',
-          unsupportedReason: blockedReason,
           searchMatched: false,
           listingAvailable: false,
           playbackOrPagesVerified: false,
@@ -1964,8 +1981,14 @@ async function runDiagnoseAnimeExtensionServer(params: {
         testedAt: finishTimestamp(),
         mode: 'ping',
         failureKind: resolvedKind,
-        summary: `Host unreachable (${lastErr || 'No response'})`,
-        detail: `Tried ${primaryHost}: ${lastErr || 'No response'}. Stream playback was not tested.`,
+        summary:
+          resolvedKind === 'blocked_request'
+            ? `Upstream access blocked (${lastErr || 'HTTP 403'})`
+            : `Host unreachable (${lastErr || 'No response'})`,
+        detail:
+          resolvedKind === 'blocked_request'
+            ? `Tried ${primaryHost}: ${lastErr || 'Access restricted'}. Upstream access is blocked or unverified from this server; this does not mean the extension format is unsupported.`
+            : `Tried ${primaryHost}: ${lastErr || 'No response'}. Stream playback was not tested.`,
         capabilities: buildCapabilitiesBreakdown({
           mode: 'ping',
           mediaTab: 'ANIME',
@@ -1997,7 +2020,8 @@ async function runDiagnoseAnimeExtensionServer(params: {
 
   // Basic or Full: real title search routed through the source's dedicated adapter
   let matchedCandidates: SearchAnimeExtensionResultItem[] = [];
-  let blockedReason: string | null = null;
+  let unsupportedReason: string | null = null;
+  let searchBlockedByUpstream = false;
   let searchErrorReason: string | null = null;
   let searchFailureKind: DiagnosticFailureKind | undefined;
   const searchHostUsed = primaryHost;
@@ -2009,28 +2033,37 @@ async function runDiagnoseAnimeExtensionServer(params: {
         matchedCandidates = searchRes.items;
       } else if (searchRes.reason) {
         searchErrorReason = searchRes.reason;
-        searchFailureKind = classifyDiagnosticFailure(searchRes.reason);
-        if (
-          /anti-bot challenge|Turnstile|JavaScript app|Cloudflare|HTTP (?:403|429|503)/i.test(
-            searchRes.reason,
-          )
-        ) {
-          blockedReason = searchRes.reason;
+        if (isGenuineExtensionIncompatibilityReason(searchRes.reason)) {
+          unsupportedReason = searchRes.reason;
+          searchFailureKind = classifyDiagnosticFailure(searchRes.reason);
+        } else if (isUpstreamAccessRestrictionReason(searchRes.reason)) {
+          searchBlockedByUpstream = true;
+          searchFailureKind = 'blocked_request';
+        } else {
+          searchFailureKind = classifyDiagnosticFailure(searchRes.reason);
         }
       }
     } catch (err) {
       if (err instanceof ExtensionCapabilityError && err.isUnsupported) {
-        blockedReason = err.reason;
+        unsupportedReason = err.reason;
         searchFailureKind = classifyDiagnosticFailure(err.reason);
       } else {
         const classified = classifyFetchException(err);
         searchErrorReason = classified.message;
-        searchFailureKind = classified.failureKind;
+        if (
+          classified.failureKind === 'blocked_request' ||
+          isUpstreamAccessRestrictionReason(searchErrorReason)
+        ) {
+          searchBlockedByUpstream = true;
+          searchFailureKind = 'blocked_request';
+        } else {
+          searchFailureKind = classified.failureKind;
+        }
       }
     }
   }
 
-  if (blockedReason) {
+  if (unsupportedReason) {
     return {
       sourceId: params.sourceId,
       sourceName: sourceLabel,
@@ -2038,13 +2071,13 @@ async function runDiagnoseAnimeExtensionServer(params: {
       durationMs: Date.now() - startedAt,
       testedAt: finishTimestamp(),
       mode: params.mode,
-      failureKind: searchFailureKind || classifyDiagnosticFailure(blockedReason),
-      summary: 'Unsupported in Web Bridge: Upstream protection',
-      detail: blockedReason,
+      failureKind: searchFailureKind || classifyDiagnosticFailure(unsupportedReason),
+      summary: 'Unsupported in Web Bridge: Extension format requires unsupported runtime',
+      detail: unsupportedReason,
       capabilities: buildCapabilitiesBreakdown({
         mode: params.mode,
         mediaTab: 'ANIME',
-        unsupportedReason: blockedReason,
+        unsupportedReason,
         searchMatched: false,
         listingAvailable: false,
         playbackOrPagesVerified: false,
@@ -2075,11 +2108,15 @@ async function runDiagnoseAnimeExtensionServer(params: {
       ...(basicFailureKind ? { failureKind: basicFailureKind } : {}),
       summary: searchOk
         ? `Search matched ${matchedCandidates.length} title${matchedCandidates.length === 1 ? '' : 's'} · Top: ${topCandidate.title} (Playback untested)`
-        : `No matching anime entries found on ${sourceLabel} for "${query}"`,
+        : searchBlockedByUpstream
+          ? `Upstream search blocked on ${sourceLabel} (Playback untested)`
+          : `No matching anime entries found on ${sourceLabel} for "${query}"`,
       detail: searchOk
         ? `Host: ${searchHostUsed} (adapter: ${adapter.adapterId}). Run Full test to verify episode listing and video stream resolution.`
-        : searchErrorReason ||
-          `Queried ${searchHostUsed} directly without metadata fallback; 0 matching results found.`,
+        : searchBlockedByUpstream && searchErrorReason
+          ? `${searchErrorReason} Upstream access is restricted or unverified from this server; this does not mean the extension format is unsupported.`
+          : searchErrorReason ||
+            `Queried ${searchHostUsed} directly without metadata fallback; 0 matching results found.`,
       matchedTitle: topCandidate?.title,
       sampleItems: matchedCandidates.slice(0, 3).map((c) => c.title),
       capabilities: buildCapabilitiesBreakdown({
@@ -2133,6 +2170,8 @@ async function runDiagnoseAnimeExtensionServer(params: {
   // Full capability test: Search -> Episode Listing -> Episode 1 Playable Stream
   let listingAvailable = false;
   let playbackVerified = false;
+  let epBlockedByUpstream = false;
+  let streamBlockedByUpstream = false;
   let streamError: string | null = null;
   let epErrorReason: string | null = null;
   let epFailureKind: DiagnosticFailureKind | undefined;
@@ -2146,12 +2185,18 @@ async function runDiagnoseAnimeExtensionServer(params: {
         listingAvailable = true;
       } else if (!epRes.compatible && epRes.reason) {
         epErrorReason = epRes.reason;
-        epFailureKind = classifyDiagnosticFailure(epRes.reason);
+        epBlockedByUpstream = isUpstreamAccessRestrictionReason(epRes.reason);
+        epFailureKind = epBlockedByUpstream
+          ? 'blocked_request'
+          : classifyDiagnosticFailure(epRes.reason);
       }
     } catch (err) {
       const classified = classifyFetchException(err);
       epErrorReason = classified.message;
-      epFailureKind = classified.failureKind;
+      epBlockedByUpstream =
+        classified.failureKind === 'blocked_request' ||
+        isUpstreamAccessRestrictionReason(epErrorReason);
+      epFailureKind = epBlockedByUpstream ? 'blocked_request' : classified.failureKind;
     }
   }
 
@@ -2178,11 +2223,19 @@ async function runDiagnoseAnimeExtensionServer(params: {
     } catch (err) {
       if (err instanceof UpstreamFetchError) {
         streamError = err.message;
-        streamFailureKind = err.failureKind;
+        streamBlockedByUpstream =
+          err.failureKind === 'blocked_request' ||
+          isUpstreamAccessRestrictionReason(err.message);
+        streamFailureKind = streamBlockedByUpstream ? 'blocked_request' : err.failureKind;
       } else {
         const classified = classifyFetchException(err);
         streamError = err instanceof Error ? err.message : classified.message;
-        streamFailureKind = classifyDiagnosticFailure(streamError);
+        streamBlockedByUpstream =
+          classified.failureKind === 'blocked_request' ||
+          isUpstreamAccessRestrictionReason(streamError);
+        streamFailureKind = streamBlockedByUpstream
+          ? 'blocked_request'
+          : classifyDiagnosticFailure(streamError);
       }
     }
   }
@@ -2227,7 +2280,8 @@ async function runDiagnoseAnimeExtensionServer(params: {
       : `${probeScope} only · Audio track language unknown/inferred (no explicit track evidence)`
     : `${probeScope} · Audio tracks not verified`;
 
-  const searchOk = Boolean(topCandidate) || playbackVerified;
+  const searchOk =
+    Boolean(topCandidate) || (!searchErrorReason && !searchBlockedByUpstream && playbackVerified);
   const overall = resolveDiagnosticOverallStatus({
     mode: 'full',
     searchMatched: searchOk,
@@ -2236,18 +2290,76 @@ async function runDiagnoseAnimeExtensionServer(params: {
     errorOccurred: !playbackVerified && !listingAvailable && !searchOk,
   });
 
+  // Preserve blocked_request from an earlier stage if a downstream stage only failed due to missing candidate
+  const streamMissingSearchCandidateOnly =
+    Boolean(searchBlockedByUpstream) &&
+    !playbackVerified &&
+    !streamBlockedByUpstream &&
+    (!streamFailureKind || streamFailureKind === 'provider_error') &&
+    (!streamError || /No matching anime entries found/i.test(streamError));
+
+  const listingStatusOverride: CapabilityStatus | undefined =
+    !listingAvailable && !topCandidate && searchBlockedByUpstream ? 'untested' : undefined;
+  const playbackStatusOverride: CapabilityStatus | undefined = streamMissingSearchCandidateOnly
+    ? 'untested'
+    : undefined;
+
+  const preserveSearchBlockDetail =
+    !playbackVerified &&
+    searchBlockedByUpstream &&
+    (!epBlockedByUpstream || !epErrorReason) &&
+    (streamMissingSearchCandidateOnly || !streamError);
+
   const resolvedFailureKind: DiagnosticFailureKind | undefined =
     overall === 'pass'
-      ? undefined
-      : streamFailureKind || epFailureKind || searchFailureKind || 'provider_error';
+      ? searchOk
+        ? undefined
+        : searchFailureKind
+      : preserveSearchBlockDetail
+        ? searchFailureKind || 'blocked_request'
+        : streamFailureKind || epFailureKind || searchFailureKind || 'provider_error';
 
-  const resolvedDetail =
-    overall === 'pass' && resolvedPayload
-      ? `${probeScope} · Resolved Ep 1 via ${resolvedPayload.serverName} (${resolvedPayload.mirrors.length} mirror${resolvedPayload.mirrors.length === 1 ? '' : 's'}${confirmedAudioLanguages.length > 0 ? ` · Confirmed Audio: ${confirmedAudioLanguages.map((c) => c.toUpperCase()).join(', ')}` : ' · Audio language unknown/unconfirmed'}).`
-      : streamError ||
-        epErrorReason ||
-        searchErrorReason ||
-        `Tested host ${searchHostUsed} with query "${query}".`;
+  let resolvedDetail: string;
+  if (overall === 'pass' && resolvedPayload) {
+    const baseVerifiedDetail = `${probeScope} · Resolved Ep 1 via ${resolvedPayload.serverName} (${resolvedPayload.mirrors.length} mirror${resolvedPayload.mirrors.length === 1 ? '' : 's'}${confirmedAudioLanguages.length > 0 ? ` · Confirmed Audio: ${confirmedAudioLanguages.map((c) => c.toUpperCase()).join(', ')}` : ' · Audio language unknown/unconfirmed'}).`;
+    resolvedDetail =
+      !searchOk && searchBlockedByUpstream && searchErrorReason
+        ? `${baseVerifiedDetail} Primary search was restricted (${searchErrorReason}).`
+        : baseVerifiedDetail;
+  } else if (preserveSearchBlockDetail && searchErrorReason) {
+    resolvedDetail = `${searchErrorReason} Upstream access is restricted or unverified from this server; this does not mean the extension format is unsupported.`;
+  } else if (streamBlockedByUpstream && streamError) {
+    resolvedDetail = `${streamError} Upstream stream access is restricted or unverified from this server; this does not mean the extension format is unsupported.`;
+  } else if (epBlockedByUpstream && epErrorReason) {
+    resolvedDetail = `${epErrorReason} Upstream episode access is restricted or unverified from this server; this does not mean the extension format is unsupported.`;
+  } else {
+    resolvedDetail =
+      streamError ||
+      epErrorReason ||
+      searchErrorReason ||
+      `Tested host ${searchHostUsed} with query "${query}".`;
+  }
+
+  let resolvedSummary: string;
+  if (overall === 'pass' && resolvedPayload) {
+    resolvedSummary =
+      !searchOk && searchBlockedByUpstream
+        ? `Fallback stream verified (${resolvedPayload.quality} · ${resolvedPayload.matchedTitle}), but upstream search was blocked`
+        : `Playable stream verified (${resolvedPayload.quality} · ${resolvedPayload.matchedTitle})`;
+  } else if (listingAvailable) {
+    resolvedSummary = streamBlockedByUpstream
+      ? `Found "${topCandidate?.title || query}", but upstream video stream access was blocked`
+      : `Found "${topCandidate?.title || query}", but video stream failed to resolve`;
+  } else if (searchOk) {
+    resolvedSummary =
+      epBlockedByUpstream || streamBlockedByUpstream
+        ? `Search matched "${topCandidate?.title || query}", but downstream upstream access was blocked`
+        : `Search matched "${topCandidate?.title || query}", but episode/stream extraction failed`;
+  } else if (searchBlockedByUpstream) {
+    resolvedSummary = `Upstream access blocked on ${sourceLabel}; remaining capabilities unverified`;
+  } else {
+    resolvedSummary = `No matching anime or playable stream found on ${sourceLabel}`;
+  }
 
   return {
     sourceId: params.sourceId,
@@ -2262,14 +2374,7 @@ async function runDiagnoseAnimeExtensionServer(params: {
     inferredAudioLanguages,
     audioVerificationDetail,
     ...(resolvedFailureKind ? { failureKind: resolvedFailureKind } : {}),
-    summary:
-      overall === 'pass' && resolvedPayload
-        ? `Playable stream verified (${resolvedPayload.quality} · ${resolvedPayload.matchedTitle})`
-        : listingAvailable
-          ? `Found "${topCandidate?.title || query}", but video stream failed to resolve`
-          : searchOk
-            ? `Search matched "${topCandidate?.title || query}", but episode/stream extraction failed`
-            : `No matching anime or playable stream found on ${sourceLabel}`,
+    summary: resolvedSummary,
     detail: resolvedDetail,
     matchedTitle: resolvedPayload?.matchedTitle || topCandidate?.title,
     sampleItems:
@@ -2282,6 +2387,8 @@ async function runDiagnoseAnimeExtensionServer(params: {
       listingAvailable,
       playbackOrPagesVerified: playbackVerified,
       audioLanguageStatus,
+      listingStatus: listingStatusOverride,
+      playbackStatus: playbackStatusOverride,
     }),
   };
 }

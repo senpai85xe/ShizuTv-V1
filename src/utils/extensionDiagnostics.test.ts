@@ -633,4 +633,47 @@ test('Phase 1: runtime requirement labels enforce honesty for Aniyomi APK metada
   assert.equal(counts.metadataOnly, 1);
 });
 
+test('HTTP 403 blocked Inbuilt diagnostic preserves Web Adapter Compatible runtime and non-unsupported capabilities', () => {
+  const inbuiltSource: SourceInfo = {
+    id: 'shonenx-hls-inbuilt',
+    name: 'ShizuTv Stream (Inbuilt)',
+    type: 'inbuilt',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '2.1.5',
+  };
+
+  const blockedReport: ExtensionDiagnosticReport = {
+    sourceId: 'shonenx-hls-inbuilt',
+    sourceName: 'ShizuTv Stream (Inbuilt)',
+    status: 'fail',
+    durationMs: 420,
+    testedAt: '2026-11-20T01:30:00.000Z',
+    mode: 'full',
+    failureKind: 'blocked_request',
+    summary: 'Upstream access blocked on ShizuTv Stream (Inbuilt); remaining capabilities unverified',
+    detail:
+      'Unable to search ShizuTv Stream (Inbuilt) (HTTP 403). Upstream access is restricted or unverified from this server; this does not mean the extension format is unsupported.',
+    capabilities: buildCapabilitiesBreakdown({
+      mode: 'full',
+      mediaTab: 'ANIME',
+      searchMatched: false,
+      listingAvailable: false,
+      playbackOrPagesVerified: false,
+      listingStatus: 'untested',
+      playbackStatus: 'untested',
+    }),
+  };
+
+  const snap = buildExtensionCompatibilitySnapshot(inbuiltSource, blockedReport, 'ANIME');
+  assert.equal(snap.overallStatus, 'failed');
+  assert.equal(snap.failureKind, 'blocked_request');
+  assert.equal(snap.runtimeRequirement, 'web-compatible');
+  assert.equal(snap.capabilities.animeSearch.status, 'failed');
+  assert.equal(snap.capabilities.episodeListing.status, 'unverified');
+  assert.equal(snap.capabilities.audioLanguage.status, 'unverified');
+  assert.equal(snap.capabilities.videoPlayback.status, 'unverified');
+});
+
+
 
