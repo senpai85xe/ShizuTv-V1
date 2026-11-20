@@ -591,6 +591,7 @@ function detachFromCurrentRoom(ws: WebSocket) {
 
 async function startServer() {
   const app = express();
+  app.set('trust proxy', 1);
   app.use(express.json());
 
   const allowedCorsOrigins = getAllowedCorsOrigins({
