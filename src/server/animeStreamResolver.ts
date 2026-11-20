@@ -1830,16 +1830,19 @@ export async function diagnoseAnimeExtensionServer(params: {
   return runPromise;
 }
 
-function isGenuineExtensionIncompatibilityReason(reason?: string | null): boolean {
+function isUpstreamAccessRestrictionReason(reason?: string | null): boolean {
   if (!reason) return false;
-  return /JavaScript app|client-rendered|encrypted binary|\bdrm\b|text-based light novel|metadata\/tracking catalog/i.test(
+  return /anti-bot challenge|cloudflare|turnstile|captcha|HTTP\s*(?:403|429|503)|upstream access restriction|upstream access|access restriction|rate.?limit|blocked/i.test(
     reason,
   );
 }
 
-function isUpstreamAccessRestrictionReason(reason?: string | null): boolean {
-  if (!reason || isGenuineExtensionIncompatibilityReason(reason)) return false;
-  return /anti-bot challenge|cloudflare|turnstile|captcha|HTTP\s*(?:403|429|503)|blocked/i.test(
+function isGenuineExtensionIncompatibilityReason(reason?: string | null): boolean {
+  if (!reason) return false;
+  if (/HTTP\s*(?:403|429|503)|anti-bot challenge|upstream access restriction/i.test(reason)) {
+    return false;
+  }
+  return /JavaScript app|client-rendered|encrypted binary|\bdrm\b|text-based light novel|metadata\/tracking catalog/i.test(
     reason,
   );
 }
@@ -2033,10 +2036,21 @@ async function runDiagnoseAnimeExtensionServer(params: {
         matchedCandidates = searchRes.items;
       } else if (searchRes.reason) {
         searchErrorReason = searchRes.reason;
-        if (isGenuineExtensionIncompatibilityReason(searchRes.reason)) {
+        const treatInbuiltChallengeAsBlocked =
+          adapter.profile.kind === 'inbuilt-anime' &&
+          /turnstile|anti-bot|challenge|cloudflare|HTTP\s*(?:403|429|503)|blocked/i.test(
+            searchRes.reason,
+          );
+        if (
+          !treatInbuiltChallengeAsBlocked &&
+          isGenuineExtensionIncompatibilityReason(searchRes.reason)
+        ) {
           unsupportedReason = searchRes.reason;
           searchFailureKind = classifyDiagnosticFailure(searchRes.reason);
-        } else if (isUpstreamAccessRestrictionReason(searchRes.reason)) {
+        } else if (
+          treatInbuiltChallengeAsBlocked ||
+          isUpstreamAccessRestrictionReason(searchRes.reason)
+        ) {
           searchBlockedByUpstream = true;
           searchFailureKind = 'blocked_request';
         } else {
@@ -2290,7 +2304,7 @@ async function runDiagnoseAnimeExtensionServer(params: {
     errorOccurred: !playbackVerified && !listingAvailable && !searchOk,
   });
 
-  // Preserve blocked_request from an earlier stage if a downstream stage only failed due to missing candidate
+  // Preserve blocked_request from an earlier stage if a downstream stage only failed due to missing candidate or upstream listing block
   const streamMissingSearchCandidateOnly =
     Boolean(searchBlockedByUpstream) &&
     !playbackVerified &&
@@ -2298,17 +2312,29 @@ async function runDiagnoseAnimeExtensionServer(params: {
     (!streamFailureKind || streamFailureKind === 'provider_error') &&
     (!streamError || /No matching anime entries found/i.test(streamError));
 
+  const streamBlockedByEpisodeListing =
+    Boolean(epBlockedByUpstream) &&
+    !listingAvailable &&
+    !playbackVerified &&
+    !streamBlockedByUpstream &&
+    (!streamFailureKind || streamFailureKind === 'provider_error') &&
+    (!streamError || /No matching anime entries found/i.test(streamError));
+
   const listingStatusOverride: CapabilityStatus | undefined =
     !listingAvailable && !topCandidate && searchBlockedByUpstream ? 'untested' : undefined;
-  const playbackStatusOverride: CapabilityStatus | undefined = streamMissingSearchCandidateOnly
-    ? 'untested'
-    : undefined;
+  const playbackStatusOverride: CapabilityStatus | undefined =
+    streamMissingSearchCandidateOnly || streamBlockedByEpisodeListing ? 'untested' : undefined;
 
   const preserveSearchBlockDetail =
     !playbackVerified &&
     searchBlockedByUpstream &&
     (!epBlockedByUpstream || !epErrorReason) &&
     (streamMissingSearchCandidateOnly || !streamError);
+
+  const preserveEpisodeBlockDetail =
+    !playbackVerified &&
+    Boolean(epBlockedByUpstream && epErrorReason) &&
+    (streamBlockedByEpisodeListing || !streamError);
 
   const resolvedFailureKind: DiagnosticFailureKind | undefined =
     overall === 'pass'
@@ -2317,7 +2343,9 @@ async function runDiagnoseAnimeExtensionServer(params: {
         : searchFailureKind
       : preserveSearchBlockDetail
         ? searchFailureKind || 'blocked_request'
-        : streamFailureKind || epFailureKind || searchFailureKind || 'provider_error';
+        : preserveEpisodeBlockDetail
+          ? epFailureKind || 'blocked_request'
+          : streamFailureKind || epFailureKind || searchFailureKind || 'provider_error';
 
   let resolvedDetail: string;
   if (overall === 'pass' && resolvedPayload) {

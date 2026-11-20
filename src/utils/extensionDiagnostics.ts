@@ -266,7 +266,9 @@ export function classifyDiagnosticFailure(
   if (statusCode === 401 || statusCode === 407) return 'auth_required';
   if (statusCode === 429) return 'blocked_request';
   if (statusCode === 403) {
-    return /cloudflare|turnstile|captcha|anti-bot|challenge|just a moment|bot/.test(msg)
+    return /cloudflare|turnstile|captcha|anti-bot|challenge|just a moment|bot|upstream access|access is restricted|ddos-guard|waf/.test(
+      msg,
+    )
       ? 'blocked_request'
       : 'auth_required';
   }
@@ -282,7 +284,11 @@ export function classifyDiagnosticFailure(
   ) {
     return 'network_error';
   }
-  if (/turnstile|cloudflare|anti-bot|captcha|challenge|http (?:429|503)|blocked/i.test(msg)) {
+  if (
+    /turnstile|cloudflare|anti-bot|captcha|challenge|http\s*(?:429|503)|blocked|upstream access|access is restricted|ddos-guard|waf|rate.?limit/i.test(
+      msg,
+    )
+  ) {
     return 'blocked_request';
   }
   if (/unauthorized|authentication|login required|http (?:401|403|407)|forbidden/i.test(msg)) {
@@ -536,6 +542,95 @@ type SnapshotWithoutRuntime = Omit<
   'runtimeRequirement' | 'runtimeRequirementLabel' | 'isNativePackageMetadataOnly'
 >;
 
+const GENUINE_UNSUPPORTED_REPORT_TEXT_RE =
+  /metadata\/tracking catalog|metadata-only|valid http base url|missing.*host|gotaku|text-based light novel|encrypted binary|\bdrm\b/i;
+
+const UPSTREAM_BLOCKED_REPORT_TEXT_RE =
+  /http\s*(?:403|429|503)|anti-bot|cloudflare|turnstile|captcha|upstream protection|upstream access|access restriction|rate.?limit|blocked/i;
+
+export function normalizeUpstreamBlockedUnsupportedReport(
+  report: ExtensionDiagnosticReport,
+  profileKind?: string,
+): ExtensionDiagnosticReport {
+  if (report.status !== 'unsupported') {
+    return report;
+  }
+
+  if (
+    profileKind === 'metadata-only' ||
+    profileKind === 'missing-host' ||
+    profileKind === 'gotaku' ||
+    profileKind === 'non-anime'
+  ) {
+    return report;
+  }
+
+  const combinedText = `${report.summary || ''} ${report.detail || ''}`;
+  if (GENUINE_UNSUPPORTED_REPORT_TEXT_RE.test(combinedText)) {
+    return report;
+  }
+
+  const isUpstreamBlock =
+    report.failureKind === 'blocked_request' || UPSTREAM_BLOCKED_REPORT_TEXT_RE.test(combinedText);
+
+  if (!isUpstreamBlock) {
+    return report;
+  }
+
+  const caps = report.capabilities;
+  const searchVerified = caps.metadataSearch === 'verified';
+  const listingVerified = caps.episodeOrChapterListing === 'verified';
+  const playbackVerified = caps.playbackOrReader === 'verified';
+
+  const nextSearch: CapabilityStatus = searchVerified
+    ? 'verified'
+    : caps.metadataSearch === 'unsupported'
+      ? 'unavailable'
+      : caps.metadataSearch;
+
+  const nextListing: CapabilityStatus = listingVerified
+    ? 'verified'
+    : caps.episodeOrChapterListing === 'unsupported'
+      ? searchVerified
+        ? 'unavailable'
+        : 'untested'
+      : caps.episodeOrChapterListing;
+
+  const nextPlayback: CapabilityStatus = playbackVerified
+    ? 'verified'
+    : caps.playbackOrReader === 'unsupported'
+      ? searchVerified && listingVerified
+        ? 'unavailable'
+        : 'untested'
+      : caps.playbackOrReader;
+
+  const nextAudio: CapabilityStatus =
+    caps.audioLanguage === 'unsupported' ? 'untested' : (caps.audioLanguage ?? 'untested');
+
+  const hasPartialProgress = searchVerified || listingVerified;
+  const nextStatus: DiagnosticOverallStatus = hasPartialProgress ? 'partial' : 'fail';
+
+  const normalizedSummary = /unsupported in web bridge:\s*upstream protection/i.test(
+    report.summary || '',
+  )
+    ? `Upstream access blocked on ${report.sourceName}; remaining capabilities unverified`
+    : report.summary;
+
+  return {
+    ...report,
+    status: nextStatus,
+    failureKind: 'blocked_request',
+    summary: normalizedSummary,
+    capabilities: {
+      metadataSearch: nextSearch,
+      episodeOrChapterListing: nextListing,
+      audioLanguage: nextAudio,
+      playbackOrReader: nextPlayback,
+      overallCompatibility: hasPartialProgress ? 'partial' : 'incompatible',
+    },
+  };
+}
+
 function attachRuntimeRequirement(
   source: Pick<SourceInfo, 'id' | 'name' | 'type' | 'mediaTypes' | 'baseUrl' | 'pkg'> &
     Partial<Pick<SourceInfo, 'apkName' | 'metadataOnlyStorage' | 'runtimeRequirement'>>,
@@ -764,20 +859,23 @@ export function buildExtensionCompatibilitySnapshot(
   }
 
   // 5. Persisted report exists — enforce strict anti-false-positive verification gates.
-  const effectiveMode = inferEffectiveMode(report);
-  const caps = report.capabilities;
+  const normalizedReport = normalizeUpstreamBlockedUnsupportedReport(report, profile.kind);
+  const effectiveMode = inferEffectiveMode(normalizedReport);
+  const caps = normalizedReport.capabilities;
 
   if (effectiveMode === 'ping') {
     const overallStatus: CompatibilityDisplayStatus =
-      report.status === 'fail'
+      normalizedReport.status === 'fail'
         ? 'failed'
-        : report.status === 'unsupported'
+        : normalizedReport.status === 'unsupported'
           ? 'unsupported'
           : 'partial';
     const failureReason =
-      report.detail || report.summary || 'Ping check only; playback pipeline was not verified.';
+      normalizedReport.detail ||
+      normalizedReport.summary ||
+      'Ping check only; playback pipeline was not verified.';
     const failureKind =
-      report.failureKind ||
+      normalizedReport.failureKind ||
       (overallStatus === 'failed' || overallStatus === 'unsupported'
         ? classifyDiagnosticFailure(failureReason)
         : null);
@@ -811,11 +909,11 @@ export function buildExtensionCompatibilitySnapshot(
         },
         lastTestedAt,
         lastVerifiedAt,
-        lastDiagnosticResult: report.summary,
+        lastDiagnosticResult: normalizedReport.summary,
         failureReason,
         failureKind,
         failureKindLabel: failureKind ? DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind] : null,
-        probeScope: report.probeScope || null,
+        probeScope: normalizedReport.probeScope || null,
         hasVerifiedFullDiagnostic: false,
         detectedAudioLanguages: [],
         confirmedAudioLanguages: [],
@@ -823,7 +921,7 @@ export function buildExtensionCompatibilitySnapshot(
         audioVerificationDetail: null,
         history,
       },
-      report.status,
+      normalizedReport.status,
       contextMediaTab,
     );
   }
@@ -831,17 +929,17 @@ export function buildExtensionCompatibilitySnapshot(
   if (effectiveMode === 'basic') {
     const searchDisplay = mapCapabilityStatusToDisplayStatus(caps.metadataSearch);
     const overallStatus: CompatibilityDisplayStatus =
-      report.status === 'unsupported'
+      normalizedReport.status === 'unsupported'
         ? 'unsupported'
         : searchDisplay === 'supported'
           ? 'partial'
           : 'failed';
     const failureReason =
-      report.detail ||
-      report.summary ||
+      normalizedReport.detail ||
+      normalizedReport.summary ||
       'Basic search check only; episode listing and playback were not verified.';
     const failureKind =
-      report.failureKind ||
+      normalizedReport.failureKind ||
       (overallStatus === 'failed' || overallStatus === 'unsupported'
         ? classifyDiagnosticFailure(failureReason)
         : null);
@@ -875,11 +973,11 @@ export function buildExtensionCompatibilitySnapshot(
         },
         lastTestedAt,
         lastVerifiedAt,
-        lastDiagnosticResult: report.summary,
+        lastDiagnosticResult: normalizedReport.summary,
         failureReason,
         failureKind,
         failureKindLabel: failureKind ? DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind] : null,
-        probeScope: report.probeScope || null,
+        probeScope: normalizedReport.probeScope || null,
         hasVerifiedFullDiagnostic: false,
         detectedAudioLanguages: [],
         confirmedAudioLanguages: [],
@@ -887,14 +985,14 @@ export function buildExtensionCompatibilitySnapshot(
         audioVerificationDetail: null,
         history,
       },
-      report.status,
+      normalizedReport.status,
       contextMediaTab,
     );
   }
 
   // Full diagnostic mode
   const playbackVerifiedStrict =
-    report.status === 'pass' && caps.playbackOrReader === 'verified';
+    normalizedReport.status === 'pass' && caps.playbackOrReader === 'verified';
 
   const animeSearchStatus = mapCapabilityStatusToDisplayStatus(caps.metadataSearch);
   const episodeListingStatus = mapCapabilityStatusToDisplayStatus(caps.episodeOrChapterListing);
@@ -907,9 +1005,9 @@ export function buildExtensionCompatibilitySnapshot(
       ? 'failed'
       : rawPlaybackStatus;
 
-  const explicitConfirmedAudio = sanitizeStringList(report.confirmedAudioLanguages);
-  const explicitInferredAudio = sanitizeStringList(report.inferredAudioLanguages);
-  const legacyDetectedAudio = sanitizeStringList(report.detectedAudioLanguages);
+  const explicitConfirmedAudio = sanitizeStringList(normalizedReport.confirmedAudioLanguages);
+  const explicitInferredAudio = sanitizeStringList(normalizedReport.inferredAudioLanguages);
+  const legacyDetectedAudio = sanitizeStringList(normalizedReport.detectedAudioLanguages);
 
   const confirmedAudioLanguages = playbackVerifiedStrict
     ? explicitConfirmedAudio.length > 0
@@ -950,7 +1048,7 @@ export function buildExtensionCompatibilitySnapshot(
   }
 
   let overallStatus: CompatibilityDisplayStatus;
-  if (report.status === 'unsupported') {
+  if (normalizedReport.status === 'unsupported') {
     overallStatus = 'unsupported';
   } else if (
     playbackVerifiedStrict &&
@@ -964,7 +1062,7 @@ export function buildExtensionCompatibilitySnapshot(
         ? 'partial'
         : 'supported';
   } else if (
-    report.status === 'fail' ||
+    normalizedReport.status === 'fail' ||
     (animeSearchStatus === 'failed' &&
       episodeListingStatus !== 'supported' &&
       videoPlaybackStatus !== 'supported')
@@ -975,7 +1073,7 @@ export function buildExtensionCompatibilitySnapshot(
     episodeListingStatus === 'supported' ||
     videoPlaybackStatus === 'partial' ||
     audioLanguageStatus === 'partial' ||
-    report.status === 'partial'
+    normalizedReport.status === 'partial'
   ) {
     overallStatus = 'partial';
   } else {
@@ -992,10 +1090,11 @@ export function buildExtensionCompatibilitySnapshot(
           : 'unverified';
 
   const probeScope =
-    report.probeScope || (contextMediaTab === 'ANIME' ? DEFAULT_DIAGNOSTIC_PROBE_SCOPE : null);
+    normalizedReport.probeScope ||
+    (contextMediaTab === 'ANIME' ? DEFAULT_DIAGNOSTIC_PROBE_SCOPE : null);
 
   const audioVerificationDetail =
-    report.audioVerificationDetail ||
+    normalizedReport.audioVerificationDetail ||
     (contextMediaTab !== 'ANIME'
       ? null
       : playbackVerifiedStrict
@@ -1009,12 +1108,14 @@ export function buildExtensionCompatibilitySnapshot(
   const failureReason =
     overallStatus === 'supported'
       ? null
-      : report.detail || report.summary || 'Full diagnostic did not verify all required capabilities.';
+      : normalizedReport.detail ||
+        normalizedReport.summary ||
+        'Full diagnostic did not verify all required capabilities.';
 
   const failureKind =
     overallStatus === 'supported'
       ? null
-      : report.failureKind ||
+      : normalizedReport.failureKind ||
         (failureReason && overallStatus !== 'partial'
           ? classifyDiagnosticFailure(failureReason)
           : overallStatus === 'partial' && !playbackVerifiedStrict
@@ -1040,7 +1141,7 @@ export function buildExtensionCompatibilitySnapshot(
       },
       lastTestedAt,
       lastVerifiedAt,
-      lastDiagnosticResult: report.summary,
+      lastDiagnosticResult: normalizedReport.summary,
       failureReason,
       failureKind,
       failureKindLabel: failureKind ? DIAGNOSTIC_FAILURE_KIND_LABELS[failureKind] : null,
@@ -1052,7 +1153,7 @@ export function buildExtensionCompatibilitySnapshot(
       audioVerificationDetail,
       history,
     },
-    report.status,
+    normalizedReport.status,
     contextMediaTab,
   );
 }
@@ -1121,7 +1222,9 @@ export function loadPersistedExtensionDiagnostics(
         (entry as ExtensionDiagnosticReport).capabilities &&
         typeof (entry as ExtensionDiagnosticReport).capabilities === 'object'
       ) {
-        valid[id] = entry as ExtensionDiagnosticReport;
+        valid[id] = normalizeUpstreamBlockedUnsupportedReport(
+          entry as ExtensionDiagnosticReport,
+        );
       }
     }
     return valid;

@@ -1428,10 +1428,14 @@ export function detectExtensionWebCompatibilityIssue(params: {
 }): string | null {
   const { status, html, sourceLabel, host, parsedCandidatesCount = 0 } = params;
 
+  if (status === 403 || status === 429 || status === 503) {
+    return `${sourceLabel} (${host}) is protected by an anti-bot challenge or upstream access restriction (HTTP ${status}) and cannot be searched directly by the web adapter.`;
+  }
+
   if (
-    ((status === 403 || status === 429 || status === 503) &&
-      /just a moment|cf-challenge|cloudflare|attention required|enable javascript/i.test(html)) ||
-    /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(html)
+    /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(html) ||
+    (parsedCandidatesCount === 0 &&
+      /just a moment|cf-challenge|attention required|enable javascript and cookies/i.test(html))
   ) {
     return `${sourceLabel} (${host}) is protected by an anti-bot challenge (HTTP ${status}) and cannot be searched directly by the web adapter.`;
   }

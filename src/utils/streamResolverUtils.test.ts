@@ -519,6 +519,16 @@ test('SPA & Turnstile compatibility detection flags Gotaku-style JS shells while
   });
   assert.ok(cfChallengeReason && /anti-bot challenge/i.test(cfChallengeReason));
 
+  const generic403SpaShell = detectExtensionWebCompatibilityIssue({
+    status: 403,
+    html: '<html><body><div id="root"></div><script src="/waf-challenge.js"></script></body></html>',
+    sourceLabel: 'ShizuTv Stream (Inbuilt)',
+    host: 'https://ww5.gogoanimes.fi',
+    parsedCandidatesCount: 0,
+  });
+  assert.ok(generic403SpaShell && /HTTP 403/i.test(generic403SpaShell));
+  assert.equal(/JavaScript app/i.test(generic403SpaShell), false);
+
   const ssrHtml = `
     <div class="bsx">
       <a href="/anime/chainsaw-man/" title="Chainsaw Man">Chainsaw Man</a>

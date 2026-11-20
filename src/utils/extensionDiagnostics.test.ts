@@ -673,6 +673,106 @@ test('HTTP 403 blocked Inbuilt diagnostic preserves Web Adapter Compatible runti
   assert.equal(snap.capabilities.episodeListing.status, 'unverified');
   assert.equal(snap.capabilities.audioLanguage.status, 'unverified');
   assert.equal(snap.capabilities.videoPlayback.status, 'unverified');
+
+  // Stale persisted pre-fix report that had status='unsupported' from HTTP 403 heals on load and snapshot
+  const stalePersisted403Report: ExtensionDiagnosticReport = {
+    sourceId: 'shonenx-hls-inbuilt',
+    sourceName: 'ShizuTv Stream (Inbuilt)',
+    status: 'unsupported',
+    durationMs: 390,
+    testedAt: '2026-11-19T22:00:00.000Z',
+    mode: 'full',
+    summary: 'Unsupported in Web Bridge: Upstream protection',
+    detail: 'https://ww5.gogoanimes.fi returned HTTP 403 Cloudflare challenge.',
+    capabilities: {
+      metadataSearch: 'unsupported',
+      episodeOrChapterListing: 'unsupported',
+      audioLanguage: 'unsupported',
+      playbackOrReader: 'unsupported',
+      overallCompatibility: 'unsupported',
+    },
+  };
+
+  const backing = new Map<string, string>();
+  backing.set(
+    EXTENSION_DIAGNOSTICS_STORAGE_KEY,
+    JSON.stringify({ 'shonenx-hls-inbuilt': stalePersisted403Report }),
+  );
+  const healedMap = loadPersistedExtensionDiagnostics({
+    getItem: (k) => backing.get(k) ?? null,
+    setItem: (k, v) => backing.set(k, v),
+  });
+  const healed = healedMap['shonenx-hls-inbuilt'];
+  assert.equal(healed.status, 'fail');
+  assert.equal(healed.failureKind, 'blocked_request');
+  assert.equal(healed.capabilities.metadataSearch, 'unavailable');
+  assert.equal(healed.capabilities.episodeOrChapterListing, 'untested');
+  assert.equal(healed.capabilities.audioLanguage, 'untested');
+  assert.equal(healed.capabilities.playbackOrReader, 'untested');
+
+  const healedSnap = buildExtensionCompatibilitySnapshot(inbuiltSource, stalePersisted403Report, 'ANIME');
+  assert.equal(healedSnap.overallStatus, 'failed');
+  assert.equal(healedSnap.runtimeRequirement, 'web-compatible');
+  assert.equal(healedSnap.capabilities.animeSearch.status, 'failed');
+  assert.equal(healedSnap.capabilities.episodeListing.status, 'unverified');
+  assert.equal(healedSnap.capabilities.audioLanguage.status, 'unverified');
+  assert.equal(healedSnap.capabilities.videoPlayback.status, 'unverified');
+
+  // Partial stale unsupported report preserves verified search as Supported
+  const stalePartial403Report: ExtensionDiagnosticReport = {
+    ...stalePersisted403Report,
+    capabilities: {
+      metadataSearch: 'verified',
+      episodeOrChapterListing: 'unsupported',
+      audioLanguage: 'unsupported',
+      playbackOrReader: 'unsupported',
+      overallCompatibility: 'unsupported',
+    },
+  };
+  const partialHealedSnap = buildExtensionCompatibilitySnapshot(
+    inbuiltSource,
+    stalePartial403Report,
+    'ANIME',
+  );
+  assert.equal(partialHealedSnap.overallStatus, 'partial');
+  assert.equal(partialHealedSnap.capabilities.animeSearch.status, 'supported');
+  assert.equal(partialHealedSnap.capabilities.episodeListing.status, 'failed');
+  assert.equal(partialHealedSnap.capabilities.audioLanguage.status, 'unverified');
+  assert.equal(partialHealedSnap.capabilities.videoPlayback.status, 'unverified');
+
+  // Genuine client-rendered JS SPA unsupported report remains Unsupported
+  const genuineSpaSource: SourceInfo = {
+    id: 'ext-ay-spa',
+    name: 'ClientSpaAnime',
+    type: 'extension',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '1.0.0',
+    baseUrl: 'https://spa-only.example',
+  };
+  const genuineSpaReport: ExtensionDiagnosticReport = {
+    sourceId: 'ext-ay-spa',
+    sourceName: 'ClientSpaAnime',
+    status: 'unsupported',
+    durationMs: 210,
+    testedAt: '2026-11-20T01:35:00.000Z',
+    mode: 'full',
+    failureKind: 'unsupported_format',
+    summary: 'Unsupported in Web Bridge: Extension format requires unsupported runtime',
+    detail: 'ClientSpaAnime (https://spa-only.example) is a client-rendered JavaScript app without server-rendered search results.',
+    capabilities: {
+      metadataSearch: 'unsupported',
+      episodeOrChapterListing: 'unsupported',
+      audioLanguage: 'unsupported',
+      playbackOrReader: 'unsupported',
+      overallCompatibility: 'unsupported',
+    },
+  };
+  const spaSnap = buildExtensionCompatibilitySnapshot(genuineSpaSource, genuineSpaReport, 'ANIME');
+  assert.equal(spaSnap.overallStatus, 'unsupported');
+  assert.equal(spaSnap.capabilities.animeSearch.status, 'unsupported');
+  assert.equal(spaSnap.capabilities.episodeListing.status, 'unsupported');
+  assert.equal(spaSnap.capabilities.videoPlayback.status, 'unsupported');
 });
 
 

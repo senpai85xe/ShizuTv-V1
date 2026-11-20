@@ -1601,6 +1601,58 @@ test('diagnoseAnimeExtensionServer distinguishes upstream HTTP 403/429/503 block
     });
     assert.equal(spaDiag.status, 'unsupported');
     assert.equal(spaDiag.capabilities.playbackOrReader, 'unsupported');
+
+    // Scenario D: ShizuTv Stream (Inbuilt) receives HTTP 403 with SPA/Turnstile-style shell -> fail + blocked_request, never unsupported
+    globalThis.fetch = (async () => {
+      return new Response(
+        '<html><body><div id="root"></div><script>window.__waf=1</script></body></html>',
+        { status: 403, headers: { 'Content-Type': 'text/html' } },
+      );
+    }) as typeof fetch;
+
+    const inbuilt403SpaShell = await diagnoseAnimeExtensionServer({
+      sourceId: 'shonenx-hls-inbuilt',
+      sourceName: 'ShizuTv Stream (Inbuilt)',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    assert.equal(inbuilt403SpaShell.status, 'fail');
+    assert.equal(inbuilt403SpaShell.failureKind, 'blocked_request');
+    assert.equal(inbuilt403SpaShell.capabilities.metadataSearch, 'unavailable');
+    assert.equal(inbuilt403SpaShell.capabilities.episodeOrChapterListing, 'untested');
+    assert.equal(inbuilt403SpaShell.capabilities.audioLanguage, 'untested');
+    assert.equal(inbuilt403SpaShell.capabilities.playbackOrReader, 'untested');
+
+    // Scenario E: ShizuTv Stream (Inbuilt) Search succeeds, Episode listing AJAX hits HTTP 403 -> Search stays verified, Listing failed, Playback untested
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.startsWith('https://ww5.gogoanimes.fi/search.html?keyword=')) {
+        return new Response(
+          `<ul class="items"><li><p class="name"><a href="/category/naruto" title="Naruto">Naruto</a></p></li></ul>`,
+          { status: 200, headers: { 'Content-Type': 'text/html' } },
+        );
+      }
+      if (url.endsWith('/category/naruto')) {
+        return new Response(`<input type="hidden" id="movie_id" value="12" />`, {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        });
+      }
+      return new Response('Access denied', { status: 403 });
+    }) as typeof fetch;
+
+    const searchOkEpBlocked = await diagnoseAnimeExtensionServer({
+      sourceId: 'shonenx-hls-inbuilt',
+      sourceName: 'ShizuTv Stream (Inbuilt)',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    assert.equal(searchOkEpBlocked.status, 'partial');
+    assert.equal(searchOkEpBlocked.failureKind, 'blocked_request');
+    assert.equal(searchOkEpBlocked.capabilities.metadataSearch, 'verified');
+    assert.equal(searchOkEpBlocked.capabilities.episodeOrChapterListing, 'unavailable');
+    assert.equal(searchOkEpBlocked.capabilities.playbackOrReader, 'untested');
+    assert.equal(searchOkEpBlocked.capabilities.audioLanguage, 'untested');
   } finally {
     globalThis.fetch = originalFetch;
   }

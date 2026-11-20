@@ -1126,6 +1126,18 @@ async function loadHtmlSeriesEpisodesAcrossHosts<TPayload>(params: {
                 animeHref: href,
                 animeSlug: slug,
               });
+            } else if (ajaxRes) {
+              const ajaxIssue = detectExtensionWebCompatibilityIssue({
+                status: ajaxRes.status,
+                html: ajaxRes.text,
+                sourceLabel,
+                host,
+              });
+              if (ajaxIssue) {
+                compatibilityIssue = compatibilityIssue || ajaxIssue;
+              } else {
+                lastNetworkError = `HTTP ${ajaxRes.status}`;
+              }
             }
           }
         }
