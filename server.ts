@@ -601,9 +601,20 @@ async function startServer() {
   });
 
   app.use('/api', (req, res, next) => {
+    const rawForwardedHost = req.headers['x-forwarded-host'];
+    const requestHost =
+      typeof rawForwardedHost === 'string' && rawForwardedHost.trim()
+        ? rawForwardedHost
+        : typeof req.headers.host === 'string'
+          ? req.headers.host
+          : undefined;
     const corsHeaders = buildApiCorsHeaders(
       typeof req.headers.origin === 'string' ? req.headers.origin : undefined,
       allowedCorsOrigins,
+      {
+        requestHost,
+        extraOrigins: process.env.CORS_ALLOWED_ORIGINS,
+      },
     );
     for (const [header, value] of Object.entries(corsHeaders)) {
       res.setHeader(header, value);

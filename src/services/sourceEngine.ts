@@ -44,11 +44,27 @@ import type {
   ExtensionDiagnosticReport,
 } from '../utils/extensionDiagnostics';
 import {
+  classifyClientBackendFetchError,
   parseJsonResponseSafely,
   resolveApiUrl,
   rewriteMangaPagesUrls,
   rewriteVideoStreamUrls,
 } from '../utils/backendConfig';
+
+async function fetchBackendApi(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  contextLabel: string,
+): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    if (init?.signal?.aborted) {
+      throw err;
+    }
+    throw classifyClientBackendFetchError(err, contextLabel);
+  }
+}
 
 export { ExtensionCapabilityError };
 
@@ -580,10 +596,12 @@ async function resolveStreamViaApi(params: ResolveVideoStreamParams): Promise<Vi
         }
       : null;
 
-  const response = await fetch(resolveApiUrl('/api/stream/resolve'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal,
+  const response = await fetchBackendApi(
+    resolveApiUrl('/api/stream/resolve'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal,
     body: JSON.stringify({
       mediaId: media.id,
       titles: {
@@ -607,7 +625,9 @@ async function resolveStreamViaApi(params: ResolveVideoStreamParams): Promise<Vi
       selectedEpisode: matchingEpisode,
       bypassCache: Boolean(bypassCache),
     }),
-  });
+    },
+    `stream resolution (${sourceName || sourceId || 'Inbuilt'})`,
+  );
 
   if (!response.ok) {
     let errMessage = `Failed to resolve episode stream (HTTP ${response.status}).`;
@@ -963,19 +983,23 @@ export class ServerBackedAnimeExtensionAdapter extends ExtensionAdapter {
     query: string,
     options?: ExtensionSearchOptions,
   ): Promise<ExtensionTitleSearchResponse> {
-    const response = await fetch(resolveApiUrl('/api/extensions/search'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: options?.signal,
-      body: JSON.stringify({
-        sourceId: this.source.id,
-        sourceName: this.source.name,
-        sourceBaseUrl: this.source.baseUrl,
-        sourceLang: this.source.lang,
-        sourcePkg: this.source.pkg,
-        query,
-      }),
-    });
+    const response = await fetchBackendApi(
+      resolveApiUrl('/api/extensions/search'),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: options?.signal,
+        body: JSON.stringify({
+          sourceId: this.source.id,
+          sourceName: this.source.name,
+          sourceBaseUrl: this.source.baseUrl,
+          sourceLang: this.source.lang,
+          sourcePkg: this.source.pkg,
+          query,
+        }),
+      },
+      `extension search (${this.source.name})`,
+    );
 
     const payload = await parseJsonResponseSafely<
       ExtensionTitleSearchResponse & { message?: string }
@@ -1002,25 +1026,29 @@ export class ServerBackedAnimeExtensionAdapter extends ExtensionAdapter {
       selected.href &&
       selected.sourceId === this.source.id
     ) {
-      const response = await fetch(resolveApiUrl('/api/extensions/episodes'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: input.signal,
-        body: JSON.stringify({
-          sourceId: this.source.id,
-          sourceName: this.source.name,
-          sourceBaseUrl: this.source.baseUrl,
-          sourceLang: this.source.lang,
-          sourcePkg: this.source.pkg,
-          selectedSourceEntry: {
-            sourceId: selected.sourceId,
-            title: selected.title,
-            href: selected.href,
-            slug: selected.slug,
-          },
-          bypassCache: Boolean(input.bypassCache),
-        }),
-      });
+      const response = await fetchBackendApi(
+        resolveApiUrl('/api/extensions/episodes'),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: input.signal,
+          body: JSON.stringify({
+            sourceId: this.source.id,
+            sourceName: this.source.name,
+            sourceBaseUrl: this.source.baseUrl,
+            sourceLang: this.source.lang,
+            sourcePkg: this.source.pkg,
+            selectedSourceEntry: {
+              sourceId: selected.sourceId,
+              title: selected.title,
+              href: selected.href,
+              slug: selected.slug,
+            },
+            bypassCache: Boolean(input.bypassCache),
+          }),
+        },
+        `extension episodes (${this.source.name || this.source.id})`,
+      );
 
       const payload = await parseJsonResponseSafely<
         ExtensionEpisodesResponse & { message?: string }
@@ -1517,27 +1545,31 @@ export async function resolveMangaChaptersAsync(
   if (params.media.type === 'NOVEL') {
     throw new Error('Text-based Light Novel reading is not supported yet. Novel titles do not use Manga image sources.');
   }
-  const response = await fetch(resolveApiUrl('/api/manga/chapters'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: params.signal,
-    body: JSON.stringify({
-      mediaId: params.media.id,
-      mediaType: params.media.type,
-      titles: {
-        overrideTitle: params.overrideTitle?.trim() || null,
-        english: params.media.title?.english ?? null,
-        romaji: params.media.title?.romaji ?? null,
-        native: params.media.title?.native ?? null,
-        synonyms: params.media.synonyms ?? null,
-      },
-      sourceId: params.sourceId,
-      sourceName: params.sourceName,
-      sourceBaseUrl: params.sourceBaseUrl,
-      sourceLang: params.sourceLang,
-      bypassCache: Boolean(params.bypassCache),
-    }),
-  });
+  const response = await fetchBackendApi(
+    resolveApiUrl('/api/manga/chapters'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: params.signal,
+      body: JSON.stringify({
+        mediaId: params.media.id,
+        mediaType: params.media.type,
+        titles: {
+          overrideTitle: params.overrideTitle?.trim() || null,
+          english: params.media.title?.english ?? null,
+          romaji: params.media.title?.romaji ?? null,
+          native: params.media.title?.native ?? null,
+          synonyms: params.media.synonyms ?? null,
+        },
+        sourceId: params.sourceId,
+        sourceName: params.sourceName,
+        sourceBaseUrl: params.sourceBaseUrl,
+        sourceLang: params.sourceLang,
+        bypassCache: Boolean(params.bypassCache),
+      }),
+    },
+    'manga chapters',
+  );
 
   if (!response.ok) {
     let errMessage = `Failed to load chapters (HTTP ${response.status}).`;
@@ -1582,34 +1614,38 @@ export async function resolveMangaChapterPagesAsync(
   if (params.media.type === 'NOVEL') {
     throw new Error('Text-based Light Novel reading is not supported yet. Novel titles do not use Manga image sources.');
   }
-  const response = await fetch(resolveApiUrl('/api/manga/pages'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: params.signal,
-    body: JSON.stringify({
-      mediaId: params.media.id,
-      mediaType: params.media.type,
-      titles: {
-        overrideTitle: params.overrideTitle?.trim() || null,
-        english: params.media.title?.english ?? null,
-        romaji: params.media.title?.romaji ?? null,
-        native: params.media.title?.native ?? null,
-        synonyms: params.media.synonyms ?? null,
-      },
-      chapter: {
-        id: params.chapter.id,
-        number: params.chapter.number,
-        title: params.chapter.title,
-        sourceChapterId: params.chapter.sourceChapterId,
-        chapterUrl: params.chapter.chapterUrl,
-      },
-      sourceId: params.sourceId,
-      sourceName: params.sourceName,
-      sourceBaseUrl: params.sourceBaseUrl,
-      sourceLang: params.sourceLang,
-      bypassCache: Boolean(params.bypassCache),
-    }),
-  });
+  const response = await fetchBackendApi(
+    resolveApiUrl('/api/manga/pages'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: params.signal,
+      body: JSON.stringify({
+        mediaId: params.media.id,
+        mediaType: params.media.type,
+        titles: {
+          overrideTitle: params.overrideTitle?.trim() || null,
+          english: params.media.title?.english ?? null,
+          romaji: params.media.title?.romaji ?? null,
+          native: params.media.title?.native ?? null,
+          synonyms: params.media.synonyms ?? null,
+        },
+        chapter: {
+          id: params.chapter.id,
+          number: params.chapter.number,
+          title: params.chapter.title,
+          sourceChapterId: params.chapter.sourceChapterId,
+          chapterUrl: params.chapter.chapterUrl,
+        },
+        sourceId: params.sourceId,
+        sourceName: params.sourceName,
+        sourceBaseUrl: params.sourceBaseUrl,
+        sourceLang: params.sourceLang,
+        bypassCache: Boolean(params.bypassCache),
+      }),
+    },
+    'manga pages',
+  );
 
   if (!response.ok) {
     let errMessage = `Failed to load chapter pages (HTTP ${response.status}).`;
@@ -1698,23 +1734,27 @@ export async function diagnoseExtensionAsync(params: {
   }
 
   const exec = (async () => {
-    const response = await fetch(resolveApiUrl('/api/extensions/diagnose'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: params.signal,
-      body: JSON.stringify({
-        sourceId: params.source.id,
-        sourceName: params.source.name,
-        sourceType: params.source.type,
-        sourceBaseUrl: params.source.baseUrl,
-        sourceLang: params.source.lang,
-        sourcePkg: params.source.pkg,
-        sourceMediaTypes: params.source.mediaTypes,
-        mediaType: params.mediaType,
-        mode: params.mode,
-        query: cleanQuery,
-      }),
-    });
+    const response = await fetchBackendApi(
+      resolveApiUrl('/api/extensions/diagnose'),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: params.signal,
+        body: JSON.stringify({
+          sourceId: params.source.id,
+          sourceName: params.source.name,
+          sourceType: params.source.type,
+          sourceBaseUrl: params.source.baseUrl,
+          sourceLang: params.source.lang,
+          sourcePkg: params.source.pkg,
+          sourceMediaTypes: params.source.mediaTypes,
+          mediaType: params.mediaType,
+          mode: params.mode,
+          query: cleanQuery,
+        }),
+      },
+      `extension diagnostics (${params.source.name})`,
+    );
 
     const payload = await parseJsonResponseSafely<
       ExtensionDiagnosticReport & { message?: string }

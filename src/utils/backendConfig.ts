@@ -42,6 +42,104 @@ export class NonJsonResponseError extends Error {
   }
 }
 
+export class BackendConnectionError extends Error {
+  readonly code = 'BACKEND_CONNECTION_FAILED';
+  readonly targetUrl?: string;
+  readonly isTimeout: boolean;
+
+  constructor(message: string, options?: { targetUrl?: string; isTimeout?: boolean }) {
+    super(message);
+    this.name = 'BackendConnectionError';
+    this.targetUrl = options?.targetUrl;
+    this.isTimeout = Boolean(options?.isTimeout);
+  }
+}
+
+export function isBrowserNetworkOrCorsFetchError(err: unknown): boolean {
+  const rawMsg = err instanceof Error ? err.message : String(err || '');
+  const normalized = rawMsg.toLowerCase();
+  return (
+    normalized.includes('failed to fetch') ||
+    normalized.includes('networkerror') ||
+    normalized.includes('load failed') ||
+    normalized.includes('err_network') ||
+    normalized.includes('network request failed')
+  );
+}
+
+export function classifyClientBackendFetchError(
+  err: unknown,
+  contextLabel = 'API request',
+  options?: {
+    targetUrl?: string | null;
+    isNative?: boolean;
+    currentOrigin?: string | null;
+  },
+): Error {
+  if (
+    err instanceof BackendNotConfiguredError ||
+    err instanceof NonJsonResponseError ||
+    err instanceof BackendConnectionError
+  ) {
+    return err;
+  }
+
+  const targetUrl =
+    options?.targetUrl ?? getEffectiveBackendConfig({ isNative: options?.isNative }).baseUrl;
+  const isNative = isCapacitorNativeEnvironment({ isNative: options?.isNative });
+  const currentOrigin =
+    options?.currentOrigin ??
+    (typeof window !== 'undefined' && window.location ? window.location.origin : null);
+
+  const errName = err instanceof Error ? err.name : '';
+  const rawMsg = err instanceof Error ? err.message : String(err || 'Request failed');
+
+  if (
+    errName === 'AbortError' ||
+    errName === 'TimeoutError' ||
+    /\btimed?\s*out\b/i.test(rawMsg)
+  ) {
+    const targetLabel = targetUrl ? ` (${targetUrl})` : '';
+    return new BackendConnectionError(
+      `Request timed out for ${contextLabel}${targetLabel}. The backend or upstream provider took too long to respond.`,
+      { targetUrl: targetUrl || undefined, isTimeout: true },
+    );
+  }
+
+  if (isBrowserNetworkOrCorsFetchError(err)) {
+    if (targetUrl) {
+      if (isNative) {
+        return new BackendConnectionError(
+          `Could not connect to ${targetUrl} for ${contextLabel}. Verify the server is running, reachable from this device, and allows Capacitor CORS origins.`,
+          { targetUrl },
+        );
+      }
+      let targetOrigin = targetUrl;
+      try {
+        targetOrigin = new URL(targetUrl).origin;
+      } catch {
+        // Keep raw targetUrl
+      }
+      if (currentOrigin && targetOrigin.toLowerCase() !== currentOrigin.toLowerCase()) {
+        return new BackendConnectionError(
+          `Could not connect to ${targetUrl} for ${contextLabel}. Verify the backend server is reachable and allows CORS requests from ${currentOrigin}.`,
+          { targetUrl },
+        );
+      }
+      return new BackendConnectionError(
+        `Could not connect to ${targetUrl} for ${contextLabel}. Verify the Express backend server is running and reachable.`,
+        { targetUrl },
+      );
+    }
+
+    return new BackendConnectionError(
+      `Could not reach the ShizuTv backend server for ${contextLabel}. Verify the Express server is running or configure a Backend URL in Settings → Backend Server.`,
+    );
+  }
+
+  return err instanceof Error ? err : new Error(rawMsg || `Failed ${contextLabel}.`);
+}
+
 const CAPACITOR_SELF_ORIGINS = new Set([
   'https://localhost',
   'http://localhost',
@@ -513,17 +611,13 @@ export async function testBackendConnection(
         message: err.message,
       };
     }
-    const rawMsg = err instanceof Error ? err.message : String(err);
-    const isNetworkOrCors =
-      rawMsg.toLowerCase().includes('failed to fetch') ||
-      rawMsg.toLowerCase().includes('networkerror') ||
-      rawMsg.toLowerCase().includes('load failed');
+    const classified = classifyClientBackendFetchError(err, 'backend health check', {
+      targetUrl: validated.url,
+    });
     return {
       ok: false,
       normalizedUrl: validated.url,
-      message: isNetworkOrCors
-        ? `Could not connect to ${validated.url}. Verify the server is running, reachable from this device, and allows Capacitor CORS origins.`
-        : rawMsg || 'Backend connection test failed.',
+      message: classified.message || 'Backend connection test failed.',
     };
   }
 }

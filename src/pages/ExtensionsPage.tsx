@@ -54,6 +54,11 @@ import {
 } from '../utils/extensionsManager';
 import { diagnoseExtensionAsync } from '../services/sourceEngine';
 import {
+  BackendConnectionError,
+  BackendNotConfiguredError,
+  NonJsonResponseError,
+} from '../utils/backendConfig';
+import {
   buildExtensionCompatibilitySnapshot,
   classifyDiagnosticFailure,
   DEFAULT_DIAGNOSTIC_PROBE_SCOPE,
@@ -345,6 +350,7 @@ export const ExtensionsPage: React.FC = () => {
   >(() => loadPersistedExtensionDiagnostics());
   const [runningFullSourceIds, setRunningFullSourceIds] = useState<Record<string, boolean>>({});
   const [runningBatchDiagnostics, setRunningBatchDiagnostics] = useState(false);
+  const [diagBannerError, setDiagBannerError] = useState<string | null>(null);
 
   // Escape closes any open modal
   useEffect(() => {
@@ -542,6 +548,7 @@ export const ExtensionsPage: React.FC = () => {
   ) => {
     if (runningFullSourceIds[source.id]) return;
     const targetMedia = overrideMediaTab ?? mediaTab;
+    setDiagBannerError(null);
     setRunningFullSourceIds((prev) => ({ ...prev, [source.id]: true }));
     const startedAt = performance.now();
     try {
@@ -559,26 +566,39 @@ export const ExtensionsPage: React.FC = () => {
       setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(enriched));
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Full diagnostic execution failed.';
-      const failReport: ExtensionDiagnosticReport = {
-        sourceId: source.id,
-        sourceName: source.name,
-        status: 'fail',
-        durationMs: Math.round(performance.now() - startedAt),
-        testedAt: new Date().toISOString(),
-        mode: 'full',
-        probeScope: targetMedia === 'ANIME' ? DEFAULT_DIAGNOSTIC_PROBE_SCOPE : undefined,
-        failureKind: classifyDiagnosticFailure(msg),
-        summary: msg,
-        detail: msg,
-        capabilities: {
-          metadataSearch: 'unavailable',
-          episodeOrChapterListing: 'unavailable',
-          audioLanguage: targetMedia === 'ANIME' ? 'untested' : 'unsupported',
-          playbackOrReader: 'unavailable',
-          overallCompatibility: 'incompatible',
-        },
-      };
-      setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(failReport));
+      const isConnectivityOutage =
+        err instanceof BackendConnectionError ||
+        err instanceof BackendNotConfiguredError ||
+        err instanceof NonJsonResponseError;
+      if (isConnectivityOutage) {
+        setDiagBannerError(msg);
+      } else {
+        const failureKind = classifyDiagnosticFailure(msg);
+        const keepDownstreamUntested =
+          failureKind === 'blocked_request' ||
+          failureKind === 'timeout' ||
+          failureKind === 'network_error';
+        const failReport: ExtensionDiagnosticReport = {
+          sourceId: source.id,
+          sourceName: source.name,
+          status: 'fail',
+          durationMs: Math.round(performance.now() - startedAt),
+          testedAt: new Date().toISOString(),
+          mode: 'full',
+          probeScope: targetMedia === 'ANIME' ? DEFAULT_DIAGNOSTIC_PROBE_SCOPE : undefined,
+          failureKind,
+          summary: msg,
+          detail: msg,
+          capabilities: {
+            metadataSearch: 'unavailable',
+            episodeOrChapterListing: keepDownstreamUntested ? 'untested' : 'unavailable',
+            audioLanguage: targetMedia === 'ANIME' ? 'untested' : 'unsupported',
+            playbackOrReader: keepDownstreamUntested ? 'untested' : 'unavailable',
+            overallCompatibility: 'incompatible',
+          },
+        };
+        setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(failReport));
+      }
     } finally {
       setRunningFullSourceIds((prev) => {
         const next = { ...prev };
@@ -604,6 +624,7 @@ export const ExtensionsPage: React.FC = () => {
     if (runningTests || selectedTestIds.length === 0) return;
     setRunningTests(true);
     setTestResults([]);
+    setDiagBannerError(null);
 
     const query = testQuery.trim() || 'Naruto';
     const nextResults: ExtensionTestResult[] = [];
@@ -629,6 +650,18 @@ export const ExtensionsPage: React.FC = () => {
         setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(enriched));
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Test execution failed';
+        const isConnectivityOutage =
+          err instanceof BackendConnectionError ||
+          err instanceof BackendNotConfiguredError ||
+          err instanceof NonJsonResponseError;
+        if (isConnectivityOutage) {
+          setDiagBannerError(msg);
+        }
+        const failureKind = isConnectivityOutage
+          ? err instanceof BackendConnectionError && err.isTimeout
+            ? 'timeout'
+            : 'network_error'
+          : classifyDiagnosticFailure(msg);
         const failReport: ExtensionDiagnosticReport = {
           sourceId: source.id,
           sourceName: source.name,
@@ -637,19 +670,21 @@ export const ExtensionsPage: React.FC = () => {
           testedAt: new Date().toISOString(),
           mode: testKind,
           probeScope: testMediaType === 'ANIME' && testKind === 'full' ? DEFAULT_DIAGNOSTIC_PROBE_SCOPE : undefined,
-          failureKind: classifyDiagnosticFailure(msg),
+          failureKind,
           summary: msg,
           detail: msg,
           capabilities: {
-            metadataSearch: testKind === 'ping' ? 'untested' : 'unavailable',
-            episodeOrChapterListing: testKind === 'full' ? 'unavailable' : 'untested',
+            metadataSearch: isConnectivityOutage || testKind === 'ping' ? 'untested' : 'unavailable',
+            episodeOrChapterListing: 'untested',
             audioLanguage: testMediaType === 'ANIME' ? 'untested' : 'unsupported',
-            playbackOrReader: testKind === 'full' ? 'unavailable' : 'untested',
+            playbackOrReader: 'untested',
             overallCompatibility: 'incompatible',
           },
         };
         nextResults.push(failReport);
-        setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(failReport));
+        if (!isConnectivityOutage) {
+          setDiagnosticsBySourceId(savePersistedExtensionDiagnostic(failReport));
+        }
       }
 
       setTestResults([...nextResults]);
@@ -842,6 +877,32 @@ export const ExtensionsPage: React.FC = () => {
           {runningTests && <Loader2 className="w-4 h-4 animate-spin" />}
           <span>{runningTests ? 'Running Tests...' : 'Start Test'}</span>
         </button>
+
+        {diagBannerError && (
+          <div
+            data-testid="extensions-diag-connection-error"
+            className="px-3.5 py-2.5 rounded-2xl bg-red-500/14 backdrop-blur-xl border border-red-500/30 text-xs font-bold text-red-700 dark:text-red-300 flex items-center justify-between gap-3"
+          >
+            <span className="min-w-0 flex-1">{diagBannerError}</span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => navigate('/settings/backend')}
+                className="px-2.5 py-1 rounded-full bg-red-600/85 hover:bg-red-600 text-white text-[11px] font-extrabold whitespace-nowrap transition-colors"
+              >
+                Backend Settings
+              </button>
+              <button
+                type="button"
+                onClick={() => setDiagBannerError(null)}
+                aria-label="Dismiss backend error"
+                className="w-6 h-6 rounded-full flex items-center justify-center hover:bg-red-500/20"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Results Panel */}
         <section
@@ -1440,6 +1501,33 @@ export const ExtensionsPage: React.FC = () => {
           >
             <X className="w-3.5 h-3.5" />
           </button>
+        </div>
+      )}
+
+      {/* Backend / CORS Connectivity Banner (does not overwrite extension capability snapshots) */}
+      {diagBannerError && (
+        <div
+          data-testid="extensions-diag-connection-error"
+          className="px-3.5 py-2.5 rounded-2xl bg-red-500/14 backdrop-blur-xl border border-red-500/30 text-xs font-bold text-red-700 dark:text-red-300 flex items-center justify-between gap-3"
+        >
+          <span className="min-w-0 flex-1">{diagBannerError}</span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => navigate('/settings/backend')}
+              className="px-2.5 py-1 rounded-full bg-red-600/85 hover:bg-red-600 text-white text-[11px] font-extrabold whitespace-nowrap transition-colors"
+            >
+              Backend Settings
+            </button>
+            <button
+              type="button"
+              onClick={() => setDiagBannerError(null)}
+              aria-label="Dismiss backend error"
+              className="w-6 h-6 rounded-full flex items-center justify-center hover:bg-red-500/20"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       )}
 

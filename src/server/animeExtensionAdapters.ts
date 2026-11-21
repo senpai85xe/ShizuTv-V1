@@ -5,6 +5,7 @@ import type {
   ExtensionEpisodesResponse,
   ExtensionSourceCompatibilityReport,
 } from '../types/media.ts';
+import type { DiagnosticFailureKind } from '../utils/extensionDiagnostics.ts';
 import {
   type DetectedSourceProfile,
   detectExtensionWebCompatibilityIssue,
@@ -75,9 +76,17 @@ export interface ServerStreamExecutionInput {
   validSelectedEpisode: SelectedEpisodeInput | null;
 }
 
+export interface HostQueryFailure {
+  failureKind: DiagnosticFailureKind;
+  message: string;
+  status?: number;
+}
+
 export interface ServerHostStreamOutcome<TPayload = unknown> {
   payload: TPayload | null;
   lastError?: string;
+  lastFailureKind?: DiagnosticFailureKind;
+  lastStatus?: number;
   sawCandidatesWithoutRequestedLanguage?: boolean;
 }
 
@@ -86,7 +95,14 @@ export interface ServerAdapterRuntime<TPayload = unknown> {
     url: string,
     headers?: Record<string, string>,
     timeoutMs?: number,
-  ) => Promise<{ status: number; ok: boolean; url: string; text: string }>;
+    maxRetries?: number,
+  ) => Promise<{
+    status: number;
+    ok: boolean;
+    url: string;
+    text: string;
+    failureKind?: DiagnosticFailureKind;
+  }>;
   normalizeHttpUrl: (rawUrl: string, baseUrl: string) => string | null;
   parseGogoSearchHtml: (html: string) => GogoSearchCandidate[];
   parseGogoEpisodeEmbeds: (html: string, baseUrl: string) => GenericEmbedCandidate[];
@@ -123,6 +139,7 @@ export interface ServerAdapterRuntime<TPayload = unknown> {
     category: 'sub' | 'dub' | 'raw',
     format?: string | null,
     audioLanguage?: StreamAudioLanguage,
+    onFailure?: (failure: HostQueryFailure) => void,
   ) => Promise<Array<GogoSearchCandidate & { score: number }>>;
   searchGenericSiteAcrossQueries: (
     host: string,
@@ -131,6 +148,7 @@ export interface ServerAdapterRuntime<TPayload = unknown> {
     category: 'sub' | 'dub' | 'raw',
     format?: string | null,
     audioLanguage?: StreamAudioLanguage,
+    onFailure?: (failure: HostQueryFailure) => void,
   ) => Promise<Array<GogoSearchCandidate & { score: number }>>;
   resolveViaHiAnimeHost: (input: {
     host: string;
@@ -148,6 +166,9 @@ export interface ServerAdapterRuntime<TPayload = unknown> {
     sourceBaseUrl?: string;
     directCandidate?: GogoSearchCandidate | null;
     directEpisode?: SelectedEpisodeInput | null;
+    timeoutMs?: number;
+    maxRetries?: number;
+    onFailure?: (failure: HostQueryFailure) => void;
   }) => Promise<TPayload | null>;
   resolveHostBasedCandidatesStream: (
     host: string,
@@ -377,9 +398,27 @@ export class InbuiltGogoServerAdapter<TPayload = unknown> extends BaseServerAnim
     input: ServerStreamExecutionInput,
   ): Promise<ServerHostStreamOutcome<TPayload>> {
     let lastError = `No working episode stream mirror responded on ${this.sourceLabel}.`;
+    let lastFailureKind: DiagnosticFailureKind | undefined;
+    let lastStatus: number | undefined;
     let sawCandidatesWithoutRequestedLanguage = false;
+    let sawCleanZeroMatches = false;
+
+    const recordFailure = (failure: HostQueryFailure) => {
+      const priority = (kind?: DiagnosticFailureKind): number => {
+        if (kind === 'blocked_request') return 4;
+        if (kind === 'auth_required') return 3;
+        if (kind === 'timeout' || kind === 'network_error') return 2;
+        return 1;
+      };
+      if (!lastFailureKind || priority(failure.failureKind) >= priority(lastFailureKind)) {
+        lastFailureKind = failure.failureKind;
+        lastError = failure.message;
+        if (failure.status !== undefined) lastStatus = failure.status;
+      }
+    };
 
     for (const host of this.hosts) {
+      let hostFailure: HostQueryFailure | null = null;
       const candidates = input.directSelectedCandidate
         ? [input.directSelectedCandidate]
         : await this.runtime.searchGogoAcrossQueries(
@@ -389,10 +428,17 @@ export class InbuiltGogoServerAdapter<TPayload = unknown> extends BaseServerAnim
             input.effectiveCategory,
             input.format,
             input.requestedAudioLang,
+            (failure) => {
+              hostFailure = hostFailure || failure;
+              recordFailure(failure);
+            },
           );
 
       if (candidates.length === 0) {
-        lastError = `No matching anime entries found on ${this.sourceLabel} for "${input.queries[0]}".`;
+        if (!hostFailure) {
+          sawCleanZeroMatches = true;
+          lastError = `No matching anime entries found on ${this.sourceLabel} for "${input.queries[0]}".`;
+        }
         continue;
       }
 
@@ -405,44 +451,85 @@ export class InbuiltGogoServerAdapter<TPayload = unknown> extends BaseServerAnim
       if (outcome.payload) {
         return outcome;
       }
-      if (outcome.lastError) lastError = outcome.lastError;
+      if (outcome.lastFailureKind) {
+        recordFailure({
+          failureKind: outcome.lastFailureKind,
+          message: outcome.lastError || lastError,
+          status: outcome.lastStatus,
+        });
+      } else if (outcome.lastError && !hostFailure) {
+        lastError = outcome.lastError;
+      }
       if (outcome.sawCandidatesWithoutRequestedLanguage) {
         sawCandidatesWithoutRequestedLanguage = true;
         break;
       }
     }
 
-    // Secondary inbuilt mirror sweep across HiAnime-compatible hosts (strict title viability enforced)
+    // Secondary inbuilt mirror sweep across HiAnime-compatible hosts in parallel with tight timeout budget (<= 4.2s)
     if (!sawCandidatesWithoutRequestedLanguage) {
-      for (const hiHost of HIANIME_BRIDGE_HOSTS) {
-        try {
-          const hiPayload = await this.runtime.resolveViaHiAnimeHost({
-            host: hiHost,
-            queries: input.queries,
-            targetTitles: input.targetTitles,
-            format: input.format,
-            episodeNumber: input.episodeNumber,
-            effectiveCategory: input.effectiveCategory,
-            requestedAudioLang: input.requestedAudioLang,
-            serverId: input.serverId,
-            serverName: input.serverName,
-            sourceLabel: this.sourceLabel,
-            sourceId: input.sourceId,
-            sourceLang: input.sourceLang,
-            sourceBaseUrl: input.sourceBaseUrl,
-          });
-          if (hiPayload) {
-            return { payload: hiPayload };
-          }
-        } catch {
-          // Continue to next mirror
+      const firstMirrorPayload = await new Promise<TPayload | null>((resolve) => {
+        let remaining = HIANIME_BRIDGE_HOSTS.length;
+        if (remaining === 0) {
+          resolve(null);
+          return;
         }
+        let settled = false;
+        for (const hiHost of HIANIME_BRIDGE_HOSTS) {
+          this.runtime
+            .resolveViaHiAnimeHost({
+              host: hiHost,
+              queries: input.queries,
+              targetTitles: input.targetTitles,
+              format: input.format,
+              episodeNumber: input.episodeNumber,
+              effectiveCategory: input.effectiveCategory,
+              requestedAudioLang: input.requestedAudioLang,
+              serverId: input.serverId,
+              serverName: input.serverName,
+              sourceLabel: this.sourceLabel,
+              sourceId: input.sourceId,
+              sourceLang: input.sourceLang,
+              sourceBaseUrl: input.sourceBaseUrl,
+              timeoutMs: 4200,
+              maxRetries: 0,
+              onFailure: (failure) => recordFailure(failure),
+            })
+            .then((hiPayload) => {
+              if (!settled && hiPayload) {
+                settled = true;
+                resolve(hiPayload);
+                return;
+              }
+              remaining -= 1;
+              if (!settled && remaining <= 0) {
+                settled = true;
+                resolve(null);
+              }
+            })
+            .catch(() => {
+              remaining -= 1;
+              if (!settled && remaining <= 0) {
+                settled = true;
+                resolve(null);
+              }
+            });
+        }
+      });
+
+      if (firstMirrorPayload) {
+        return { payload: firstMirrorPayload };
       }
     }
 
     return {
       payload: null,
-      lastError,
+      lastError:
+        sawCleanZeroMatches && !lastFailureKind
+          ? `No matching anime entries found on ${this.sourceLabel} for "${input.queries[0]}".`
+          : lastError,
+      ...(lastFailureKind ? { lastFailureKind } : {}),
+      ...(lastStatus !== undefined ? { lastStatus } : {}),
       sawCandidatesWithoutRequestedLanguage,
     };
   }
@@ -566,9 +653,12 @@ export class GogoCloneServerAdapter<TPayload = unknown> extends BaseServerAnimeE
     input: ServerStreamExecutionInput,
   ): Promise<ServerHostStreamOutcome<TPayload>> {
     let lastError = `No working episode stream mirror responded on ${this.sourceLabel}.`;
+    let lastFailureKind: DiagnosticFailureKind | undefined;
+    let lastStatus: number | undefined;
     let sawCandidatesWithoutRequestedLanguage = false;
 
     for (const host of this.hosts) {
+      let hostFailure: HostQueryFailure | null = null;
       const candidates = input.directSelectedCandidate
         ? [input.directSelectedCandidate]
         : await this.runtime.searchGogoAcrossQueries(
@@ -578,10 +668,18 @@ export class GogoCloneServerAdapter<TPayload = unknown> extends BaseServerAnimeE
             input.effectiveCategory,
             input.format,
             input.requestedAudioLang,
+            (failure) => {
+              hostFailure = hostFailure || failure;
+              lastFailureKind = failure.failureKind;
+              lastError = failure.message;
+              if (failure.status !== undefined) lastStatus = failure.status;
+            },
           );
 
       if (candidates.length === 0) {
-        lastError = `No matching anime entries found on ${this.sourceLabel} for "${input.queries[0]}".`;
+        if (!hostFailure) {
+          lastError = `No matching anime entries found on ${this.sourceLabel} for "${input.queries[0]}".`;
+        }
         continue;
       }
 
@@ -595,6 +693,8 @@ export class GogoCloneServerAdapter<TPayload = unknown> extends BaseServerAnimeE
         return outcome;
       }
       if (outcome.lastError) lastError = outcome.lastError;
+      if (outcome.lastFailureKind) lastFailureKind = outcome.lastFailureKind;
+      if (outcome.lastStatus !== undefined) lastStatus = outcome.lastStatus;
       if (outcome.sawCandidatesWithoutRequestedLanguage) {
         sawCandidatesWithoutRequestedLanguage = true;
       }
@@ -603,6 +703,8 @@ export class GogoCloneServerAdapter<TPayload = unknown> extends BaseServerAnimeE
     return {
       payload: null,
       lastError,
+      ...(lastFailureKind ? { lastFailureKind } : {}),
+      ...(lastStatus !== undefined ? { lastStatus } : {}),
       sawCandidatesWithoutRequestedLanguage,
     };
   }
@@ -646,8 +748,11 @@ export class WordPressAnimeServerAdapter<TPayload = unknown> extends BaseServerA
     input: ServerStreamExecutionInput,
   ): Promise<ServerHostStreamOutcome<TPayload>> {
     let lastError = `No working episode stream mirror responded on ${this.sourceLabel}.`;
+    let lastFailureKind: DiagnosticFailureKind | undefined;
+    let lastStatus: number | undefined;
 
     for (const host of this.hosts) {
+      let hostFailure: HostQueryFailure | null = null;
       const candidates = input.directSelectedCandidate
         ? [input.directSelectedCandidate]
         : await this.runtime.searchGenericSiteAcrossQueries(
@@ -657,10 +762,18 @@ export class WordPressAnimeServerAdapter<TPayload = unknown> extends BaseServerA
             input.effectiveCategory,
             input.format,
             input.requestedAudioLang,
+            (failure) => {
+              hostFailure = hostFailure || failure;
+              lastFailureKind = failure.failureKind;
+              lastError = failure.message;
+              if (failure.status !== undefined) lastStatus = failure.status;
+            },
           );
 
       if (candidates.length === 0) {
-        lastError = `No matching anime entries found on ${this.sourceLabel} for "${input.queries[0]}".`;
+        if (!hostFailure) {
+          lastError = `No matching anime entries found on ${this.sourceLabel} for "${input.queries[0]}".`;
+        }
         continue;
       }
 
@@ -674,9 +787,16 @@ export class WordPressAnimeServerAdapter<TPayload = unknown> extends BaseServerA
         return outcome;
       }
       if (outcome.lastError) lastError = outcome.lastError;
+      if (outcome.lastFailureKind) lastFailureKind = outcome.lastFailureKind;
+      if (outcome.lastStatus !== undefined) lastStatus = outcome.lastStatus;
     }
 
-    return { payload: null, lastError };
+    return {
+      payload: null,
+      lastError,
+      ...(lastFailureKind ? { lastFailureKind } : {}),
+      ...(lastStatus !== undefined ? { lastStatus } : {}),
+    };
   }
 }
 
@@ -837,8 +957,11 @@ export class GenericHtmlServerAdapter<TPayload = unknown> extends BaseServerAnim
     input: ServerStreamExecutionInput,
   ): Promise<ServerHostStreamOutcome<TPayload>> {
     let lastError = `No working episode stream mirror responded on ${this.sourceLabel}.`;
+    let lastFailureKind: DiagnosticFailureKind | undefined;
+    let lastStatus: number | undefined;
 
     for (const host of this.hosts) {
+      let hostFailure: HostQueryFailure | null = null;
       const candidates = input.directSelectedCandidate
         ? [input.directSelectedCandidate]
         : await this.runtime.searchGenericSiteAcrossQueries(
@@ -848,10 +971,18 @@ export class GenericHtmlServerAdapter<TPayload = unknown> extends BaseServerAnim
             input.effectiveCategory,
             input.format,
             input.requestedAudioLang,
+            (failure) => {
+              hostFailure = hostFailure || failure;
+              lastFailureKind = failure.failureKind;
+              lastError = failure.message;
+              if (failure.status !== undefined) lastStatus = failure.status;
+            },
           );
 
       if (candidates.length === 0) {
-        lastError = `No matching anime entries found on ${this.sourceLabel} for "${input.queries[0]}".`;
+        if (!hostFailure) {
+          lastError = `No matching anime entries found on ${this.sourceLabel} for "${input.queries[0]}".`;
+        }
         continue;
       }
 
@@ -865,9 +996,16 @@ export class GenericHtmlServerAdapter<TPayload = unknown> extends BaseServerAnim
         return outcome;
       }
       if (outcome.lastError) lastError = outcome.lastError;
+      if (outcome.lastFailureKind) lastFailureKind = outcome.lastFailureKind;
+      if (outcome.lastStatus !== undefined) lastStatus = outcome.lastStatus;
     }
 
-    return { payload: null, lastError };
+    return {
+      payload: null,
+      lastError,
+      ...(lastFailureKind ? { lastFailureKind } : {}),
+      ...(lastStatus !== undefined ? { lastStatus } : {}),
+    };
   }
 }
 

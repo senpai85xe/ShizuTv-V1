@@ -51,6 +51,7 @@ import {
   GogoCloneServerAdapter,
   GotakuServerAdapter,
   HiAnimeServerAdapter,
+  type HostQueryFailure,
   InbuiltGogoServerAdapter,
   MetadataOnlyServerAdapter,
   MissingHostServerAdapter,
@@ -82,6 +83,7 @@ export {
   WordPressAnimeServerAdapter,
 };
 export type {
+  HostQueryFailure,
   SearchAnimeExtensionResponse,
   SearchAnimeExtensionResultItem,
   SelectedEpisodeInput,
@@ -182,6 +184,7 @@ async function fetchText(
   url: string,
   headers: Record<string, string> = {},
   timeoutMs = 8500,
+  maxRetries = 1,
 ): Promise<{
   status: number;
   ok: boolean;
@@ -198,7 +201,7 @@ async function fetchText(
       ...headers,
     },
     timeoutMs,
-    maxRetries: 1,
+    maxRetries,
     retryDelayMs: 60,
   });
   return {
@@ -664,6 +667,28 @@ async function unwrapGenericOrCompatibleEmbed(
   return null;
 }
 
+function classifyHttpResponseFailure(
+  res: { status: number; text: string; failureKind?: DiagnosticFailureKind },
+  hostUrl: string,
+): HostQueryFailure {
+  const isBlocked =
+    res.status === 403 ||
+    res.status === 429 ||
+    res.status === 503 ||
+    looksLikeBlockedChallengeHtml(res.status, res.text) ||
+    res.failureKind === 'blocked_request';
+
+  return {
+    failureKind: isBlocked
+      ? 'blocked_request'
+      : res.failureKind || classifyDiagnosticFailure(`HTTP ${res.status}`, res.status),
+    message: isBlocked
+      ? `Upstream host (${hostUrl}) blocked access or returned an anti-bot challenge (HTTP ${res.status}).`
+      : `Upstream host (${hostUrl}) returned HTTP ${res.status}.`,
+    status: res.status,
+  };
+}
+
 async function searchGogoAcrossQueries(
   host: string,
   queries: string[],
@@ -671,6 +696,7 @@ async function searchGogoAcrossQueries(
   category: 'sub' | 'dub' | 'raw',
   format?: string | null,
   audioLanguage?: StreamAudioLanguage,
+  onFailure?: (failure: HostQueryFailure) => void,
 ): Promise<Array<GogoSearchCandidate & { score: number }>> {
   const allCandidates = new Map<string, GogoSearchCandidate>();
   const querySubset =
@@ -694,8 +720,15 @@ async function searchGogoAcrossQueries(
     const query = querySubset[qIdx];
     try {
       const searchUrl = `${host}/search.html?keyword=${encodeURIComponent(query)}`;
-      const res = await fetchText(searchUrl, { Referer: `${host}/` }, 7000);
-      if (!res.ok) continue;
+      const res = await fetchText(searchUrl, { Referer: `${host}/` }, 6500);
+      if (!res.ok) {
+        const failure = classifyHttpResponseFailure(res, host);
+        onFailure?.(failure);
+        if (failure.failureKind === 'blocked_request') {
+          break;
+        }
+        continue;
+      }
 
       const parsed = parseGogoSearchHtml(res.text);
       for (const item of parsed) {
@@ -720,8 +753,19 @@ async function searchGogoAcrossQueries(
           return rankedNow;
         }
       }
-    } catch {
-      // Try next query
+    } catch (err) {
+      const classified = classifyFetchException(err);
+      onFailure?.({
+        failureKind: classified.failureKind,
+        message: classified.message || `Failed to query ${host}.`,
+      });
+      if (
+        classified.failureKind === 'timeout' ||
+        classified.failureKind === 'network_error' ||
+        classified.failureKind === 'blocked_request'
+      ) {
+        break;
+      }
     }
   }
 
@@ -735,6 +779,7 @@ async function searchGenericSiteAcrossQueries(
   category: 'sub' | 'dub' | 'raw',
   format?: string | null,
   audioLanguage?: StreamAudioLanguage,
+  onFailure?: (failure: HostQueryFailure) => void,
 ): Promise<Array<GogoSearchCandidate & { score: number }>> {
   const allCandidates = new Map<string, GogoSearchCandidate>();
 
@@ -752,7 +797,10 @@ async function searchGenericSiteAcrossQueries(
       }))
       .sort((a, b) => b.score - a.score);
 
+  let hostUnavailable = false;
   for (const query of queries.slice(0, 5)) {
+    if (hostUnavailable) break;
+
     const searchEndpoints = [
       `${host}/?s=${encodeURIComponent(query)}`,
       `${host}/search.html?keyword=${encodeURIComponent(query)}`,
@@ -764,8 +812,16 @@ async function searchGenericSiteAcrossQueries(
     let foundOnAnyHtmlEndpoint = false;
     for (const endpoint of searchEndpoints) {
       try {
-        const res = await fetchText(endpoint, { Referer: `${host}/` }, 6500);
-        if (!res.ok) continue;
+        const res = await fetchText(endpoint, { Referer: `${host}/` }, 6000);
+        if (!res.ok) {
+          const failure = classifyHttpResponseFailure(res, host);
+          onFailure?.(failure);
+          if (failure.failureKind === 'blocked_request') {
+            hostUnavailable = true;
+            break;
+          }
+          continue;
+        }
 
         const gogoItems = parseGogoSearchHtml(res.text);
         const genericItems = parseGenericSearchHtml(res.text, res.url || host);
@@ -779,10 +835,24 @@ async function searchGenericSiteAcrossQueries(
           foundOnAnyHtmlEndpoint = true;
           break;
         }
-      } catch {
-        // Try next search endpoint pattern
+      } catch (err) {
+        const classified = classifyFetchException(err);
+        onFailure?.({
+          failureKind: classified.failureKind,
+          message: classified.message || `Failed to query ${host}.`,
+        });
+        if (
+          classified.failureKind === 'timeout' ||
+          classified.failureKind === 'network_error' ||
+          classified.failureKind === 'blocked_request'
+        ) {
+          hostUnavailable = true;
+          break;
+        }
       }
     }
+
+    if (hostUnavailable) break;
 
     // Fallback: WordPress REST search API when HTML search is SPA/JS-rendered
     if (!foundOnAnyHtmlEndpoint) {
@@ -790,7 +860,7 @@ async function searchGenericSiteAcrossQueries(
         const wpRes = await fetchText(
           `${host}/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=10`,
           { Referer: `${host}/`, Accept: 'application/json' },
-          5500,
+          5000,
         );
         if (wpRes.ok) {
           const wpJson = JSON.parse(wpRes.text) as Array<{ url?: string; title?: string }>;
@@ -1104,6 +1174,9 @@ async function resolveViaHiAnimeHost(input: {
   sourceBaseUrl?: string;
   directCandidate?: GogoSearchCandidate | null;
   directEpisode?: SelectedEpisodeInput | null;
+  timeoutMs?: number;
+  maxRetries?: number;
+  onFailure?: (failure: HostQueryFailure) => void;
 }): Promise<ResolvedAnimeStreamPayload | null> {
   if (input.requestedAudioLang === 'hi' || input.requestedAudioLang === 'es') {
     const inherent = isSourceInherentLanguage(
@@ -1119,6 +1192,8 @@ async function resolveViaHiAnimeHost(input: {
     }
   }
 
+  const reqTimeoutMs = input.timeoutMs ?? 7000;
+  const reqMaxRetries = input.maxRetries ?? 1;
   let ranked: Array<GogoSearchCandidate & { score?: number }>;
 
   if (input.directCandidate?.href) {
@@ -1130,9 +1205,17 @@ async function resolveViaHiAnimeHost(input: {
         const res = await fetchText(
           `${input.host}/search?keyword=${encodeURIComponent(query)}`,
           { Referer: `${input.host}/` },
-          7500,
+          reqTimeoutMs,
+          reqMaxRetries,
         );
-        if (!res.ok) continue;
+        if (!res.ok) {
+          const failure = classifyHttpResponseFailure(res, input.host);
+          input.onFailure?.(failure);
+          if (failure.failureKind === 'blocked_request') {
+            break;
+          }
+          continue;
+        }
         const parsed = parseGenericSearchHtml(res.text, input.host);
         for (const item of parsed) {
           if (!allCandidates.has(item.href)) {
@@ -1143,8 +1226,19 @@ async function resolveViaHiAnimeHost(input: {
           isViableTitleMatch(c, input.targetTitles, input.format),
         ).length;
         if (viableCount > 0) break;
-      } catch {
-        // Try next query
+      } catch (err) {
+        const classified = classifyFetchException(err);
+        input.onFailure?.({
+          failureKind: classified.failureKind,
+          message: classified.message || `Failed to search ${input.host}.`,
+        });
+        if (
+          classified.failureKind === 'timeout' ||
+          classified.failureKind === 'network_error' ||
+          classified.failureKind === 'blocked_request'
+        ) {
+          break;
+        }
       }
     }
 
@@ -1188,9 +1282,15 @@ async function resolveViaHiAnimeHost(input: {
             Referer: `${input.host}${candidate.href}`,
             'X-Requested-With': 'XMLHttpRequest',
           },
-          7500,
+          reqTimeoutMs,
+          reqMaxRetries,
         );
-        if (!epListRes.ok) continue;
+        if (!epListRes.ok) {
+          const failure = classifyHttpResponseFailure(epListRes, input.host);
+          input.onFailure?.(failure);
+          if (failure.failureKind === 'blocked_request') break;
+          continue;
+        }
         const epListJson = JSON.parse(epListRes.text) as { html?: string };
         const epListHtml = epListJson?.html || '';
         if (!epListHtml) continue;
@@ -1219,9 +1319,15 @@ async function resolveViaHiAnimeHost(input: {
           Referer: `${input.host}${candidate.href}`,
           'X-Requested-With': 'XMLHttpRequest',
         },
-        7500,
+        reqTimeoutMs,
+        reqMaxRetries,
       );
-      if (!serversRes.ok) continue;
+      if (!serversRes.ok) {
+        const failure = classifyHttpResponseFailure(serversRes, input.host);
+        input.onFailure?.(failure);
+        if (failure.failureKind === 'blocked_request') break;
+        continue;
+      }
       const serversJson = JSON.parse(serversRes.text) as { html?: string };
       const serversHtml = serversJson?.html || '';
       if (!serversHtml) continue;
@@ -1381,6 +1487,8 @@ async function resolveHostBasedCandidatesStream(
 
   let sawCandidatesWithoutRequestedLanguage = false;
   let lastHostError: string | undefined;
+  let lastFailureKind: DiagnosticFailureKind | undefined;
+  let lastStatus: number | undefined;
 
   for (const candidate of slugsToTry) {
     const slug =
@@ -1409,10 +1517,15 @@ async function resolveHostBasedCandidatesStream(
         sourceBaseUrl,
         directCandidate: directSelectedCandidate,
         directEpisode: validSelectedEpisode,
+        onFailure: (failure) => {
+          lastFailureKind = failure.failureKind;
+          lastHostError = failure.message;
+          if (failure.status !== undefined) lastStatus = failure.status;
+        },
       }).catch((err) => {
-        if (err instanceof Error && err.message) {
-          lastHostError = err.message;
-        }
+        const classified = classifyFetchException(err);
+        lastFailureKind = classified.failureKind;
+        lastHostError = classified.message || (err instanceof Error ? err.message : String(err));
         return null;
       });
       if (hiCustom) {
@@ -1431,17 +1544,25 @@ async function resolveHostBasedCandidatesStream(
       let epHtml = '';
       let resolvedEpUrl = epUrl;
       try {
-        const epRes = await fetchText(epUrl, { Referer: `${host}/` }, 8000);
+        const epRes = await fetchText(epUrl, { Referer: `${host}/` }, 7000);
         if (!epRes.ok) {
           if (epRes.status !== 404) {
+            const failure = classifyHttpResponseFailure(epRes, epUrl);
             lastHostError = `HTTP ${epRes.status} from ${epUrl}`;
+            lastFailureKind = failure.failureKind;
+            lastStatus = epRes.status;
+            if (failure.failureKind === 'blocked_request') {
+              break;
+            }
           }
           continue;
         }
         epHtml = epRes.text;
         resolvedEpUrl = epRes.url || epUrl;
       } catch (err) {
+        const classified = classifyFetchException(err);
         lastHostError = err instanceof Error ? err.message : String(err);
+        lastFailureKind = classified.failureKind;
         continue;
       }
 
@@ -1599,6 +1720,8 @@ async function resolveHostBasedCandidatesStream(
   return {
     payload: null,
     ...(lastHostError ? { lastError: lastHostError } : {}),
+    ...(lastFailureKind ? { lastFailureKind } : {}),
+    ...(lastStatus !== undefined ? { lastStatus } : {}),
     sawCandidatesWithoutRequestedLanguage:
       options.breakOnMissingLanguage && sawCandidatesWithoutRequestedLanguage,
   };
@@ -1789,9 +1912,26 @@ export async function resolveAnimeEpisodeStream(
     );
   }
 
-  throw new Error(
-    outcome.lastError || `No working episode stream mirror responded on ${adapter.sourceLabel}.`,
-  );
+  const finalMessage =
+    outcome.lastError || `No working episode stream mirror responded on ${adapter.sourceLabel}.`;
+  if (
+    outcome.lastFailureKind === 'blocked_request' ||
+    outcome.lastFailureKind === 'auth_required' ||
+    outcome.lastFailureKind === 'timeout' ||
+    outcome.lastFailureKind === 'network_error' ||
+    outcome.lastFailureKind === 'malformed_response'
+  ) {
+    throw new UpstreamFetchError({
+      message: finalMessage,
+      failureKind: outcome.lastFailureKind,
+      status: outcome.lastStatus,
+      url: adapter.hosts[0] || '',
+      retryable: false,
+      attempts: 1,
+    });
+  }
+
+  throw new Error(finalMessage);
 }
 
 const inFlightAnimeDiagnostics = new Map<string, Promise<ExtensionDiagnosticReport>>();
@@ -2304,26 +2444,37 @@ async function runDiagnoseAnimeExtensionServer(params: {
     errorOccurred: !playbackVerified && !listingAvailable && !searchOk,
   });
 
-  // Preserve blocked_request from an earlier stage if a downstream stage only failed due to missing candidate or upstream listing block
+  // Preserve blocked_request from an earlier stage so unreached downstream capabilities remain 'untested' instead of 'unavailable'
   const streamMissingSearchCandidateOnly =
     Boolean(searchBlockedByUpstream) &&
-    !playbackVerified &&
-    !streamBlockedByUpstream &&
-    (!streamFailureKind || streamFailureKind === 'provider_error') &&
-    (!streamError || /No matching anime entries found/i.test(streamError));
+    !topCandidate &&
+    !listingAvailable &&
+    !playbackVerified;
 
   const streamBlockedByEpisodeListing =
     Boolean(epBlockedByUpstream) &&
     !listingAvailable &&
+    !playbackVerified;
+
+  const streamUnreachedAfterBlockedSearch =
+    !searchOk &&
+    !topCandidate &&
+    !listingAvailable &&
     !playbackVerified &&
-    !streamBlockedByUpstream &&
-    (!streamFailureKind || streamFailureKind === 'provider_error') &&
-    (!streamError || /No matching anime entries found/i.test(streamError));
+    searchFailureKind === 'blocked_request';
 
   const listingStatusOverride: CapabilityStatus | undefined =
-    !listingAvailable && !topCandidate && searchBlockedByUpstream ? 'untested' : undefined;
+    !listingAvailable &&
+    !topCandidate &&
+    (searchBlockedByUpstream || streamUnreachedAfterBlockedSearch)
+      ? 'untested'
+      : undefined;
   const playbackStatusOverride: CapabilityStatus | undefined =
-    streamMissingSearchCandidateOnly || streamBlockedByEpisodeListing ? 'untested' : undefined;
+    streamMissingSearchCandidateOnly ||
+    streamBlockedByEpisodeListing ||
+    streamUnreachedAfterBlockedSearch
+      ? 'untested'
+      : undefined;
 
   const preserveSearchBlockDetail =
     !playbackVerified &&

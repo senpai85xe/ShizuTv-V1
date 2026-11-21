@@ -403,8 +403,11 @@ export const BackendSettingsPage: React.FC = () => {
             Your Express backend automatically allows Capacitor origins (
             <span className="font-mono text-[var(--sx-on-surface)]">https://localhost</span>,{' '}
             <span className="font-mono text-[var(--sx-on-surface)]">capacitor://localhost</span>,{' '}
-            <span className="font-mono text-[var(--sx-on-surface)]">ionic://localhost</span>) and any
-            origins listed in <span className="font-mono text-[var(--sx-on-surface)]">CORS_ALLOWED_ORIGINS</span>.
+            <span className="font-mono text-[var(--sx-on-surface)]">ionic://localhost</span>),
+            AI Studio/Cloud Run HTTPS web origins (
+            <span className="font-mono text-[var(--sx-on-surface)]">https://*.run.app</span>),{' '}
+            <span className="font-mono text-[var(--sx-on-surface)]">APP_URL</span>, and any origins
+            listed in <span className="font-mono text-[var(--sx-on-surface)]">CORS_ALLOWED_ORIGINS</span>.
           </li>
           <li>
             Web builds leave the backend URL unset by default so same-origin{' '}

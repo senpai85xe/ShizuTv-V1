@@ -20,6 +20,7 @@ import {
 } from '../utils/streamResolverUtils.ts';
 import {
   buildCapabilitiesBreakdown,
+  type CapabilityStatus,
   classifyDiagnosticFailure,
   type DiagnosticFailureKind,
   type ExtensionDiagnoseMode,
@@ -267,6 +268,9 @@ async function resolveCustomExtensionMangaChapters(
   }
 
   const allCandidates = new Map<string, { href: string; title: string }>();
+  let lastFailureKind: DiagnosticFailureKind | undefined;
+  let lastStatus: number | undefined;
+  let lastFailureMessage: string | undefined;
 
   for (const query of queries.slice(0, 4)) {
     const endpoints = [
@@ -276,10 +280,26 @@ async function resolveCustomExtensionMangaChapters(
       `${baseUrl}/search?keyword=${encodeURIComponent(query)}`,
     ];
 
+    let stopDueToUpstreamBlockOrOutage = false;
     for (const ep of endpoints) {
       try {
         const res = await fetchHtml(ep, { Referer: `${baseUrl}/` });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          lastStatus = res.status;
+          lastFailureKind = isUpstreamHttpBlocked(res.status, res.text, res.failureKind)
+            ? 'blocked_request'
+            : res.failureKind || classifyDiagnosticFailure(`HTTP ${res.status}`, res.status);
+          lastFailureMessage = `${sourceLabel} returned HTTP ${res.status}`;
+          if (
+            lastFailureKind === 'blocked_request' ||
+            lastFailureKind === 'timeout' ||
+            lastFailureKind === 'network_error'
+          ) {
+            stopDueToUpstreamBlockOrOutage = true;
+            break;
+          }
+          continue;
+        }
         const parsed = parseMangaSearchHtml(res.text, res.url || baseUrl);
         for (const item of parsed) {
           if (!allCandidates.has(item.href)) {
@@ -287,11 +307,21 @@ async function resolveCustomExtensionMangaChapters(
           }
         }
         if (parsed.length > 0) break;
-      } catch {
-        // Try next search pattern
+      } catch (err) {
+        const classified = classifyFetchException(err);
+        lastFailureKind = classified.failureKind;
+        lastFailureMessage = classified.message;
+        if (
+          lastFailureKind === 'blocked_request' ||
+          lastFailureKind === 'timeout' ||
+          lastFailureKind === 'network_error'
+        ) {
+          stopDueToUpstreamBlockOrOutage = true;
+          break;
+        }
       }
     }
-    if (allCandidates.size > 0) break;
+    if (allCandidates.size > 0 || stopDueToUpstreamBlockOrOutage) break;
   }
 
   const viable = Array.from(allCandidates.values())
@@ -307,6 +337,23 @@ async function resolveCustomExtensionMangaChapters(
     .sort((a, b) => b.score - a.score);
 
   if (viable.length === 0) {
+    if (
+      lastFailureKind &&
+      (lastFailureKind === 'blocked_request' ||
+        lastFailureKind === 'auth_required' ||
+        lastFailureKind === 'timeout' ||
+        lastFailureKind === 'network_error')
+    ) {
+      throw new UpstreamFetchError({
+        message:
+          lastFailureMessage ||
+          `Unable to search ${sourceLabel} (upstream error${lastStatus ? ` HTTP ${lastStatus}` : ''}).`,
+        failureKind: lastFailureKind,
+        status: lastStatus || 0,
+        url: baseUrl,
+        retryable: false,
+      });
+    }
     throw new Error(`No matching manga found on ${sourceLabel} for "${queries[0] || 'this title'}".`);
   }
 
@@ -536,6 +583,20 @@ function looksBlockedChallenge(status: number, body: string): boolean {
   return /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(body);
 }
 
+function isUpstreamHttpBlocked(
+  status: number,
+  body: string,
+  failureKind?: DiagnosticFailureKind,
+): boolean {
+  return (
+    status === 403 ||
+    status === 429 ||
+    status === 503 ||
+    failureKind === 'blocked_request' ||
+    looksBlockedChallenge(status, body)
+  );
+}
+
 const inFlightMangaDiagnostics = new Map<string, Promise<ExtensionDiagnosticReport>>();
 
 export async function diagnoseMangaExtensionServer(params: {
@@ -648,22 +709,21 @@ async function runDiagnoseMangaExtensionServer(params: {
     try {
       const target = plan.mode === 'mangadex' ? `${MANGADEX_API_BASE}/ping` : `${probeHost}/`;
       const res = await fetchHtml(target, plan.mode === 'mangadex' ? { 'User-Agent': MANGADEX_UA } : {});
-      if (looksBlockedChallenge(res.status, res.text)) {
-        const unsupportedReason = `${sourceLabel} returned an anti-bot challenge (HTTP ${res.status}).`;
+      if (isUpstreamHttpBlocked(res.status, res.text, res.failureKind)) {
+        const statusLabel = res.status ? `HTTP ${res.status}` : 'anti-bot challenge';
         return {
           sourceId: params.sourceId,
           sourceName: sourceLabel,
-          status: 'unsupported',
+          status: 'fail',
           durationMs: Date.now() - startedAt,
           testedAt: testedAt(),
           mode: 'ping',
           failureKind: 'blocked_request',
-          summary: `Blocked by upstream protection (HTTP ${res.status})`,
-          detail: unsupportedReason,
+          summary: `Upstream access blocked on ${sourceLabel} (${statusLabel})`,
+          detail: `${target} returned ${statusLabel}. Upstream access is restricted or rate-limited from this server; this does not mean the extension format is unsupported.`,
           capabilities: buildCapabilitiesBreakdown({
             mode: 'ping',
             mediaTab: 'MANGA',
-            unsupportedReason,
             searchMatched: false,
             listingAvailable: false,
             playbackOrPagesVerified: false,
@@ -779,14 +839,18 @@ async function runDiagnoseMangaExtensionServer(params: {
     for (const ep of endpoints) {
       try {
         const res = await fetchHtml(ep, { Referer: `${probeHost}/` });
-        if (looksBlockedChallenge(res.status, res.text)) {
-          blockedReason = `${sourceLabel} is protected by an anti-bot challenge (HTTP ${res.status}).`;
+        if (isUpstreamHttpBlocked(res.status, res.text, res.failureKind)) {
+          const statusLabel = res.status ? `HTTP ${res.status}` : 'anti-bot challenge';
+          blockedReason = `Unable to search ${sourceLabel} (${statusLabel}). Upstream access is restricted or unverified from this server; this does not mean the extension format is unsupported.`;
           searchFailureKind = 'blocked_request';
           break;
         }
         if (!res.ok) {
           searchFailureKind = res.failureKind || classifyDiagnosticFailure(`HTTP ${res.status}`, res.status);
           searchErrorDetail = `HTTP ${res.status}`;
+          if (searchFailureKind === 'timeout' || searchFailureKind === 'network_error') {
+            break;
+          }
           continue;
         }
         const parsed = parseMangaSearchHtml(res.text, res.url || probeHost);
@@ -800,6 +864,9 @@ async function runDiagnoseMangaExtensionServer(params: {
         const classified = classifyFetchException(err);
         searchFailureKind = classified.failureKind;
         searchErrorDetail = classified.message;
+        if (searchFailureKind === 'timeout' || searchFailureKind === 'network_error') {
+          break;
+        }
       }
     }
   }
@@ -808,20 +875,21 @@ async function runDiagnoseMangaExtensionServer(params: {
     return {
       sourceId: params.sourceId,
       sourceName: sourceLabel,
-      status: 'unsupported',
+      status: 'fail',
       durationMs: Date.now() - startedAt,
       testedAt: testedAt(),
       mode: params.mode,
       failureKind: 'blocked_request',
-      summary: 'Unsupported in Web Bridge: Upstream protection',
+      summary: `Upstream access blocked on ${sourceLabel}; remaining capabilities unverified`,
       detail: blockedReason,
       capabilities: buildCapabilitiesBreakdown({
         mode: params.mode,
         mediaTab: 'MANGA',
-        unsupportedReason: blockedReason,
         searchMatched: false,
         listingAvailable: false,
         playbackOrPagesVerified: false,
+        listingStatus: 'untested',
+        playbackStatus: 'untested',
       }),
     };
   }
@@ -911,13 +979,24 @@ async function runDiagnoseMangaExtensionServer(params: {
     fullFailureKind = classified.failureKind;
   }
 
+  const searchOk = Boolean(searchMatchedTitle);
+  const resolvedFailureKind = fullFailureKind || searchFailureKind;
   const overall = resolveDiagnosticOverallStatus({
     mode: 'full',
-    searchMatched: Boolean(searchMatchedTitle),
+    searchMatched: searchOk,
     listingAvailable,
     playbackOrPagesVerified: pagesVerified,
-    errorOccurred: !pagesVerified && !listingAvailable && !searchMatchedTitle,
+    errorOccurred: !pagesVerified && !listingAvailable && !searchOk,
   });
+
+  const isUpstreamBlocked = resolvedFailureKind === 'blocked_request';
+
+  const listingStatusOverride: CapabilityStatus | undefined =
+    !listingAvailable && !searchOk && isUpstreamBlocked ? 'untested' : undefined;
+  const playbackStatusOverride: CapabilityStatus | undefined =
+    !pagesVerified && !listingAvailable && isUpstreamBlocked
+      ? 'untested'
+      : undefined;
 
   return {
     sourceId: params.sourceId,
@@ -927,25 +1006,33 @@ async function runDiagnoseMangaExtensionServer(params: {
     testedAt: testedAt(),
     mode: 'full',
     ...(overall !== 'pass'
-      ? { failureKind: fullFailureKind || searchFailureKind || 'provider_error' }
+      ? { failureKind: resolvedFailureKind || 'provider_error' }
       : {}),
     summary:
       overall === 'pass'
         ? `Verified reader pages (${sampleItems.length > 0 ? sampleItems[0] : query})`
         : listingAvailable
-          ? `Chapters found, but reader pages failed to load`
+          ? resolvedFailureKind === 'blocked_request'
+            ? `Chapters found, but upstream reader page access was blocked`
+            : `Chapters found, but reader pages failed to load`
           : searchMatchedTitle
-            ? `Matched "${searchMatchedTitle}", but chapters unavailable`
-            : `No playable manga chapters found on ${sourceLabel}`,
+            ? resolvedFailureKind === 'blocked_request'
+              ? `Matched "${searchMatchedTitle}", but upstream chapter access was blocked`
+              : `Matched "${searchMatchedTitle}", but chapters unavailable`
+            : resolvedFailureKind === 'blocked_request'
+              ? `Upstream access blocked on ${sourceLabel}; remaining capabilities unverified`
+              : `No playable manga chapters found on ${sourceLabel}`,
     detail: detailMsg || searchErrorDetail || undefined,
     matchedTitle: searchMatchedTitle,
     sampleItems,
     capabilities: buildCapabilitiesBreakdown({
       mode: 'full',
       mediaTab: 'MANGA',
-      searchMatched: Boolean(searchMatchedTitle),
+      searchMatched: searchOk,
       listingAvailable,
       playbackOrPagesVerified: pagesVerified,
+      listingStatus: listingStatusOverride,
+      playbackStatus: playbackStatusOverride,
     }),
   };
 }

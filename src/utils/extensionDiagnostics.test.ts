@@ -775,5 +775,42 @@ test('HTTP 403 blocked Inbuilt diagnostic preserves Web Adapter Compatible runti
   assert.equal(spaSnap.capabilities.videoPlayback.status, 'unsupported');
 });
 
+test('stale client Failed to fetch and blocked_request fail reports normalize unreached listing/playback to unverified', () => {
+  const inbuiltSource: SourceInfo = {
+    id: 'shonenx-hls-inbuilt',
+    name: 'ShizuTv Stream (Inbuilt)',
+    type: 'inbuilt',
+    mediaTypes: ['ANIME'],
+    lang: 'en',
+    version: '2.1.5',
+  };
+
+  const staleClientOutageReport: ExtensionDiagnosticReport = {
+    sourceId: 'shonenx-hls-inbuilt',
+    sourceName: 'ShizuTv Stream (Inbuilt)',
+    status: 'fail',
+    durationMs: 25,
+    testedAt: '2026-11-20T09:00:00.000Z',
+    mode: 'full',
+    failureKind: 'network_error',
+    summary: 'Failed to fetch',
+    detail: 'Failed to fetch',
+    capabilities: {
+      metadataSearch: 'unavailable',
+      episodeOrChapterListing: 'unavailable',
+      audioLanguage: 'untested',
+      playbackOrReader: 'unavailable',
+      overallCompatibility: 'incompatible',
+    },
+  };
+
+  const snap = buildExtensionCompatibilitySnapshot(inbuiltSource, staleClientOutageReport, 'ANIME');
+  assert.equal(snap.overallStatus, 'failed');
+  assert.equal(snap.capabilities.animeSearch.status, 'failed');
+  assert.equal(snap.capabilities.episodeListing.status, 'unverified');
+  assert.equal(snap.capabilities.audioLanguage.status, 'unverified');
+  assert.equal(snap.capabilities.videoPlayback.status, 'unverified');
+});
+
 
 

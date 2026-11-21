@@ -18,6 +18,8 @@ import {
   unregisterServerAnimeExtensionAdapter,
   WordPressAnimeServerAdapter,
 } from './animeStreamResolver.ts';
+import { diagnoseMangaExtensionServer } from './mangaResolver.ts';
+import { UpstreamFetchError } from './networkReliability.ts';
 
 test('searchAnimeExtensionEntriesServer returns honest incompatibility for client-rendered Turnstile SPA extensions like Gotaku', async () => {
   const originalFetch = globalThis.fetch;
@@ -1653,6 +1655,90 @@ test('diagnoseAnimeExtensionServer distinguishes upstream HTTP 403/429/503 block
     assert.equal(searchOkEpBlocked.capabilities.episodeOrChapterListing, 'unavailable');
     assert.equal(searchOkEpBlocked.capabilities.playbackOrReader, 'untested');
     assert.equal(searchOkEpBlocked.capabilities.audioLanguage, 'untested');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ShizuTv Stream (Inbuilt) fast-fails HTTP 403 across all hosts without 9-query loops and propagates blocked_request in stream resolution', async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+
+  globalThis.fetch = (async () => {
+    fetchCount += 1;
+    return new Response('Forbidden', { status: 403 });
+  }) as typeof fetch;
+
+  try {
+    const started = Date.now();
+    const diag = await diagnoseAnimeExtensionServer({
+      sourceId: 'shonenx-hls-inbuilt',
+      sourceName: 'ShizuTv Stream (Inbuilt)',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    const elapsed = Date.now() - started;
+
+    assert.equal(diag.status, 'fail');
+    assert.equal(diag.failureKind, 'blocked_request');
+    assert.equal(diag.capabilities.metadataSearch, 'unavailable');
+    assert.equal(diag.capabilities.episodeOrChapterListing, 'untested');
+    assert.equal(diag.capabilities.playbackOrReader, 'untested');
+    // 2 Gogo hosts (1 query each, break immediately on 403) + 2 HiAnime fallback hosts (1 query each) = <= 6 fetches total
+    assert.ok(fetchCount <= 8, `Expected <= 8 upstream fetches on 403 fast-fail, got ${fetchCount}`);
+    assert.ok(elapsed < 3000, `Expected fast-fail well under 3s, took ${elapsed}ms`);
+
+    await assert.rejects(
+      () =>
+        resolveAnimeEpisodeStream({
+          mediaId: 'al-20',
+          titles: { english: 'Naruto', romaji: 'Naruto' },
+          episodeNumber: 1,
+          category: 'sub',
+          sourceId: 'shonenx-hls-inbuilt',
+          bypassCache: true,
+        }),
+      (err: unknown) =>
+        err instanceof UpstreamFetchError &&
+        err.failureKind === 'blocked_request' &&
+        err.status === 403,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('diagnoseMangaExtensionServer classifies bare HTTP 403/503 as fail + blocked_request instead of unsupported', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async () => {
+    return new Response('Forbidden', { status: 403 });
+  }) as typeof fetch;
+
+  try {
+    const ping403 = await diagnoseMangaExtensionServer({
+      sourceId: 'ext-my-mangaplus',
+      sourceName: 'CustomManga',
+      sourceBaseUrl: 'https://custom-manga.example',
+      mode: 'ping',
+      query: 'Naruto',
+    });
+    assert.equal(ping403.status, 'fail');
+    assert.equal(ping403.failureKind, 'blocked_request');
+
+    const full403 = await diagnoseMangaExtensionServer({
+      sourceId: 'ext-my-mangaplus',
+      sourceName: 'CustomManga',
+      sourceBaseUrl: 'https://custom-manga.example',
+      mode: 'full',
+      query: 'Naruto',
+    });
+    assert.equal(full403.status, 'fail');
+    assert.equal(full403.failureKind, 'blocked_request');
+    assert.equal(full403.capabilities.metadataSearch, 'unavailable');
+    assert.equal(full403.capabilities.episodeOrChapterListing, 'untested');
+    assert.equal(full403.capabilities.playbackOrReader, 'untested');
+    assert.match(full403.detail || '', /not mean the extension format is unsupported/i);
   } finally {
     globalThis.fetch = originalFetch;
   }

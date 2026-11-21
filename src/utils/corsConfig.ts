@@ -5,12 +5,24 @@ export const DEFAULT_CAPACITOR_ALLOWED_ORIGINS = [
   'ionic://localhost',
 ] as const;
 
+export interface OriginPatternMatcher {
+  protocol: 'http:' | 'https:';
+  suffix: string;
+}
+
+export interface CorsMatchOptions {
+  requestHost?: string | null;
+  extraOrigins?: string | null;
+  allowRunAppOrigins?: boolean;
+}
+
 export function normalizeOriginEntry(raw: string | undefined | null): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
-  if (!trimmed || trimmed === '*') return null;
+  if (!trimmed || trimmed === '*' || trimmed.includes('*')) return null;
   try {
     const parsed = new URL(trimmed);
+    if (parsed.username || parsed.password) return null;
     if (
       parsed.protocol === 'http:' ||
       parsed.protocol === 'https:' ||
@@ -22,6 +34,53 @@ export function normalizeOriginEntry(raw: string | undefined | null): string | n
     return null;
   } catch {
     return null;
+  }
+}
+
+export function parseOriginPatternEntry(
+  raw: string | undefined | null,
+): OriginPatternMatcher | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed || !trimmed.includes('*')) return null;
+
+  const match = trimmed.match(/^(https?):\/\/\*\.([a-z0-9.-]+)(?::\d+)?\/?$/i);
+  if (!match) return null;
+
+  const protocol = `${match[1].toLowerCase()}:` as 'http:' | 'https:';
+  const suffixDomain = match[2].replace(/\.+$/, '');
+  // Require at least two domain labels (e.g. *.run.app or *.example.com) so *.com / * is rejected
+  const labels = suffixDomain.split('.').filter(Boolean);
+  if (labels.length < 2) return null;
+
+  return {
+    protocol,
+    suffix: `.${suffixDomain}`,
+  };
+}
+
+export function getCorsOriginPatterns(extraOrigins?: string | null): OriginPatternMatcher[] {
+  if (typeof extraOrigins !== 'string' || !extraOrigins.trim()) {
+    return [];
+  }
+  const patterns: OriginPatternMatcher[] = [];
+  for (const part of extraOrigins.split(',')) {
+    const parsed = parseOriginPatternEntry(part);
+    if (parsed) {
+      patterns.push(parsed);
+    }
+  }
+  return patterns;
+}
+
+export function isTrustedRunAppOrigin(originHeader: string | undefined | null): boolean {
+  if (typeof originHeader !== 'string' || !originHeader.trim()) return false;
+  try {
+    const parsed = new URL(originHeader.trim());
+    if (parsed.username || parsed.password) return false;
+    return parsed.protocol === 'https:' && parsed.hostname.toLowerCase().endsWith('.run.app');
+  } catch {
+    return false;
   }
 }
 
@@ -55,6 +114,7 @@ export function getAllowedCorsOrigins(options?: {
 export function isAllowedCorsOrigin(
   originHeader: string | undefined | null,
   allowedOrigins: Set<string>,
+  options?: CorsMatchOptions,
 ): string | null {
   if (typeof originHeader !== 'string' || !originHeader.trim()) {
     return null;
@@ -64,14 +124,57 @@ export function isAllowedCorsOrigin(
   if (allowedOrigins.has(normalized)) {
     return trimmed;
   }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+
+  if (parsed.username || parsed.password) {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return null;
+  }
+
+  // Same-host request matching (handles proxied deployments even if APP_URL env var is omitted)
+  const rawRequestHost =
+    typeof options?.requestHost === 'string'
+      ? options.requestHost.split(',')[0]?.trim().toLowerCase()
+      : '';
+  if (rawRequestHost && parsed.host.toLowerCase() === rawRequestHost) {
+    return trimmed;
+  }
+
+  // Trusted HTTPS Cloud Run / AI Studio web origins (matches AniList OAuth redirect allowlist)
+  if (
+    options?.allowRunAppOrigins !== false &&
+    parsed.protocol === 'https:' &&
+    parsed.hostname.toLowerCase().endsWith('.run.app')
+  ) {
+    return trimmed;
+  }
+
+  // Configured wildcard subdomain patterns in CORS_ALLOWED_ORIGINS (e.g. https://*.example.com)
+  const patterns = getCorsOriginPatterns(options?.extraOrigins);
+  const hostnameLower = parsed.hostname.toLowerCase();
+  for (const pattern of patterns) {
+    if (parsed.protocol === pattern.protocol && hostnameLower.endsWith(pattern.suffix)) {
+      return trimmed;
+    }
+  }
+
   return null;
 }
 
 export function buildApiCorsHeaders(
   originHeader: string | undefined | null,
   allowedOrigins: Set<string>,
+  options?: CorsMatchOptions,
 ): Record<string, string> {
-  const matchedOrigin = isAllowedCorsOrigin(originHeader, allowedOrigins);
+  const matchedOrigin = isAllowedCorsOrigin(originHeader, allowedOrigins, options);
   if (!matchedOrigin) {
     return {};
   }
@@ -82,5 +185,6 @@ export function buildApiCorsHeaders(
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Range',
     'Access-Control-Expose-Headers': 'Content-Length, Content-Range',
+    'Access-Control-Max-Age': '86400',
   };
 }

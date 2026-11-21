@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BACKEND_URL_STORAGE_KEY,
+  BackendConnectionError,
   BackendNotConfiguredError,
+  classifyClientBackendFetchError,
   clearRuntimeBackendUrl,
   getEffectiveBackendConfig,
   getEnvBackendUrl,
@@ -294,4 +296,44 @@ test('testBackendConnection verifies /api/health JSON payload and reports HTML/n
   const invalidInputResult = await testBackendConnection('https://localhost');
   assert.equal(invalidInputResult.ok, false);
   assert.match(invalidInputResult.message, /Android WebView origin/i);
+});
+
+test('classifyClientBackendFetchError replaces raw Failed to fetch with clear Web CORS/origin vs Capacitor/timeout diagnostics', () => {
+  const crossOriginWebErr = classifyClientBackendFetchError(
+    new TypeError('Failed to fetch'),
+    'stream resolution (ShizuTv Stream (Inbuilt))',
+    {
+      targetUrl: 'https://backend.example.com',
+      isNative: false,
+      currentOrigin: 'https://ais-dev-example.asia-northeast1.run.app',
+    },
+  );
+  assert.ok(crossOriginWebErr instanceof BackendConnectionError);
+  assert.equal(crossOriginWebErr.isTimeout, false);
+  assert.match(crossOriginWebErr.message, /https:\/\/ais-dev-example\.asia-northeast1\.run\.app/);
+  assert.match(crossOriginWebErr.message, /allows CORS requests/i);
+
+  const nativeCapErr = classifyClientBackendFetchError(
+    new TypeError('Failed to fetch'),
+    'backend health check',
+    {
+      targetUrl: 'https://backend.example.com',
+      isNative: true,
+      currentOrigin: 'https://localhost',
+    },
+  );
+  assert.ok(nativeCapErr instanceof BackendConnectionError);
+  assert.match(nativeCapErr.message, /allows Capacitor CORS origins/i);
+
+  const timeoutErr = classifyClientBackendFetchError(
+    Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }),
+    'extension diagnostics (ShizuTv Stream (Inbuilt))',
+    {
+      targetUrl: 'https://backend.example.com',
+      isNative: false,
+    },
+  );
+  assert.ok(timeoutErr instanceof BackendConnectionError);
+  assert.equal(timeoutErr.isTimeout, true);
+  assert.match(timeoutErr.message, /Request timed out/i);
 });

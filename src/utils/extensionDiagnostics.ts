@@ -548,14 +548,13 @@ const GENUINE_UNSUPPORTED_REPORT_TEXT_RE =
 const UPSTREAM_BLOCKED_REPORT_TEXT_RE =
   /http\s*(?:403|429|503)|anti-bot|cloudflare|turnstile|captcha|upstream protection|upstream access|access restriction|rate.?limit|blocked/i;
 
+const CLIENT_BACKEND_OUTAGE_TEXT_RE =
+  /failed to fetch|could not connect to|could not reach the shizutv backend|backend server url is not configured/i;
+
 export function normalizeUpstreamBlockedUnsupportedReport(
   report: ExtensionDiagnosticReport,
   profileKind?: string,
 ): ExtensionDiagnosticReport {
-  if (report.status !== 'unsupported') {
-    return report;
-  }
-
   if (
     profileKind === 'metadata-only' ||
     profileKind === 'missing-host' ||
@@ -566,6 +565,36 @@ export function normalizeUpstreamBlockedUnsupportedReport(
   }
 
   const combinedText = `${report.summary || ''} ${report.detail || ''}`;
+  const caps = report.capabilities;
+
+  // Heal stale 'fail' reports created by pre-fix blocked_request or client 'Failed to fetch' / backend outages
+  // that marked unreached episode listing and playback capabilities as 'unavailable'
+  if (report.status === 'fail') {
+    const isStaleBlockedOrClientOutage =
+      report.failureKind === 'blocked_request' || CLIENT_BACKEND_OUTAGE_TEXT_RE.test(combinedText);
+    if (
+      isStaleBlockedOrClientOutage &&
+      caps.metadataSearch !== 'verified' &&
+      (caps.episodeOrChapterListing === 'unavailable' || caps.playbackOrReader === 'unavailable')
+    ) {
+      return {
+        ...report,
+        capabilities: {
+          metadataSearch: caps.metadataSearch,
+          episodeOrChapterListing: 'untested',
+          audioLanguage: caps.audioLanguage === 'unavailable' ? 'untested' : (caps.audioLanguage ?? 'untested'),
+          playbackOrReader: 'untested',
+          overallCompatibility: caps.overallCompatibility,
+        },
+      };
+    }
+    return report;
+  }
+
+  if (report.status !== 'unsupported') {
+    return report;
+  }
+
   if (GENUINE_UNSUPPORTED_REPORT_TEXT_RE.test(combinedText)) {
     return report;
   }
@@ -577,7 +606,6 @@ export function normalizeUpstreamBlockedUnsupportedReport(
     return report;
   }
 
-  const caps = report.capabilities;
   const searchVerified = caps.metadataSearch === 'verified';
   const listingVerified = caps.episodeOrChapterListing === 'verified';
   const playbackVerified = caps.playbackOrReader === 'verified';
