@@ -148,9 +148,10 @@ export function isAllowedCorsOrigin(
     return trimmed;
   }
 
-  // Trusted HTTPS Cloud Run / AI Studio web origins (matches AniList OAuth redirect allowlist)
+  // Broad *.run.app acceptance is disabled by default; require explicit opt-in via allowRunAppOrigins: true
+  // or explicit origin entries in APP_URL / CORS_ALLOWED_ORIGINS
   if (
-    options?.allowRunAppOrigins !== false &&
+    options?.allowRunAppOrigins === true &&
     parsed.protocol === 'https:' &&
     parsed.hostname.toLowerCase().endsWith('.run.app')
   ) {

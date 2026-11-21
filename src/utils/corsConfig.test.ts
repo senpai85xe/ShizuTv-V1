@@ -50,60 +50,83 @@ test('buildApiCorsHeaders echoes allowlisted Capacitor origins with credentials 
   assert.equal(capHeaders['Access-Control-Max-Age'], '86400');
 });
 
-test('isAllowedCorsOrigin supports AI Studio *.run.app origins, subdomain patterns, same-host headers, and rejects broad wildcards/HTTP spoofs', () => {
-  const allowed = getAllowedCorsOrigins({
-    appUrl: 'https://ais-dev-mqayabnftr75vumlbgu2e6-875290452825.asia-northeast1.run.app',
-    extraOrigins: 'https://*.apps.mistral.run, https://*.com, *',
+test('isAllowedCorsOrigin rejects unrelated *.run.app origins by default and honors explicit CORS_ALLOWED_ORIGINS, localhost, Capacitor, and same-host', () => {
+  const devRunOrigin = 'https://ais-dev-mqayabnftr75vumlbgu2e6-875290452825.asia-northeast1.run.app';
+  const preRunOrigin = 'https://ais-pre-mqayabnftr75vumlbgu2e6-875290452825.asia-northeast1.run.app';
+  const unrelatedRunOrigin = 'https://unrelated-tenant-12345.us-central1.run.app';
+
+  // Default policy without explicit APP_URL / CORS_ALLOWED_ORIGINS rejects all *.run.app origins
+  const defaultAllowed = getAllowedCorsOrigins({ port: 3000 });
+  assert.equal(isAllowedCorsOrigin(devRunOrigin, defaultAllowed), null);
+  assert.equal(isAllowedCorsOrigin(preRunOrigin, defaultAllowed), null);
+  assert.equal(isAllowedCorsOrigin(unrelatedRunOrigin, defaultAllowed), null);
+  assert.deepEqual(buildApiCorsHeaders(unrelatedRunOrigin, defaultAllowed), {});
+
+  // Explicit exact-origin allowlist via CORS_ALLOWED_ORIGINS
+  const explicitExtraOrigins = `${devRunOrigin}, ${preRunOrigin}, https://*.com, *`;
+  const configuredAllowed = getAllowedCorsOrigins({
+    extraOrigins: explicitExtraOrigins,
     port: 3000,
   });
 
-  const devRunOrigin = 'https://ais-dev-mqayabnftr75vumlbgu2e6-875290452825.asia-northeast1.run.app';
-  const preRunOrigin = 'https://ais-pre-mqayabnftr75vumlbgu2e6-875290452825.asia-northeast1.run.app';
-
-  const devHeaders = buildApiCorsHeaders(devRunOrigin, allowed, {
-    extraOrigins: 'https://*.apps.mistral.run',
+  const devHeaders = buildApiCorsHeaders(devRunOrigin, configuredAllowed, {
+    extraOrigins: explicitExtraOrigins,
   });
   assert.equal(devHeaders['Access-Control-Allow-Origin'], devRunOrigin);
   assert.equal(devHeaders['Access-Control-Allow-Credentials'], 'true');
 
-  const preHeaders = buildApiCorsHeaders(preRunOrigin, allowed);
+  const preHeaders = buildApiCorsHeaders(preRunOrigin, configuredAllowed, {
+    extraOrigins: explicitExtraOrigins,
+  });
   assert.equal(preHeaders['Access-Control-Allow-Origin'], preRunOrigin);
+  assert.equal(preHeaders['Access-Control-Allow-Credentials'], 'true');
 
-  // HTTP scheme to .run.app must be rejected
-  assert.equal(isAllowedCorsOrigin('http://fake.run.app', allowed), null);
+  // Unrelated *.run.app and arbitrary external origins remain strictly rejected
+  assert.deepEqual(
+    buildApiCorsHeaders(unrelatedRunOrigin, configuredAllowed, { extraOrigins: explicitExtraOrigins }),
+    {},
+  );
+  assert.deepEqual(
+    buildApiCorsHeaders('https://evil.example', configuredAllowed, { extraOrigins: explicitExtraOrigins }),
+    {},
+  );
 
-  // Disabling allowRunAppOrigins enforces strict allowlist / pattern / same-host
+  // HTTP downgrade spoof of an explicit origin and wildcard top-level domain patterns remain rejected
   assert.equal(
-    isAllowedCorsOrigin(preRunOrigin, allowed, { allowRunAppOrigins: false }),
+    isAllowedCorsOrigin(devRunOrigin.replace('https://', 'http://'), configuredAllowed),
+    null,
+  );
+  assert.equal(
+    isAllowedCorsOrigin('https://evil.com', configuredAllowed, { extraOrigins: 'https://*.com' }),
     null,
   );
 
-  // Configured multi-label wildcard subdomain pattern works, while top-level *.com is rejected
-  assert.equal(
-    isAllowedCorsOrigin('https://sub.apps.mistral.run', allowed, {
-      extraOrigins: 'https://*.apps.mistral.run, https://*.com',
-    }),
-    'https://sub.apps.mistral.run',
-  );
-  assert.equal(
-    isAllowedCorsOrigin('https://evil.com', allowed, {
-      extraOrigins: 'https://*.com',
-    }),
-    null,
-  );
+  // Legitimate Capacitor & localhost development origins continue working
+  assert.equal(isAllowedCorsOrigin('https://localhost', configuredAllowed), 'https://localhost');
+  assert.equal(isAllowedCorsOrigin('capacitor://localhost', configuredAllowed), 'capacitor://localhost');
+  assert.equal(isAllowedCorsOrigin('http://localhost:3000', configuredAllowed), 'http://localhost:3000');
 
   // Same-host request matching works behind reverse proxies
   assert.equal(
-    isAllowedCorsOrigin('https://my-koyeb-app.example.org', allowed, {
+    isAllowedCorsOrigin('https://my-koyeb-app.example.org', configuredAllowed, {
       requestHost: 'my-koyeb-app.example.org',
-      allowRunAppOrigins: false,
     }),
     'https://my-koyeb-app.example.org',
   );
 
-  // Embedded credentials in Origin header must never be echoed
+  // Opting into allowRunAppOrigins explicitly requires HTTPS and rejects embedded credentials
   assert.equal(
-    isAllowedCorsOrigin('https://user:pass@ais-pre.run.app', allowed),
+    isAllowedCorsOrigin(unrelatedRunOrigin, defaultAllowed, { allowRunAppOrigins: true }),
+    unrelatedRunOrigin,
+  );
+  assert.equal(
+    isAllowedCorsOrigin('http://fake.run.app', defaultAllowed, { allowRunAppOrigins: true }),
+    null,
+  );
+  assert.equal(
+    isAllowedCorsOrigin('https://user:pass@ais-pre.run.app', configuredAllowed, {
+      allowRunAppOrigins: true,
+    }),
     null,
   );
 });
